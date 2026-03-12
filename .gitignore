@@ -32,3 +32,6 @@ coverage/
 # temp
 tmp/
 temp/
+
+backend/data/gmail_cache/*.db
+*.db
