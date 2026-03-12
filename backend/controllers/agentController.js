@@ -84,6 +84,41 @@ function stepSummary(tool, result) {
         result.totalPeople > 1 ? "s" : ""
       } about ${result.totalTickets} overdue tickets`;
 
+    // ── Google Calendar ──────────────────────────────────
+    case "calendar_get_today":
+      return result.count
+        ? `${result.count} event${result.count !== 1 ? "s" : ""} today`
+        : "No events today";
+    case "calendar_get_week":
+      return result.count
+        ? `${result.count} events this week`
+        : "No events this week";
+    case "calendar_get_events":
+      return result.count ? `Found ${result.count} events` : "No events found";
+    case "calendar_create":
+      return result.title ? `Created "${result.title}"` : "Event created";
+    case "calendar_update":
+      return result.title ? `Updated "${result.title}"` : "Event updated";
+    case "calendar_delete":
+      return result.success ? "Event deleted" : "Delete failed";
+    case "calendar_get_invites":
+      return result.count
+        ? `${result.count} pending invite${result.count !== 1 ? "s" : ""}`
+        : "No pending invites";
+    case "calendar_respond":
+      return result.summary || "RSVP sent";
+    case "telegram_list_chats":
+      return `${result.total || 0} Telegram chats · ${
+        result.unreadCount || 0
+      } unread`;
+    case "telegram_get_messages":
+      return result.ok
+        ? `${result.count} messages from ${result.chatName}`
+        : `No chat found: "${result.contact}"`;
+    case "telegram_send_message":
+      return result.ok
+        ? `Message sent to ${result.to} on Telegram`
+        : `Could not find contact: "${result.contact}"`;
     default:
       return "Done";
   }
@@ -185,6 +220,16 @@ async function runPlan(req, res) {
               ? [progress.result]
               : null,
             emailQuery: progress.result?.query || null,
+            // Calendar
+            richEvents:
+              progress.result?.events ||
+              (progress.result?.id && progress.result?.title
+                ? [progress.result]
+                : null),
+            calendarByDay: progress.result?.byDay || null,
+            richTelegramMessages: progress.result?.messages || null,
+            telegramChatName: progress.result?.chatName || null,
+            telegramChats: progress.result?.chats || null,
           });
           await new Promise((r) => setTimeout(r, 60));
         }
@@ -232,6 +277,14 @@ async function runPlan(req, res) {
                 ? [r.result]
                 : null,
               emailQuery: r.result?.query || null,
+              // Calendar
+              richEvents:
+                r.result?.events ||
+                (r.result?.id && r.result?.title ? [r.result] : null),
+              calendarByDay: r.result?.byDay || null,
+              richTelegramMessages: r.result?.messages || null,
+              telegramChatName:     r.result?.chatName  || null,
+              telegramChats:        r.result?.chats     || null,
             };
           });
 
@@ -363,4 +416,26 @@ Instructions:
   }
 }
 
-module.exports = { parseIntent, runPlan, gmailReplyDirect, gmailSuggestReply };
+// ── POST /api/agent/calendar-rsvp ───────────────────────────────────────────
+async function calendarRsvpDirect(req, res) {
+  const userId = req.user?.username;
+  const { eventId, response } = req.body;
+  if (!eventId || !response)
+    return res.status(400).json({ error: "eventId and response required" });
+  try {
+    const { calendarRespond } = require("../services/tools/toolCalendar");
+    const result = await calendarRespond({ eventId, response }, { userId });
+    res.json(result);
+  } catch (err) {
+    console.error("calendarRsvp error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+module.exports = {
+  parseIntent,
+  runPlan,
+  gmailReplyDirect,
+  gmailSuggestReply,
+  calendarRsvpDirect,
+};

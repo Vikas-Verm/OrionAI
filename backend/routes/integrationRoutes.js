@@ -11,13 +11,25 @@ const {
   gmailOAuthStart,
   gmailOAuthCallback,
 } = require("../controllers/gmailOauthController");
-
-router.get("/gmail/oauth/start", authenticate, gmailOAuthStart);
+const {
+  googleCalendarOAuthStart,
+  googleCalendarOAuthCallback,
+} = require("../controllers/googleCalenderOauthController");
+const {
+  slackOAuthStart,
+  slackOAuthCallback,
+} = require("../controllers/slackOAuthController");
+router.get("/gmail/oauth/start", gmailOAuthStart);
 router.get("/gmail/oauth/callback", gmailOAuthCallback);
 
-router.get("/", authenticate, getIntegrations);
-router.post("/:type", authenticate, saveIntegration);
-router.delete("/:type", authenticate, deleteIntegration);
-router.post("/:type/test", authenticate, testIntegration);
+router.get("/google-calendar/oauth/start", googleCalendarOAuthStart);
+router.get("/google-calendar/oauth/callback", googleCalendarOAuthCallback);
+
+router.get("/slack/oauth/start", slackOAuthStart);
+router.get("/slack/oauth/callback", slackOAuthCallback);
+router.get("/", getIntegrations);
+router.post("/:type", saveIntegration);
+router.delete("/:type", deleteIntegration);
+router.post("/:type/test", testIntegration);
 
 module.exports = router;

@@ -257,7 +257,117 @@
           </div><!-- /email-section -->
         </template>
 
-        <!-- Fallback plain text -->
+        
+        <!-- ══════════════════════════════════════════
+             GOOGLE CALENDAR EVENT CARDS (Apple Calendar style)
+             ══════════════════════════════════════════ -->
+        <template v-else-if="calendarSteps.length">
+          <div v-for="step in calendarSteps" :key="step.tool + '_cal'" class="cal-section">
+
+            <div v-if="step.richEvents.length > 1 || ['calendar_get_today','calendar_get_week'].includes(step.tool)"
+              class="cal-section-header">
+              <span class="cal-section-title">
+                <template v-if="step.tool === 'calendar_get_today'">📅 Today</template>
+                <template v-else-if="step.tool === 'calendar_get_week'">🗓️ This Week</template>
+                <template v-else-if="step.tool === 'calendar_get_invites'">📬 Pending Invites</template>
+                <template v-else>📅 Events</template>
+              </span>
+              <span class="cal-count-badge">{{ step.richEvents.length }}</span>
+            </div>
+
+            <div v-for="event in step.richEvents" :key="event.id" class="cal-card">
+              <div class="cal-icon-block">
+                <div class="cal-icon-top">{{ calMonthAbbr(event.start) }}</div>
+                <div class="cal-icon-day">{{ calDayNum(event.start) }}</div>
+              </div>
+              <div class="cal-card-content">
+                <div class="cal-event-title">{{ event.title }}</div>
+                <div class="cal-event-when">{{ formatEventWhen(event) }}</div>
+                <div v-if="event.attendees?.length" class="cal-attendees">
+                  <span v-for="a in event.attendees.slice(0,5)" :key="a.email"
+                    class="cal-attendee-chip"
+                    :class="{ 'chip-accepted': a.rsvp==='accepted', 'chip-declined': a.rsvp==='declined', 'chip-pending': a.rsvp==='needsAction' }"
+                    :title="a.email">{{ avatarInitials(a.name||a.email) }}</span>
+                  <span v-if="event.attendees.length > 5" class="cal-attendee-more">+{{ event.attendees.length - 5 }}</span>
+                </div>
+                <a v-if="event.meet" :href="event.meet" target="_blank" rel="noopener" class="cal-meet-link">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="15" height="10" rx="2"/><path d="M17 9l5-3v12l-5-3"/></svg>
+                  Join Google Meet
+                </a>
+                <div v-if="step.tool === 'calendar_get_invites' && event.responseStatus === 'needsAction' && !rsvpDoneMap[event.id]"
+                  class="cal-rsvp-row">
+                  <button class="cal-rsvp-btn rsvp-accept" @click="sendRsvp(event, 'accept')">✓ Accept</button>
+                  <button class="cal-rsvp-btn rsvp-decline" @click="sendRsvp(event, 'decline')">✗ Decline</button>
+                  <button class="cal-rsvp-btn rsvp-maybe" @click="sendRsvp(event, 'tentative')">? Maybe</button>
+                </div>
+                <div v-if="rsvpDoneMap[event.id]" class="cal-rsvp-done">
+                  {{ rsvpDoneMap[event.id] === 'accept' ? '✅ Accepted' : rsvpDoneMap[event.id] === 'decline' ? '❌ Declined' : '❓ Maybe' }}
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </template>
+        <template v-else-if="telegramSteps.length">
+        <div v-for="step in telegramSteps" :key="step.tool + '_tg'" class="tg-agent-section">
+          <!-- Header -->
+          <div class="tg-agent-header">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="flex-shrink:0">
+              <circle cx="12" cy="12" r="12" fill="#229ED9"/>
+              <path d="M5.4 11.9l10.2-3.9c.47-.18.88.11.73.8l-1.74 8.2c-.13.58-.47.72-.95.45l-2.63-1.94-1.27 1.22c-.14.14-.26.26-.53.26l.19-2.69 4.87-4.4c.21-.19-.05-.29-.32-.1L7.47 13.9 4.87 13.1c-.56-.17-.57-.56.53-1.2z" fill="white"/>
+            </svg>
+            <span class="tg-agent-title">
+              <template v-if="step.tool === 'telegram_get_messages'">
+                💬 {{ step.telegramChatName || 'Telegram' }}
+              </template>
+              <template v-else-if="step.tool === 'telegram_list_chats'">
+                ✈️ Telegram Chats
+              </template>
+              <template v-else>
+                📤 Sent via Telegram
+              </template>
+            </span>
+            <span class="tg-agent-count" v-if="step.richTelegramMessages?.length">
+              {{ step.richTelegramMessages.length }} messages
+            </span>
+          </div>
+
+          <!-- Chat list (telegram_list_chats) -->
+          <div v-if="step.telegramChats?.length" class="tg-agent-chat-list">
+            <div v-for="chat in step.telegramChats.slice(0, 8)" :key="chat.id" class="tg-agent-chat-row">
+              <div class="tg-agent-chat-avatar">{{ chat.name?.slice(0,2).toUpperCase() }}</div>
+              <div class="tg-agent-chat-info">
+                <span class="tg-agent-chat-name">{{ chat.name }}</span>
+                <span class="tg-agent-chat-preview">{{ chat.lastMessage || '…' }}</span>
+              </div>
+              <span v-if="chat.unread > 0" class="tg-agent-unread">{{ chat.unread }}</span>
+            </div>
+          </div>
+
+          <!-- Message thread (telegram_get_messages) -->
+          <div v-else-if="step.richTelegramMessages?.length" class="tg-agent-messages">
+            <div
+              v-for="msg in step.richTelegramMessages.slice(-8)"
+              :key="msg.id"
+              :class="['tg-agent-msg', msg.fromMe ? 'tg-agent-msg-out' : 'tg-agent-msg-in']">
+              <div v-if="!msg.fromMe" class="tg-agent-msg-sender">{{ msg.fromName }}</div>
+              <div class="tg-agent-msg-text">{{ msg.text }}</div>
+              <div class="tg-agent-msg-time">{{ formatTgTime(msg.date) }}</div>
+            </div>
+          </div>
+
+          <!-- Send confirmation -->
+          <div v-else class="tg-agent-sent-confirm">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+            Message delivered
+          </div>
+
+        </div>
+      </template>
+
+<!-- Fallback plain text -->
         <div v-else-if="msg.content" class="agent-text-content" v-html="formattedContent"></div>
 
       </template>
@@ -364,9 +474,13 @@ function ticketSectionTitle(step) {
   const assignee = step.richTickets?.[0]?.assignee || 'Your'
   return `${assignee}'s open tickets — ${count} total`
 }
-function avatarInitials(name) {
-  if (!name || name === 'Unassigned') return '?'
-  return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)
+// function avatarInitials(name) {
+//   if (!name || name === 'Unassigned') return '?'
+//   return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)
+// }
+function formatTgTime(iso) {
+  if (!iso) return ''
+  return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
 }
 function typeIcon(type) {
   const t = (type || '').toLowerCase()
@@ -443,6 +557,50 @@ function legacyLineClass(line) { return `legacy-line legacy-${line.type}` }
 
 // ── Gmail email cards ──────────────────────────────────────────────────────
 const GMAIL_TOOLS = ['gmail_get_inbox', 'gmail_search_emails', 'gmail_get_email']
+
+  // ── Calendar ─────────────────────────────────────────────
+  const CALENDAR_TOOLS = ['calendar_get_today', 'calendar_get_week', 'calendar_get_events', 'calendar_get_invites', 'calendar_create', 'calendar_update']
+  const calendarSteps = computed(() =>
+    (props.msg.steps || []).filter(s => CALENDAR_TOOLS.includes(s.tool) && s.richEvents?.length)
+  )
+  const TELEGRAM_TOOLS = ['telegram_get_messages', 'telegram_list_chats', 'telegram_send_message']
+
+const telegramSteps = computed(() =>
+  (props.msg.steps || []).filter(s =>
+    TELEGRAM_TOOLS.includes(s.tool) && (s.richTelegramMessages?.length || s.telegramChats?.length)
+  )
+)
+  const rsvpDoneMap = ref({})
+  async function sendRsvp(event, response) {
+    try {
+      await fetch('/api/agent/calendar-rsvp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+        body: JSON.stringify({ eventId: event.id, response }),
+      })
+      rsvpDoneMap.value = { ...rsvpDoneMap.value, [event.id]: response }
+    } catch(e) { console.error('RSVP error', e) }
+  }
+
+  // ── Calendar display helpers ──────────────────────────────────────────────
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+  function calMonthAbbr(iso) { if (!iso) return ''; return MONTHS[new Date(iso).getMonth()] || '' }
+  function calDayNum(iso) { if (!iso) return ''; return new Date(iso).getDate() }
+  function formatEventWhen(event) {
+    if (!event.start) return ''
+    const startDate = new Date(event.start)
+    const dateStr = startDate.toLocaleDateString('en-US', { weekday:'short', day:'numeric', month:'short', year:'numeric' })
+    if (!event.start.includes('T')) return dateStr
+    const startTime = startDate.toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit', hour12:true })
+    if (!event.end) return `${dateStr} · ${startTime}`
+    const endTime = new Date(event.end).toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit', hour12:true })
+    return `${dateStr} · ${startTime} – ${endTime}`
+  }
+  function avatarInitials(name) {
+    if (!name) return '?'
+    const parts = name.split(/[@\s.]+/).filter(Boolean)
+    return parts.length >= 2 ? (parts[0][0] + parts[1][0]).toUpperCase() : name.slice(0,2).toUpperCase()
+  }
 
 const emailSteps = computed(() =>
   (props.msg.steps || []).filter(s => GMAIL_TOOLS.includes(s.tool) && s.richEmails?.length)

@@ -143,9 +143,15 @@ export function useAgent() {
           jiraDomain: event.jiraDomain || null,
           sprintName: event.sprintName || null,
           notifications: event.notifications || null,
-          // Gmail ← these were missing, causing plain-text on live view
+          // Gmail
           richEmails: event.richEmails || null,
           emailQuery: event.emailQuery || null,
+          // Calendar
+          richEvents: event.richEvents || null,
+          calendarByDay: event.calendarByDay || null,
+          richTelegramMessages: event.richTelegramMessages || null,
+          telegramChatName: event.telegramChatName || null,
+          telegramChats: event.telegramChats || null,
           icon: event.icon,
           label: event.label,
         });

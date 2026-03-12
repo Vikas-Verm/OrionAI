@@ -1166,3 +1166,115 @@
    .agent-bubble-wrap .reply-sent-badge { font-size: 11.5px; color: #4ade80; font-weight: 600; }
    
    .agent-bubble-wrap .email-send-spinner { display: inline-block; width: 11px; height: 11px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: mb-spin 0.7s linear infinite; }
+   /* ── Telegram agent cards ── */
+.tg-agent-section {
+  background: rgba(34,158,217,0.06);
+  border: 1px solid rgba(34,158,217,0.15);
+  border-radius: 12px;
+  overflow: hidden;
+  margin-top: 8px;
+}
+.tg-agent-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: rgba(34,158,217,0.08);
+  border-bottom: 1px solid rgba(34,158,217,0.1);
+}
+.tg-agent-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #64b5d6;
+  flex: 1;
+}
+.tg-agent-count {
+  font-size: 11px;
+  color: #229ED9;
+  background: rgba(34,158,217,0.15);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+.tg-agent-messages {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.tg-agent-msg {
+  max-width: 85%;
+  padding: 6px 10px 4px;
+  border-radius: 10px;
+}
+.tg-agent-msg-in {
+  background: rgba(255,255,255,0.06);
+  border-bottom-left-radius: 3px;
+  align-self: flex-start;
+}
+.tg-agent-msg-out {
+  background: rgba(34,158,217,0.2);
+  border-bottom-right-radius: 3px;
+  align-self: flex-end;
+}
+.tg-agent-msg-sender { font-size: 10.5px; font-weight: 700; color: #229ED9; margin-bottom: 2px; }
+.tg-agent-msg-text { font-size: 12.5px; color: var(--text-primary); line-height: 1.4; word-break: break-word; }
+.tg-agent-msg-time { font-size: 10px; color: var(--text-muted); text-align: right; margin-top: 2px; }
+.tg-agent-chat-list { padding: 8px 0; }
+.tg-agent-chat-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 14px;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+}
+.tg-agent-chat-row:last-child { border-bottom: none; }
+.tg-agent-chat-avatar {
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  background: #229ED9;
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.tg-agent-chat-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.tg-agent-chat-name { font-size: 12.5px; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tg-agent-chat-preview { font-size: 11.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tg-agent-unread {
+  background: #229ED9; color: white; font-size: 10px; font-weight: 700;
+  min-width: 18px; height: 18px; border-radius: 9px;
+  display: flex; align-items: center; justify-content: center; padding: 0 4px; flex-shrink: 0;
+}
+.tg-agent-sent-confirm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  font-size: 12.5px;
+  color: #22c55e;
+}
+.tg-topbar {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+.tg-topbar-back {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 4px 0;
+}
+.tg-topbar-back:hover { color: var(--text-primary); }
+.tg-root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}

@@ -29,6 +29,21 @@ const {
   toolGmailSendEmail,
   toolGmailReplyEmail,
 } = require("./tools/toolGmail");
+const {
+  calendarGetToday,
+  calendarGetWeek,
+  calendarGetEvents,
+  calendarCreate,
+  calendarUpdate,
+  calendarDelete,
+  calendarGetInvites,
+  calendarRespond,
+} = require("./tools/toolCalendar");
+const {
+  toolTelegramListChats,
+  toolTelegramGetMessages,
+  toolTelegramSendMessage,
+} = require("./tools/toolTelegram");
 const Skill = require("../models/skill");
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -48,6 +63,18 @@ const STATIC_TOOL_REGISTRY = {
   gmail_summarize_thread: { icon: "🧵", label: "Summarize thread" },
   gmail_send_email: { icon: "✉️", label: "Send email (Gmail)" },
   gmail_reply_email: { icon: "↩️", label: "Reply to email" },
+  // ── Google Calendar ──────────────────────────────────
+  calendar_get_today: { icon: "📅", label: "Get today's events" },
+  calendar_get_week: { icon: "🗓️", label: "Get this week's events" },
+  calendar_get_events: { icon: "🔍", label: "Search events" },
+  calendar_create: { icon: "➕", label: "Create calendar event" },
+  calendar_update: { icon: "✏️", label: "Update calendar event" },
+  calendar_delete: { icon: "🗑️", label: "Delete calendar event" },
+  calendar_get_invites: { icon: "📬", label: "Check pending invites" },
+  calendar_respond: { icon: "✅", label: "Respond to invite" },
+  telegram_list_chats: { icon: "✈️", label: "List Telegram chats" },
+  telegram_get_messages: { icon: "💬", label: "Read Telegram messages" },
+  telegram_send_message: { icon: "📤", label: "Send Telegram message" },
 };
 
 // ── Load Jira + custom tools from DB and merge with static ───────────────────
@@ -123,7 +150,25 @@ async function buildClassifierPrompt(userMessage) {
     "- reply to email / respond to email → chain: gmail_get_email then gmail_reply_email",
     'Gmail format: {"isAgentTask":true,"confidence":0.93,"intent":"..","steps":[{"tool":"gmail_get_inbox","params":{"maxResults":10}}]}',
     "",
+    "If TYPE D — GOOGLE CALENDAR (user wants to check/create/update/delete events or invites):",
+    "- what's on my calendar / show today's events → calendar_get_today",
+    "- show this week / what do I have this week → calendar_get_week",
+    "- find events about X / events on date Y → calendar_get_events with params {query:'X'} or {dateFrom:'YYYY-MM-DD'}",
+    "- schedule / create / add meeting → calendar_create with params {title, startDateTime (ISO8601), durationMinutes, attendees:['email@x.com'], addMeet:false}",
+    "- reschedule / update event X → calendar_update with params {title:'X', startDateTime}",
+    "- delete / cancel event X → calendar_delete with params {title:'X'}",
+    "- check pending invites / RSVPs → calendar_get_invites",
+    "- accept / decline / maybe invite X → calendar_respond with params {title:'X', response:'accept'|'decline'|'tentative'}",
+    'Calendar format: {"isAgentTask":true,"confidence":0.93,"intent":"..","steps":[{"tool":"calendar_create","params":{"title":"Meeting","startDateTime":"2026-03-11T10:00:00+05:30","durationMinutes":30}}]}',
+    "",
     'If NEITHER (general questions, coding, analytics, casual chat): {"isAgentTask":false,"confidence":0.95,"intent":"","steps":[]}',
+    "",
+    "",
+    "If TYPE E — TELEGRAM (user wants to read or send messages via Telegram):",
+    "- show telegram messages / what did X say on telegram → telegram_get_messages with params {contact:'X', limit:20}",
+    "- list telegram chats / who messaged me on telegram → telegram_list_chats",
+    "- send telegram message to X → telegram_send_message with params {contact:'X', message:'...'}",
+    'Telegram format: {"isAgentTask":true,"confidence":0.93,"intent":"..","steps":[{"tool":"telegram_get_messages","params":{"contact":"Rahul","limit":20}}]}',
     "",
     "Respond with ONLY the JSON object, nothing else.",
   ].join("\n");
@@ -945,6 +990,40 @@ async function runAgent(steps, db, onProgress, userId) {
           result = await toolGmailReplyEmail(params, ctx);
           break;
 
+        // ── Google Calendar ──────────────────────────────
+        case "calendar_get_today":
+          result = await calendarGetToday(params, ctx);
+          break;
+        case "calendar_get_week":
+          result = await calendarGetWeek(params, ctx);
+          break;
+        case "calendar_get_events":
+          result = await calendarGetEvents(params, ctx);
+          break;
+        case "calendar_create":
+          result = await calendarCreate(params, ctx);
+          break;
+        case "calendar_update":
+          result = await calendarUpdate(params, ctx);
+          break;
+        case "calendar_delete":
+          result = await calendarDelete(params, ctx);
+          break;
+        case "calendar_get_invites":
+          result = await calendarGetInvites(params, ctx);
+          break;
+        case "calendar_respond":
+          result = await calendarRespond(params, ctx);
+          break;
+        case "telegram_list_chats":
+          result = await toolTelegramListChats(params, ctx);
+          break;
+        case "telegram_get_messages":
+          result = await toolTelegramGetMessages(params, ctx);
+          break;
+        case "telegram_send_message":
+          result = await toolTelegramSendMessage(params, ctx);
+          break;
         default:
           throw new Error(`Unknown tool: "${tool}"`);
       }
