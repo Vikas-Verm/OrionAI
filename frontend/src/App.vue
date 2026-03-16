@@ -113,6 +113,11 @@ onMounted(async () => {
   }
   document.addEventListener('keydown', handleKeyboard)
   document.addEventListener('click', () => inputAreaRef.value?.closeMenus())
+  // Listen for TelegramRenderer "Open chat" button
+  document.addEventListener('orion:open-telegram', (e) => {
+    showingIntegrations.value = false
+    activeModule.value = 'telegram'
+  })
 
   if (store.token) {
     api.defaults.headers.common['Authorization'] = `Bearer ${store.token}`
@@ -130,6 +135,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   document.removeEventListener('keydown', handleKeyboard)
+  document.removeEventListener('orion:open-telegram', () => {})
 })
 
 // ── Auth ──────────────────────────────────────────────────

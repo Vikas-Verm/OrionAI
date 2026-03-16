@@ -2,15 +2,12 @@
  * telegramRoutes.js
  * Mount: app.use('/api/telegram', require('./routes/telegramRoutes'))
  */
-
 const express = require("express");
 const router = express.Router();
 const { authenticate } = require("../middleware/auth");
 const tg = require("../services/tools/toolTelegramMTProto");
 
-// ── AUTH ──────────────────────────────────────────────────────────────────────
-
-// Step 1 — send code
+// ── AUTH ──────────────────────────────────────────────────────────────
 router.post("/auth/phone", authenticate, async (req, res) => {
   try {
     const { phoneNumber } = req.body;
@@ -24,36 +21,32 @@ router.post("/auth/phone", authenticate, async (req, res) => {
   }
 });
 
-// Step 2 — verify code
 router.post("/auth/code", authenticate, async (req, res) => {
   try {
     const { code } = req.body;
     if (!code) return res.status(400).json({ error: "code is required" });
     const result = await tg.verifyPhoneCode(req.user?.username, code);
-    res.json(result); // { ok, needsPassword } or { ok, firstName, username, phone }
+    res.json(result);
   } catch (err) {
     console.error("TG auth/code:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Step 3 — 2FA password
 router.post("/auth/password", authenticate, async (req, res) => {
   try {
     const { password } = req.body;
     if (!password)
       return res.status(400).json({ error: "password is required" });
     const result = await tg.verifyPassword(req.user?.username, password);
-    res.json(result); // { ok, firstName, username, phone }
+    res.json(result);
   } catch (err) {
     console.error("TG auth/password:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── SESSION ───────────────────────────────────────────────────────────────────
-
-// GET /api/telegram/me  → { authorized: true/false, firstName, ... }
+// ── SESSION ───────────────────────────────────────────────────────────
 router.get("/me", authenticate, async (req, res) => {
   try {
     const userId = req.user?.username;
@@ -61,12 +54,11 @@ router.get("/me", authenticate, async (req, res) => {
     if (!authorized) return res.json({ authorized: false });
     const me = await tg.getMe(userId);
     res.json({ authorized: true, ...me });
-  } catch (err) {
+  } catch {
     res.json({ authorized: false });
   }
 });
 
-// DELETE /api/telegram/session  → logout
 router.delete("/session", authenticate, async (req, res) => {
   try {
     await tg.logout(req.user?.username);
@@ -76,25 +68,20 @@ router.delete("/session", authenticate, async (req, res) => {
   }
 });
 
-// ── PROFILE PHOTOS ────────────────────────────────────────────────────────────
-
-// GET /api/telegram/photo/:entityId  → { photo: "data:image/jpeg;base64,..." | null }
+// ── PROFILE PHOTOS ────────────────────────────────────────────────────
 router.get("/photo/:entityId", authenticate, async (req, res) => {
   try {
     const photo = await tg.getProfilePhoto(
       req.user?.username,
       req.params.entityId
     );
-
     res.json({ photo: photo || null });
-  } catch (err) {
+  } catch {
     res.json({ photo: null });
   }
 });
 
-// ── DIALOGS ───────────────────────────────────────────────────────────────────
-
-// GET /api/telegram/dialogs?limit=80
+// ── DIALOGS ───────────────────────────────────────────────────────────
 router.get("/dialogs", authenticate, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 80;
@@ -106,7 +93,6 @@ router.get("/dialogs", authenticate, async (req, res) => {
   }
 });
 
-// GET /api/telegram/dialogs/:id/messages?limit=50&offsetId=0
 router.get("/dialogs/:id/messages", authenticate, async (req, res) => {
   try {
     const userId = req.user?.username;
@@ -121,7 +107,6 @@ router.get("/dialogs/:id/messages", authenticate, async (req, res) => {
   }
 });
 
-// POST /api/telegram/dialogs/:id/send  { text: "hello" }
 router.post("/dialogs/:id/send", authenticate, async (req, res) => {
   try {
     const userId = req.user?.username;
@@ -129,10 +114,156 @@ router.post("/dialogs/:id/send", authenticate, async (req, res) => {
     const { text } = req.body;
     if (!text?.trim())
       return res.status(400).json({ error: "text is required" });
-    const result = await tg.sendMessage(userId, dialogId, text);
+    const { replyToMsgId } = req.body;
+    const result = await tg.sendMessage(userId, dialogId, text, replyToMsgId);
     res.json(result);
   } catch (err) {
     console.error("TG send:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── FILE UPLOAD ────────────────────────────────────────────────────────
+// POST /api/telegram/dialogs/:id/upload
+// Accepts JSON: { fileName, mimeType, base64, caption? }
+router.post("/dialogs/:id/upload", authenticate, async (req, res) => {
+  const userId = req.user?.username;
+  const dialogId = req.params.id;
+  try {
+    const { fileName, mimeType, base64, caption } = req.body;
+    if (!base64 || !fileName) {
+      return res.status(400).json({ error: "fileName and base64 required" });
+    }
+
+    const buffer = Buffer.from(base64, "base64");
+    const result = await tg.sendFile(
+      userId,
+      dialogId,
+      buffer,
+      fileName,
+      mimeType || "application/octet-stream",
+      caption || ""
+    );
+    res.json({ ok: true, messageId: result?.messageId });
+  } catch (err) {
+    console.error("TG upload error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── MARK AS READ ──────────────────────────────────────────────────────
+// POST /api/telegram/dialogs/:id/read
+router.post("/dialogs/:id/read", authenticate, async (req, res) => {
+  try {
+    await tg.markAsRead(req.user?.username, req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.json({ ok: false }); // non-fatal
+  }
+});
+
+// ── MEDIA DOWNLOAD ────────────────────────────────────────────────────
+// GET /api/telegram/media/:dialogId/:msgId
+// Returns { data: "data:image/jpeg;base64,...", mime, fileName }
+router.get("/media/:dialogId/:msgId", authenticate, async (req, res) => {
+  try {
+    const result = await tg.downloadMedia(
+      req.user?.username,
+      req.params.dialogId,
+      req.params.msgId
+    );
+    res.json(result);
+  } catch (err) {
+    console.error("TG media:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── EDIT MESSAGE ──────────────────────────────────────────────────────
+// POST /api/telegram/dialogs/:id/messages/:msgId/edit  { text }
+router.post(
+  "/dialogs/:id/messages/:msgId/edit",
+  authenticate,
+  async (req, res) => {
+    try {
+      const { text } = req.body;
+      if (!text?.trim())
+        return res.status(400).json({ error: "text is required" });
+      const result = await tg.editMessage(
+        req.user?.username,
+        req.params.id,
+        req.params.msgId,
+        text
+      );
+      res.json(result);
+    } catch (err) {
+      console.error("TG edit msg:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// ── DELETE MESSAGE ────────────────────────────────────────────────────
+// DELETE /api/telegram/dialogs/:id/messages/:msgId
+router.delete(
+  "/dialogs/:id/messages/:msgId",
+  authenticate,
+  async (req, res) => {
+    try {
+      const result = await tg.deleteMessage(
+        req.user?.username,
+        req.params.id,
+        req.params.msgId
+      );
+      res.json(result);
+    } catch (err) {
+      console.error("TG delete msg:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// ── REACTIONS ─────────────────────────────────────────────────────────
+// POST /api/telegram/dialogs/:id/messages/:msgId/react  { emoticon: "👍" }
+router.post(
+  "/dialogs/:id/messages/:msgId/react",
+  authenticate,
+  async (req, res) => {
+    try {
+      const { emoticon } = req.body;
+      const result = await tg.sendReaction(
+        req.user?.username,
+        req.params.id,
+        req.params.msgId,
+        emoticon || ""
+      );
+      res.json(result);
+    } catch (err) {
+      console.error("TG react:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// ── CONTACTS ──────────────────────────────────────────────────────────
+router.get("/contacts", authenticate, async (req, res) => {
+  try {
+    const contacts = await tg.getContacts(req.user?.username);
+    res.json({ contacts });
+  } catch (err) {
+    console.error("TG contacts:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── SAVED MESSAGES ────────────────────────────────────────────────────
+router.get("/saved-messages", authenticate, async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 50;
+    const messages = await tg.getSavedMessages(req.user?.username, limit);
+    res.json({ messages });
+  } catch (err) {
+    console.error("TG saved-messages:", err.message);
     res.status(500).json({ error: err.message });
   }
 });

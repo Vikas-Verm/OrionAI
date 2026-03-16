@@ -71,6 +71,85 @@ function buildClient(cfg) {
   return { client, agileClient, domain, projectKey: cfg.projectKey || "ENGG" };
 }
 
+// ─────────────────────────────────────────────
+// SAFE JIRA SEARCH (handles API changes)
+// ─────────────────────────────────────────────
+
+async function jiraSearch(client, params) {
+  try {
+    // Preferred (new API)
+    return await client.get("/search/jql", { params });
+  } catch (err) {
+    const msg = err.response?.data?.errorMessages?.join(" ") || "";
+
+    // Atlassian removed endpoint → fallback automatically
+    if (
+      msg.includes("requested API has been removed") ||
+      err.response?.status === 404
+    ) {
+      console.warn("⚠️ Falling back to /search endpoint");
+
+      return await client.get("/search", { params });
+    }
+
+    throw err;
+  }
+}
+const userCache = new Map();
+
+async function resolveJiraUser(client, name) {
+  if (!name) return null;
+
+  const key = name.toLowerCase();
+
+  if (userCache.has(key)) {
+    return userCache.get(key);
+  }
+
+  try {
+    const res = await client.get("/user/search", {
+      params: { query: name, maxResults: 5 },
+    });
+
+    const users = res.data || [];
+    if (!users.length) return null;
+
+    const lower = name.toLowerCase();
+
+    const best =
+      users.find((u) => u.displayName.toLowerCase().startsWith(lower)) ||
+      users.find((u) => u.displayName.toLowerCase().includes(lower)) ||
+      users[0];
+
+    const result = {
+      accountId: best.accountId,
+      displayName: best.displayName,
+    };
+
+    userCache.set(key, result);
+
+    return result;
+  } catch (e) {
+    console.error("User resolve failed:", e.message);
+    return null;
+  }
+}
+
+async function safeJira(fn, retries = 2) {
+  try {
+    return await fn();
+  } catch (err) {
+    const status = err.response?.status;
+
+    if (retries > 0 && [429, 500, 502, 503].includes(status)) {
+      await new Promise((r) => setTimeout(r, 1200));
+      return safeJira(fn, retries - 1);
+    }
+
+    throw err;
+  }
+}
+
 // ── Helper: format ticket ─────────────────────────────────
 function formatTicket(issue) {
   const f = issue.fields;
@@ -120,42 +199,31 @@ function priorityEmoji(priority) {
 async function toolGetBacklog(params, ctx) {
   const { projectKey: overrideKey, maxResults = 50 } = params;
   const { client, projectKey } = await getJiraClient(ctx.userId);
+
   const key = overrideKey || projectKey;
 
-  const jql = `project = ${key} AND statusCategory != Done ORDER BY priority ASC, created DESC`;
-  const res = await client.get("/search/jql", {
-    params: {
+  const jql = `
+    project = ${key}
+    AND statusCategory != Done
+    ORDER BY priority ASC, created DESC
+  `;
+
+  const res = await safeJira(() =>
+    jiraSearch(client, {
       jql,
       maxResults,
       fields:
         "summary,status,priority,assignee,duedate,issuetype,labels,created,updated",
-    },
-  });
+    })
+  );
 
-  const tickets = res.data.issues.map(formatTicket);
-  const groups = { Highest: [], High: [], Medium: [], Low: [], Lowest: [] };
-  for (const t of tickets) {
-    if (!groups[t.priority]) groups[t.priority] = [];
-    groups[t.priority].push(t);
-  }
-
-  const lines = [`📋 *${key} Backlog* — ${tickets.length} open tickets\n`];
-  for (const [priority, items] of Object.entries(groups)) {
-    if (!items.length) continue;
-    lines.push(`${priorityEmoji(priority)} *${priority}* (${items.length})`);
-    for (const t of items.slice(0, 5)) {
-      const due = t.dueDate ? ` • Due: ${t.dueDate}` : "";
-      const overdue = t.overdue ? ` ⚠️ ${t.daysOverdue}d overdue` : "";
-      lines.push(`  • ${t.key}: ${t.title.slice(0, 60)}${due}${overdue}`);
-    }
-    if (items.length > 5) lines.push(`  ... and ${items.length - 5} more`);
-  }
+  const tickets = (res.data.issues || []).map(formatTicket);
 
   return {
     projectKey: key,
     totalOpen: tickets.length,
     tickets,
-    summary: lines.join("\n"),
+    summary: `📋 ${key} backlog — ${tickets.length} open tickets`,
   };
 }
 
@@ -165,52 +233,34 @@ async function toolGetBacklog(params, ctx) {
 async function toolGetOverdueTickets(params, ctx) {
   const { projectKey: overrideKey } = params;
   const { client, projectKey } = await getJiraClient(ctx.userId);
-  const key = overrideKey || projectKey;
 
+  const key = overrideKey || projectKey;
   const today = new Date().toISOString().split("T")[0];
-  const jql = `project = ${key} AND statusCategory != Done AND duedate < "${today}" ORDER BY duedate ASC`;
-  const res = await client.get("/search/jql", {
-    params: {
+
+  const jql = `
+    project = ${key}
+    AND statusCategory != Done
+    AND duedate < "${today}"
+    ORDER BY duedate ASC
+  `;
+
+  const res = await safeJira(() =>
+    jiraSearch(client, {
       jql,
       maxResults: 50,
       fields: "summary,status,priority,assignee,duedate,issuetype",
-    },
-  });
-
-  const tickets = res.data.issues.map(formatTicket);
-  if (!tickets.length) {
-    return {
-      tickets: [],
-      summary: `✅ No overdue tickets in ${key}! Everything is on track.`,
-    };
-  }
-
-  const lines = [
-    `⚠️ *${tickets.length} overdue ticket${
-      tickets.length > 1 ? "s" : ""
-    } in ${key}*\n`,
-    "Here are the overdue tickets with suggested new due dates:\n",
-  ];
-  for (const t of tickets) {
-    lines.push(
-      `${priorityEmoji(t.priority)} *${t.key}* — ${t.title.slice(0, 55)}`,
-      `   Assignee: ${t.assignee}`,
-      `   Was due: ${t.dueDate} (${t.daysOverdue} day${
-        t.daysOverdue > 1 ? "s" : ""
-      } ago)`,
-      `   Suggested: ${t.suggestedDueDate}`,
-      ""
-    );
-  }
-  lines.push(
-    `\nSay *"Update all due dates"* to apply all suggested dates automatically.`
+    })
   );
+
+  const tickets = (res.data.issues || []).map(formatTicket);
 
   return {
     projectKey: key,
     count: tickets.length,
     tickets,
-    summary: lines.join("\n"),
+    summary: tickets.length
+      ? `⚠️ ${tickets.length} overdue tickets`
+      : `✅ No overdue tickets`,
   };
 }
 
@@ -290,7 +340,7 @@ async function toolCreateTicket(params, ctx) {
 
   if (!title) throw new Error("Ticket title is required");
 
-  const { client, projectKey } = await getJiraClient(ctx.userId);
+  const { client, projectKey, domain } = await getJiraClient(ctx.userId);
   const key = overrideKey || projectKey;
 
   // Handle "assign to me/myself" edge case
@@ -365,7 +415,7 @@ async function toolCreateTicket(params, ctx) {
 
   const res = await client.post("/issue", body);
   const ticketKey = res.data.key;
-  const url = `https://poshn-co.atlassian.net/browse/${ticketKey}`;
+  const url = `https://${domain}/browse/${ticketKey}`;
 
   return {
     key: ticketKey,
@@ -387,9 +437,38 @@ async function toolGetMyTickets(params, ctx) {
     assignee = null,
     showAll = false,
   } = params;
+
   const { client, projectKey } = await getJiraClient(ctx.userId);
   const key = overrideKey || projectKey;
 
+  /* -------------------------------------------------- */
+  /* 1️⃣ CONNECTION HEALTH CHECK */
+  /* -------------------------------------------------- */
+  try {
+    await client.get("/myself"); // verifies token validity
+  } catch (err) {
+    if ([401, 403].includes(err.response?.status)) {
+      return {
+        success: false,
+        needsReconnect: true,
+        tickets: [],
+        count: 0,
+        summary:
+          "🔐 Your Jira connection has expired. Please reconnect your Jira account.",
+      };
+    }
+
+    return {
+      success: false,
+      tickets: [],
+      count: 0,
+      summary: "⚠️ Unable to verify Jira connection right now.",
+    };
+  }
+
+  /* -------------------------------------------------- */
+  /* 2️⃣ BUILD ASSIGNEE FILTER */
+  /* -------------------------------------------------- */
   let assigneeFilter = "assignee = currentUser()";
   let label = "Your";
 
@@ -397,51 +476,121 @@ async function toolGetMyTickets(params, ctx) {
     assigneeFilter = "assignee is not EMPTY";
     label = "All users";
   } else if (assignee) {
-    assigneeFilter = `assignee = "${assignee}"`;
-    label = assignee;
+    const resolvedUser = await resolveJiraUser(client, assignee);
+
+    if (!resolvedUser) {
+      return {
+        success: true,
+        tickets: [],
+        count: 0,
+        summary: `❌ No Jira user found matching "${assignee}"`,
+      };
+    }
+
+    assigneeFilter = `assignee = ${resolvedUser.accountId}`;
+    label = resolvedUser.displayName;
   }
 
-  const jql = `project = ${key} AND ${assigneeFilter} AND statusCategory != Done ORDER BY duedate ASC`;
-  const res = await client.get("/search/jql", {
-    params: {
-      jql,
-      maxResults,
-      fields: "summary,status,priority,assignee,duedate,issuetype,emailAddress",
-    },
-  });
+  const jql = `
+    project = ${key}
+    AND ${assigneeFilter}
+    AND statusCategory != Done
+    ORDER BY duedate ASC
+  `;
 
-  const tickets = res.data.issues.map(formatTicket);
+  /* -------------------------------------------------- */
+  /* 3️⃣ FETCH TICKETS SAFELY */
+  /* -------------------------------------------------- */
+  let res;
 
-  const count = tickets.length;
-  if (!count)
+  try {
+    res = await safeJira(() =>
+      jiraSearch(client, {
+        jql,
+        maxResults,
+        fields: "summary,status,priority,assignee,duedate,issuetype",
+      })
+    );
+  } catch (err) {
+    const status = err.response?.status;
+
+    if (status === 401 || status === 403) {
+      return {
+        success: false,
+        needsReconnect: true,
+        tickets: [],
+        count: 0,
+        summary:
+          "🔐 Jira authentication expired. Please reconnect your account.",
+      };
+    }
+
+    if (status === 400) {
+      return {
+        success: false,
+        tickets: [],
+        count: 0,
+        summary: "⚠️ Jira query failed (JQL error or API change).",
+      };
+    }
+
+    console.error("Jira API Error:", err.message);
+
     return {
+      success: false,
+      tickets: [],
+      count: 0,
+      summary: "⚠️ Unable to fetch Jira tickets right now.",
+    };
+  }
+
+  /* -------------------------------------------------- */
+  /* 4️⃣ FORMAT RESULTS */
+  /* -------------------------------------------------- */
+  const issues = res.data?.issues || [];
+  const tickets = issues.map(formatTicket);
+  const count = tickets.length;
+
+  if (!count) {
+    return {
+      success: true,
       tickets: [],
       count: 0,
       summary: `✅ No open tickets for ${label} in ${key}!`,
     };
+  }
 
   const overdueTickets = tickets.filter((t) => t.overdue);
 
+  /* -------------------------------------------------- */
+  /* 5️⃣ GROUP BY ASSIGNEE (SHOW ALL MODE) */
+  /* -------------------------------------------------- */
   if (showAll || assignee === "all" || assignee === "everyone") {
     const byAssignee = {};
+
     for (const t of tickets) {
       const name = t.assignee || "Unassigned";
       if (!byAssignee[name]) byAssignee[name] = [];
       byAssignee[name].push(t);
     }
+
     const lines = [
       `👥 *All open tickets in ${key}* — ${count} total`,
       overdueTickets.length ? `⚠️ ${overdueTickets.length} overdue` : "",
     ];
+
     for (const [person, pts] of Object.entries(byAssignee)) {
       const pOverdue = pts.filter((t) => t.overdue).length;
+
       lines.push(
         `\n👤 *${person}* — ${pts.length} ticket${pts.length > 1 ? "s" : ""}${
           pOverdue ? ` (${pOverdue} overdue)` : ""
         }`
       );
+
       for (const t of pts.slice(0, 5)) {
         const due = t.dueDate ? `Due: ${t.dueDate}` : "No due date";
+
         lines.push(
           `  ${priorityEmoji(t.priority)} ${t.key}: ${t.title.slice(
             0,
@@ -449,27 +598,47 @@ async function toolGetMyTickets(params, ctx) {
           )} • ${due}${t.overdue ? " ⚠️" : ""}`
         );
       }
+
       if (pts.length > 5) lines.push(`  ... and ${pts.length - 5} more`);
     }
-    return { tickets, count, byAssignee, summary: lines.join("\n") };
+
+    return {
+      success: true,
+      tickets,
+      count,
+      byAssignee,
+      summary: lines.join("\n"),
+    };
   }
 
+  /* -------------------------------------------------- */
+  /* 6️⃣ SINGLE USER SUMMARY */
+  /* -------------------------------------------------- */
   const lines = [
     `👤 *${label}'s open tickets in ${key}* — ${count} total`,
     overdueTickets.length ? `⚠️ ${overdueTickets.length} overdue` : "",
   ];
+
   for (const t of tickets) {
     const due = t.dueDate ? `Due: ${t.dueDate}` : "No due date";
+
     lines.push(
       `${priorityEmoji(t.priority)} *${t.key}* — ${t.title.slice(0, 55)}`
     );
+
     lines.push(
       `   ${t.status} • ${due}${
         t.overdue ? ` ⚠️ ${t.daysOverdue}d overdue` : ""
       } • ${t.assignee}`
     );
   }
-  return { tickets, count, summary: lines.join("\n") };
+
+  return {
+    success: true,
+    tickets,
+    count,
+    summary: lines.join("\n"),
+  };
 }
 
 // Helper to fetch email by accountId
@@ -516,13 +685,13 @@ async function toolGetSprintSummary(params, ctx) {
     }
   } catch {
     const jql = `project = ${key} AND statusCategory != Done ORDER BY created DESC`;
-    const res = await client.get("/search/jql", {
-      params: {
+    const res = await safeJira(() =>
+      jiraSearch(client, {
         jql,
         maxResults: 50,
         fields: "summary,status,priority,assignee,duedate,issuetype",
-      },
-    });
+      })
+    );
     tickets = res.data.issues.map(formatTicket);
   }
 
@@ -753,13 +922,13 @@ async function toolGetShippedLastSprint(params, ctx) {
   } catch {
     // Fallback: recently resolved via JQL
     const jql = `project = ${key} AND statusCategory = Done AND updated >= -14d ORDER BY updated DESC`;
-    const res = await client.get("/search/jql", {
-      params: {
+    const res = await safeJira(() =>
+      jiraSearch(client, {
         jql,
-        maxResults: 50,
+        maxResults,
         fields: "summary,status,priority,assignee,duedate,issuetype",
-      },
-    });
+      })
+    );
     tickets = res.data.issues.map(formatTicket);
     sprintName = "Last 2 Weeks";
   }
@@ -821,13 +990,13 @@ async function toolGetMostOverdue(params, ctx) {
 
   const today = new Date().toISOString().split("T")[0];
   const jql = `project = ${key} AND statusCategory != Done AND duedate < "${today}" ORDER BY duedate ASC`;
-  const res = await client.get("/search/jql", {
-    params: {
+  const res = await safeJira(() =>
+    jiraSearch(client, {
       jql,
-      maxResults: 100,
+      maxResults,
       fields: "summary,status,priority,assignee,duedate,issuetype",
-    },
-  });
+    })
+  );
 
   const tickets = res.data.issues.map(formatTicket);
   if (!tickets.length) {
@@ -927,13 +1096,13 @@ async function toolGetSprintBugs(params, ctx) {
   } catch {
     // Fallback JQL
     const jql = `project = ${key} AND issuetype = Bug AND statusCategory != Done ORDER BY priority ASC`;
-    const res = await client.get("/search/jql", {
-      params: {
+    const res = await safeJira(() =>
+      jiraSearch(client, {
         jql,
-        maxResults: 50,
+        maxResults,
         fields: "summary,status,priority,assignee,duedate,issuetype",
-      },
-    });
+      })
+    );
     tickets = res.data.issues.map(formatTicket);
     sprintName = "Backlog";
   }
@@ -1022,13 +1191,13 @@ async function toolSearchTickets(params, ctx) {
   }
   if (!jql) throw new Error("query or jql is required");
 
-  const res = await client.get("/search/jql", {
-    params: {
+  const res = await safeJira(() =>
+    jiraSearch(client, {
       jql,
       maxResults,
       fields: "summary,status,priority,assignee,duedate,issuetype",
-    },
-  });
+    })
+  );
 
   const tickets = res.data.issues.map(formatTicket);
   if (!tickets.length) {
@@ -1092,7 +1261,7 @@ function buildJqlFromQuery(query, projectKey) {
   );
   if (assignedToMatch) {
     const name = assignedToMatch[1].trim();
-    parts.push(`assignee = "${name}"`);
+    parts.push(`assignee ~ "${name}"`);
   } else if (q.includes("my tickets") || q.includes("assigned to me")) {
     parts.push("assignee = currentUser()");
   } else if (q.includes("unassigned")) {
@@ -1175,13 +1344,13 @@ async function toolNotifyOverdue(params, ctx) {
   if (assigneeName) filters.push(`assignee = "${assigneeName}"`);
 
   const jql = filters.join(" AND ") + " ORDER BY duedate ASC";
-  const res = await client.get("/search/jql", {
-    params: {
+  const res = await safeJira(() =>
+    jiraSearch(client, {
       jql,
-      maxResults: 50,
+      maxResults,
       fields: "summary,status,priority,assignee,duedate,issuetype",
-    },
-  });
+    })
+  );
 
   const tickets = res.data.issues.map(formatTicket);
   if (!tickets.length) {

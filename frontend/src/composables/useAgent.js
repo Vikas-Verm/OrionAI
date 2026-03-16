@@ -66,6 +66,11 @@ export function useAgent() {
     await nextTick();
     scrollToBottom?.();
 
+    // ✅ FIX: persist sessionId so TelegramRenderer can use it for reply persistence
+    if (store.currentSessionId) {
+      localStorage.setItem("orion_session", store.currentSessionId);
+    }
+
     return new Promise((resolve) => {
       streamAgentRun(plan.steps, store.currentSessionId, userMessage)
         .then((response) => {
@@ -149,9 +154,17 @@ export function useAgent() {
           // Calendar
           richEvents: event.richEvents || null,
           calendarByDay: event.calendarByDay || null,
+          // Telegram
           richTelegramMessages: event.richTelegramMessages || null,
           telegramChatName: event.telegramChatName || null,
+          telegramChatId: event.telegramChatId || null,
+          telegramChatUsername: event.telegramChatUsername || null,
           telegramChats: event.telegramChats || null,
+          telegramUnreadChats: event.telegramUnreadChats || null,
+          telegramSearchResults: event.telegramSearchResults || null,
+          telegramQuery: event.telegramQuery || null,
+          telegramSent: event.telegramSent || null,
+          telegramContact: event.telegramContact || null,
           icon: event.icon,
           label: event.label,
         });

@@ -43,6 +43,10 @@ const {
   toolTelegramListChats,
   toolTelegramGetMessages,
   toolTelegramSendMessage,
+  toolTelegramGetUnread,
+  toolTelegramSearchMessages,
+  toolTelegramReplyMessage,
+  toolTelegramGetContactInfo,
 } = require("./tools/toolTelegram");
 const Skill = require("../models/skill");
 
@@ -75,31 +79,53 @@ const STATIC_TOOL_REGISTRY = {
   telegram_list_chats: { icon: "✈️", label: "List Telegram chats" },
   telegram_get_messages: { icon: "💬", label: "Read Telegram messages" },
   telegram_send_message: { icon: "📤", label: "Send Telegram message" },
+  telegram_get_unread: { icon: "🔔", label: "Get unread Telegram messages" },
+  telegram_search_messages: { icon: "🔍", label: "Search Telegram messages" },
+  telegram_reply_message: { icon: "↩️", label: "Reply on Telegram" },
+  telegram_get_contact_info: { icon: "👤", label: "Get Telegram contact info" },
 };
 
 // ── Load Jira + custom tools from DB and merge with static ───────────────────
 async function loadToolRegistry() {
   try {
     const skills = await Skill.find({ enabled: true });
+
     const dbRegistry = {};
+
     for (const s of skills) {
       dbRegistry[s.toolName] = {
         icon: s.icon,
         label: s.label,
         description: s.description,
+        presentation: s.presentation || null,
       };
     }
-    // Merge: static tools + DB tools (DB wins on conflict)
+
     return { ...STATIC_TOOL_REGISTRY, ...dbRegistry };
   } catch (err) {
-    console.error(
-      "loadToolRegistry failed, using static fallback:",
-      err.message
-    );
+    console.error("loadToolRegistry failed:", err.message);
     return STATIC_TOOL_REGISTRY;
   }
 }
 
+function presentStep(toolName, index, TOOL_REGISTRY) {
+  const tool = TOOL_REGISTRY[toolName];
+
+  if (!tool) {
+    return { icon: "⚙️", label: toolName };
+  }
+
+  const presentation = tool.presentation?.steps;
+
+  if (presentation && presentation[index]) {
+    return presentation[index];
+  }
+
+  return {
+    icon: tool.icon || "⚙️",
+    label: tool.label || toolName,
+  };
+}
 // ── Build classifier prompt dynamically from DB skills ───────────────────────
 async function buildClassifierPrompt(userMessage) {
   let toolLines = [];
@@ -164,10 +190,15 @@ async function buildClassifierPrompt(userMessage) {
     'If NEITHER (general questions, coding, analytics, casual chat): {"isAgentTask":false,"confidence":0.95,"intent":"","steps":[]}',
     "",
     "",
-    "If TYPE E — TELEGRAM (user wants to read or send messages via Telegram):",
+    "If TYPE E — TELEGRAM (user wants to read, search, send, reply to Telegram messages):",
     "- show telegram messages / what did X say on telegram → telegram_get_messages with params {contact:'X', limit:20}",
     "- list telegram chats / who messaged me on telegram → telegram_list_chats",
     "- send telegram message to X → telegram_send_message with params {contact:'X', message:'...'}",
+    "- show unread / what are my unread telegram messages → telegram_get_unread with params {limit:10}",
+    "- search telegram for X / find messages about X in telegram → telegram_search_messages with params {query:'X'}",
+    "- search for X in chat with Y / find X in telegram conversation with Y → telegram_search_messages with params {query:'X', contact:'Y'}",
+    "- reply to X on telegram / respond to X → telegram_reply_message with params {contact:'X', message:'...'}",
+    "- who is X on telegram / get info about X on telegram → telegram_get_contact_info with params {contact:'X'}",
     'Telegram format: {"isAgentTask":true,"confidence":0.93,"intent":"..","steps":[{"tool":"telegram_get_messages","params":{"contact":"Rahul","limit":20}}]}',
     "",
     "Respond with ONLY the JSON object, nothing else.",
@@ -805,7 +836,15 @@ async function runAgent(steps, db, onProgress, userId) {
 
   for (const step of steps) {
     const { tool, params } = step;
-    onProgress({ tool, status: "running", params });
+    const stepUI = presentStep(tool, results.length, TOOL_REGISTRY);
+
+    onProgress({
+      tool,
+      status: "running",
+      params,
+      label: stepUI.label,
+      icon: stepUI.icon,
+    });
 
     try {
       let result;
@@ -1024,11 +1063,31 @@ async function runAgent(steps, db, onProgress, userId) {
         case "telegram_send_message":
           result = await toolTelegramSendMessage(params, ctx);
           break;
+        case "telegram_get_unread":
+          result = await toolTelegramGetUnread(params, ctx);
+          break;
+        case "telegram_search_messages":
+          result = await toolTelegramSearchMessages(params, ctx);
+          break;
+        case "telegram_reply_message":
+          result = await toolTelegramReplyMessage(params, ctx);
+          break;
+        case "telegram_get_contact_info":
+          result = await toolTelegramGetContactInfo(params, ctx);
+          break;
         default:
           throw new Error(`Unknown tool: "${tool}"`);
       }
 
-      onProgress({ tool, status: "done", result });
+      const stepUI = presentStep(tool, results.length, TOOL_REGISTRY);
+
+      onProgress({
+        tool,
+        status: "done",
+        result,
+        label: stepUI.label,
+        icon: stepUI.icon,
+      });
       results.push({ tool, status: "done", result });
     } catch (err) {
       onProgress({ tool, status: "error", error: err.message });

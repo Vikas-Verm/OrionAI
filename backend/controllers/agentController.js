@@ -7,6 +7,7 @@ const {
 } = require("../services/agentService");
 const Integration = require("../models/Integration");
 const { google } = require("googleapis");
+const { normalizeStepParams } = require("../services/agentParamNormalizer");
 // Try both common paths for llmService
 let chatCompleteNoSystem;
 try {
@@ -119,6 +120,24 @@ function stepSummary(tool, result) {
       return result.ok
         ? `Message sent to ${result.to} on Telegram`
         : `Could not find contact: "${result.contact}"`;
+    case "telegram_get_unread":
+      return result.totalUnread > 0
+        ? `${result.totalUnread} unread across ${result.chatCount} chat${
+            result.chatCount !== 1 ? "s" : ""
+          }`
+        : "No unread Telegram messages";
+    case "telegram_search_messages":
+      return result.count > 0
+        ? `Found ${result.count} messages containing "${result.query}"`
+        : `No messages found for "${result.query}"`;
+    case "telegram_reply_message":
+      return result.ok
+        ? `Replied to ${result.to} on Telegram`
+        : `Could not find contact: "${result.contact}"`;
+    case "telegram_get_contact_info":
+      return result.ok
+        ? result.summary
+        : `No Telegram contact found: "${result.contact}"`;
     default:
       return "Done";
   }
@@ -159,6 +178,13 @@ async function parseIntent(req, res) {
   }
 }
 
+function validateSteps(steps) {
+  return steps.filter((step) => {
+    if (!step.tool) return false;
+    if (!step.params) step.params = {};
+    return true;
+  });
+}
 // ── POST /api/agent/run  (SSE) ────────────────────────────────────────────────
 async function runPlan(req, res) {
   const { steps, sessionId } = req.body;
@@ -169,8 +195,14 @@ async function runPlan(req, res) {
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders();
 
+  // BigInt-safe JSON serializer — gramjs returns BigInt IDs which crash JSON.stringify
+  function safeStringify(obj) {
+    return JSON.stringify(obj, (key, value) =>
+      typeof value === "bigint" ? Number(value) : value
+    );
+  }
   const send = (data) => {
-    if (!res.writableEnded) res.write(`data: ${JSON.stringify(data)}\n\n`);
+    if (!res.writableEnded) res.write(`data: ${safeStringify(data)}\n\n`);
   };
 
   try {
@@ -179,11 +211,28 @@ async function runPlan(req, res) {
     // ── Load registry ONCE per run — DB + static merged ──
     const TOOL_REGISTRY = await loadToolRegistry();
 
-    send({ type: "start", totalSteps: steps.length });
-    await new Promise((r) => setTimeout(r, 150));
+    let executionSteps = steps || [];
 
+    // ── AUTO FALLBACK (when planner fails) ─────────────
+    if (!executionSteps.length) {
+      console.log("⚠️ Planner returned empty steps — using fallback");
+
+      executionSteps = await autoInferSingleTool(
+        req.body.userMessage || "",
+        userId
+      );
+    }
+
+    send({ type: "start", totalSteps: executionSteps.length });
+    await new Promise((r) => setTimeout(r, 150));
+    const normalizedSteps = validateSteps(
+      executionSteps.map((s) =>
+        normalizeStepParams(s, req.body.userMessage || "")
+      )
+    );
+    console.log("Agent executing steps:", normalizedSteps);
     const results = await runAgent(
-      steps,
+      normalizedSteps,
       db,
       async (progress) => {
         const meta = TOOL_REGISTRY[progress.tool] || {
@@ -229,7 +278,24 @@ async function runPlan(req, res) {
             calendarByDay: progress.result?.byDay || null,
             richTelegramMessages: progress.result?.messages || null,
             telegramChatName: progress.result?.chatName || null,
+            telegramChatId: String(progress.result?.chatId || ""),
+            telegramChatUsername: progress.result?.chatUsername || null,
             telegramChats: progress.result?.chats || null,
+            // Unread: result.chats has messages per chat
+            telegramUnreadChats: progress.result?.chats || null,
+            telegramSearchResults: progress.result?.results || null,
+            telegramQuery: progress.result?.query || null,
+            telegramSent:
+              progress.result?.ok &&
+              (progress.tool === "telegram_send_message" ||
+                progress.tool === "telegram_reply_message")
+                ? { to: progress.result.to, message: progress.result.message }
+                : null,
+            telegramContact:
+              progress.result?.ok &&
+              progress.tool === "telegram_get_contact_info"
+                ? progress.result
+                : null,
           });
           await new Promise((r) => setTimeout(r, 60));
         }
@@ -261,30 +327,66 @@ async function runPlan(req, res) {
           .filter((r) => r.status === "done")
           .map((r) => {
             const meta = TOOL_REGISTRY[r.tool] || { icon: "⚙️", label: r.tool };
+
             return {
               tool: r.tool,
+              icon: meta.icon,
               label: meta.label,
               status: "done",
               summary: stepSummary(r.tool, r.result),
+
+              // ───────── JIRA ─────────
               richTickets: r.result?.tickets || null,
               byAssignee: r.result?.byAssignee || null,
               jiraDomain: process.env.JIRA_DOMAIN || null,
               sprintName: r.result?.sprintName || null,
               notifications: r.result?.notifications || null,
+
+              // ───────── EMAIL ─────────
               richEmails: r.result?.emails
                 ? r.result.emails
                 : r.result?.id && r.result?.subject
                 ? [r.result]
                 : null,
               emailQuery: r.result?.query || null,
-              // Calendar
+
+              // ───────── CALENDAR ─────────
               richEvents:
                 r.result?.events ||
                 (r.result?.id && r.result?.title ? [r.result] : null),
               calendarByDay: r.result?.byDay || null,
+
+              // ───────── TELEGRAM ─────────
               richTelegramMessages: r.result?.messages || null,
-              telegramChatName:     r.result?.chatName  || null,
-              telegramChats:        r.result?.chats     || null,
+              telegramChatName: r.result?.chatName || null,
+              telegramChatId: r.result?.chatId || null,
+              telegramChatUsername: r.result?.chatUsername || null,
+
+              telegramChats: r.result?.chats || null,
+              telegramUnreadChats: r.result?.chats || null,
+
+              telegramSearchResults: r.result?.results || null,
+              telegramQuery: r.result?.query || null,
+
+              telegramSentMessages:
+                r.tool === "telegram_send_message" ||
+                r.tool === "telegram_reply_message"
+                  ? [
+                      {
+                        chatId: r.result?.chatId || null,
+                        to: r.result?.to,
+                        message: r.result?.message || null,
+                        type: r.result?.type || "text",
+                        attachment: r.result?.attachment || null,
+                        ts: Date.now(),
+                      },
+                    ]
+                  : null,
+
+              telegramContact:
+                r.result?.ok && r.tool === "telegram_get_contact_info"
+                  ? r.result
+                  : null,
             };
           });
 
@@ -432,10 +534,71 @@ async function calendarRsvpDirect(req, res) {
   }
 }
 
+// ── POST /api/agent/telegram-reply ──────────────────────────────────────────
+// Called by TelegramRenderer when user replies from within an agent bubble.
+// Persists the sent message to the conversation so it survives page refresh.
+async function saveTelegramReply(req, res) {
+  const { sessionId, chatId, text, fileNames } = req.body;
+  const userId = req.user?.username;
+
+  if (!sessionId || !chatId) {
+    return res.status(400).json({ error: "sessionId and chatId required" });
+  }
+
+  try {
+    const conv = await Conversation.findOne({ sessionId, userId });
+    if (!conv) return res.status(404).json({ error: "Conversation not found" });
+
+    const sentMsg = {
+      id: Date.now(),
+      chatId: String(chatId),
+      text: text || "",
+      fileNames: fileNames || [],
+      fromMe: true,
+      date: new Date().toISOString(),
+    };
+
+    let updated = false;
+
+    // Walk agent messages and find any step that owns this chatId
+    for (const message of conv.messages) {
+      if (!message.isAgent || !Array.isArray(message.steps)) continue;
+
+      for (const step of message.steps) {
+        const stepChatId = String(step.telegramChatId || "");
+        const hasChat =
+          stepChatId === String(chatId) ||
+          (step.telegramUnreadChats || []).some(
+            (c) => String(c.chatId) === String(chatId)
+          );
+
+        if (hasChat) {
+          if (!Array.isArray(step.telegramSentMessages)) {
+            step.telegramSentMessages = [];
+          }
+          step.telegramSentMessages.push(sentMsg);
+          updated = true;
+        }
+      }
+    }
+
+    if (updated) {
+      conv.markModified("messages");
+      await conv.save();
+    }
+
+    res.json({ ok: true, updated });
+  } catch (err) {
+    console.error("saveTelegramReply error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+}
+
 module.exports = {
   parseIntent,
   runPlan,
   gmailReplyDirect,
   gmailSuggestReply,
   calendarRsvpDirect,
+  saveTelegramReply,
 };

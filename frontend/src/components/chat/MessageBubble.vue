@@ -308,64 +308,10 @@
 
           </div>
         </template>
-        <template v-else-if="telegramSteps.length">
-        <div v-for="step in telegramSteps" :key="step.tool + '_tg'" class="tg-agent-section">
-          <!-- Header -->
-          <div class="tg-agent-header">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="flex-shrink:0">
-              <circle cx="12" cy="12" r="12" fill="#229ED9"/>
-              <path d="M5.4 11.9l10.2-3.9c.47-.18.88.11.73.8l-1.74 8.2c-.13.58-.47.72-.95.45l-2.63-1.94-1.27 1.22c-.14.14-.26.26-.53.26l.19-2.69 4.87-4.4c.21-.19-.05-.29-.32-.1L7.47 13.9 4.87 13.1c-.56-.17-.57-.56.53-1.2z" fill="white"/>
-            </svg>
-            <span class="tg-agent-title">
-              <template v-if="step.tool === 'telegram_get_messages'">
-                💬 {{ step.telegramChatName || 'Telegram' }}
-              </template>
-              <template v-else-if="step.tool === 'telegram_list_chats'">
-                ✈️ Telegram Chats
-              </template>
-              <template v-else>
-                📤 Sent via Telegram
-              </template>
-            </span>
-            <span class="tg-agent-count" v-if="step.richTelegramMessages?.length">
-              {{ step.richTelegramMessages.length }} messages
-            </span>
-          </div>
-
-          <!-- Chat list (telegram_list_chats) -->
-          <div v-if="step.telegramChats?.length" class="tg-agent-chat-list">
-            <div v-for="chat in step.telegramChats.slice(0, 8)" :key="chat.id" class="tg-agent-chat-row">
-              <div class="tg-agent-chat-avatar">{{ chat.name?.slice(0,2).toUpperCase() }}</div>
-              <div class="tg-agent-chat-info">
-                <span class="tg-agent-chat-name">{{ chat.name }}</span>
-                <span class="tg-agent-chat-preview">{{ chat.lastMessage || '…' }}</span>
-              </div>
-              <span v-if="chat.unread > 0" class="tg-agent-unread">{{ chat.unread }}</span>
-            </div>
-          </div>
-
-          <!-- Message thread (telegram_get_messages) -->
-          <div v-else-if="step.richTelegramMessages?.length" class="tg-agent-messages">
-            <div
-              v-for="msg in step.richTelegramMessages.slice(-8)"
-              :key="msg.id"
-              :class="['tg-agent-msg', msg.fromMe ? 'tg-agent-msg-out' : 'tg-agent-msg-in']">
-              <div v-if="!msg.fromMe" class="tg-agent-msg-sender">{{ msg.fromName }}</div>
-              <div class="tg-agent-msg-text">{{ msg.text }}</div>
-              <div class="tg-agent-msg-time">{{ formatTgTime(msg.date) }}</div>
-            </div>
-          </div>
-
-          <!-- Send confirmation -->
-          <div v-else class="tg-agent-sent-confirm">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5">
-              <polyline points="20 6 9 17 4 12"/>
-            </svg>
-            Message delivered
-          </div>
-
-        </div>
-      </template>
+        <!-- ── TELEGRAM — delegated to TelegramRenderer ── -->
+        <template v-else-if="hasTelegramStep">
+          <TelegramRenderer :steps="msg.steps || []" :msg="msg" />
+        </template>
 
 <!-- Fallback plain text -->
         <div v-else-if="msg.content" class="agent-text-content" v-html="formattedContent"></div>
@@ -434,6 +380,7 @@
 import { computed, ref, reactive } from 'vue'
 import { useChat } from '../../composables/useChat'
 import { agentAPI } from '../../services/api'
+import TelegramRenderer from '../../components/agent/renderers/TelegramRenderer.vue'
 
 const props = defineProps({
   msg: { type: Object, required: true }
@@ -478,10 +425,7 @@ function ticketSectionTitle(step) {
 //   if (!name || name === 'Unassigned') return '?'
 //   return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)
 // }
-function formatTgTime(iso) {
-  if (!iso) return ''
-  return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
-}
+// formatTgTime moved to TelegramRenderer.vue
 function typeIcon(type) {
   const t = (type || '').toLowerCase()
   if (t.includes('bug'))   return '🐛'
@@ -563,12 +507,14 @@ const GMAIL_TOOLS = ['gmail_get_inbox', 'gmail_search_emails', 'gmail_get_email'
   const calendarSteps = computed(() =>
     (props.msg.steps || []).filter(s => CALENDAR_TOOLS.includes(s.tool) && s.richEvents?.length)
   )
-  const TELEGRAM_TOOLS = ['telegram_get_messages', 'telegram_list_chats', 'telegram_send_message']
-
-const telegramSteps = computed(() =>
-  (props.msg.steps || []).filter(s =>
-    TELEGRAM_TOOLS.includes(s.tool) && (s.richTelegramMessages?.length || s.telegramChats?.length)
-  )
+  // ── Telegram: delegate ALL telegram tools to TelegramRenderer ──
+const TG_ALL_TOOLS = [
+  'telegram_get_messages', 'telegram_get_unread', 'telegram_list_chats',
+  'telegram_send_message', 'telegram_reply_message',
+  'telegram_search_messages', 'telegram_get_contact_info',
+]
+const hasTelegramStep = computed(() =>
+  (props.msg.steps || []).some(s => TG_ALL_TOOLS.includes(s.tool))
 )
   const rsvpDoneMap = ref({})
   async function sendRsvp(event, response) {

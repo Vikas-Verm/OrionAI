@@ -37,7 +37,7 @@
 
       <!-- Header: INTEGRATIONS label + total unread pill + chevron -->
       <div class="int-header" @click="intOpen = !intOpen">
-        <span class="int-label">Integrations</span>
+        <span class="int-label">Connected Apps</span>
         <span v-if="totalUnread > 0" class="int-total-pill">{{ totalUnread }}</span>
         <svg class="int-chevron" :class="{ open: intOpen }"
           width="12" height="12" viewBox="0 0 24 24" fill="none"
