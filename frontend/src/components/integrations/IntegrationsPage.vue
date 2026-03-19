@@ -365,7 +365,7 @@
 <script setup>
 import { ref, computed, onMounted, reactive } from 'vue'
 import api from '../../services/api'
-
+import { store } from '../../stores/app'
 const emit = defineEmits(['close', 'connected', 'openModule'])
 
 const search       = ref('')
@@ -515,12 +515,16 @@ async function startCalendarOAuth() {
 // ── Slack OAuth ───────────────────────────────────────────
 const slackConnecting = ref(false)
 async function startSlackOAuth() {
-    slackConnecting.value = true
-    try {
-        // Redirect directly — Slack doesn't support postMessage popup well
-        window.location.href = '/api/integrations/slack/oauth/start'
-    } catch (err) { console.error('Slack OAuth failed:', err) }
-    finally { slackConnecting.value = false }
+  slackConnecting.value = true
+  try {
+    // ✅ Exactly like Gmail — get URL from API, open as popup
+    const res = await api.get('/api/integrations/slack/oauth/start')
+    await openOAuthPopup(res.data.url, 'slack-oauth', 'slack-oauth-success')
+  } catch (err) {
+    console.error('Slack OAuth failed:', err)
+  } finally {
+    slackConnecting.value = false
+  }
 }
 
 // ── Remove ────────────────────────────────────────────────

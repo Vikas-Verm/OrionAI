@@ -14,5 +14,8 @@ export default defineConfig({
   },
   server: {
     open: true,
+    allowedHosts: [
+      "bedroom-assets-maritime-gate.trycloudflare.com", // ← add this
+    ],
   },
 });

@@ -66,7 +66,6 @@ export function useAgent() {
     await nextTick();
     scrollToBottom?.();
 
-    // ✅ FIX: persist sessionId so TelegramRenderer can use it for reply persistence
     if (store.currentSessionId) {
       localStorage.setItem("orion_session", store.currentSessionId);
     }
@@ -89,7 +88,7 @@ export function useAgent() {
 
                 buffer += decoder.decode(value, { stream: true });
                 const lines = buffer.split("\n");
-                buffer = lines.pop(); // keep incomplete line in buffer
+                buffer = lines.pop();
 
                 for (const line of lines) {
                   if (!line.startsWith("data: ")) continue;
@@ -142,19 +141,23 @@ export function useAgent() {
           status: "done",
           summary: event.summary,
           richSummary: event.richSummary || null,
-          // Jira
+
+          // ── Jira ──────────────────────────────────────
           richTickets: event.richTickets || null,
           byAssignee: event.byAssignee || null,
           jiraDomain: event.jiraDomain || null,
           sprintName: event.sprintName || null,
           notifications: event.notifications || null,
-          // Gmail
+
+          // ── Gmail ─────────────────────────────────────
           richEmails: event.richEmails || null,
           emailQuery: event.emailQuery || null,
-          // Calendar
+
+          // ── Calendar ──────────────────────────────────
           richEvents: event.richEvents || null,
           calendarByDay: event.calendarByDay || null,
-          // Telegram
+
+          // ── Telegram ──────────────────────────────────
           richTelegramMessages: event.richTelegramMessages || null,
           telegramChatName: event.telegramChatName || null,
           telegramChatId: event.telegramChatId || null,
@@ -165,6 +168,17 @@ export function useAgent() {
           telegramQuery: event.telegramQuery || null,
           telegramSent: event.telegramSent || null,
           telegramContact: event.telegramContact || null,
+
+          // ── Slack ─────────────────────────────────────
+          richSlackMessages: event.richSlackMessages || null,
+          richSlackChannels: event.richSlackChannels || null,
+          richSlackUnread: event.richSlackUnread || null,
+          slackChannel: event.slackChannel || null,
+          slackChannelId: event.slackChannelId || null,
+          slackSent: event.slackSent || null,
+          slackMessage: event.slackMessage || null,
+          totalUnread: event.totalUnread || null,
+
           icon: event.icon,
           label: event.label,
         });
