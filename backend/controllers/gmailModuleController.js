@@ -1,24 +1,36 @@
 /**
- * gmailModuleController.js  v2 — Beeper-style architecture
+ * gmailModuleController.js  v3 — stateless / no local SQLite cache
  *
  * Data flow:
- *   Gmail IMAP ──imapflow──▶ SQLite cache ──▶ this controller ──▶ frontend
+ *   Gmail REST API ──▶ this controller ──▶ frontend
  *
- * REST API is only used for:
- *   - OAuth token refresh
- *   - Sending email
- *   - Marking messages read
- *   - Label counts
- *   - Contact photos (People API)
+ * All emails are fetched directly from Gmail on demand.
+ * Pagination uses Gmail's native nextPageToken cursor — no per-user DB files.
  */
+
 const axios = require("axios");
 const Integration = require("../models/Integration");
-const cache = require("../utils/gmailCache");
-const sync = require("../services/gmailMapService");
 
-// ── Token cache ───────────────────────────────────────────────────
+// ── In-memory token cache (per process, not per file) ─────────────
 const tokenCache = new Map();
 
+// ── Simple in-process SSE broadcast (no sync manager needed) ──────
+const sseClients = new Map(); // userId → Set<res>
+
+function broadcast(userId, event, data) {
+  const clients = sseClients.get(userId);
+  if (!clients?.size) return;
+  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const res of [...clients]) {
+    try {
+      res.write(payload);
+    } catch {
+      clients.delete(res);
+    }
+  }
+}
+
+// ── OAuth helpers ─────────────────────────────────────────────────
 async function getCredentials(userId) {
   const doc = await Integration.findOne({
     userId,
@@ -39,11 +51,13 @@ async function getAccessToken(userId) {
   const cached = tokenCache.get(userId);
   if (cached && cached.expiresAt > Date.now() + 60_000)
     return cached.accessToken;
+
   const creds = await getCredentials(userId);
   if (!creds.refreshToken || !creds.clientId || !creds.clientSecret) {
     if (creds.accessToken) return creds.accessToken;
     throw new Error("Gmail OAuth credentials incomplete.");
   }
+
   try {
     const r = await axios.post("https://oauth2.googleapis.com/token", null, {
       params: {
@@ -77,92 +91,179 @@ function gmailApi(token) {
   });
 }
 
-async function ensureSync(userId) {
-  const creds = await getCredentials(userId);
-  sync.getOrCreate(userId, {
-    userEmail: creds.userEmail,
-    getToken: () => getAccessToken(userId),
-  });
+// ── Gmail message parsing helpers ─────────────────────────────────
+function hdr(headers = [], name) {
+  return (
+    headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ||
+    ""
+  );
 }
 
-// ── Row formatters ────────────────────────────────────────────────
-function threadRowToEmail(row) {
+function b64(data) {
+  if (!data) return "";
+  return Buffer.from(
+    data.replace(/-/g, "+").replace(/_/g, "/"),
+    "base64"
+  ).toString("utf-8");
+}
+
+function extractBody(payload, mime) {
+  if (!payload) return "";
+  if (payload.mimeType === mime && payload.body?.data)
+    return b64(payload.body.data);
+  if (payload.parts) {
+    const hit = payload.parts.find((p) => p.mimeType === mime);
+    if (hit?.body?.data) return b64(hit.body.data);
+    for (const p of payload.parts) {
+      const r = extractBody(p, mime);
+      if (r) return r;
+    }
+  }
+  return "";
+}
+
+function extractAtts(payload, out = []) {
+  if (!payload) return out;
+  if (payload.filename && payload.body?.attachmentId)
+    out.push({
+      filename: payload.filename,
+      mimeType: payload.mimeType || "application/octet-stream",
+      size: payload.body.size || 0,
+      attachmentId: payload.body.attachmentId,
+    });
+  if (payload.parts) payload.parts.forEach((p) => extractAtts(p, out));
+  return out;
+}
+
+function fmtDate(raw) {
+  if (!raw) return "";
+  try {
+    const d = new Date(raw);
+    if (isNaN(d)) return raw;
+    const now = new Date();
+    const isToday =
+      d.getDate() === now.getDate() &&
+      d.getMonth() === now.getMonth() &&
+      d.getFullYear() === now.getFullYear();
+    if (isToday)
+      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    if (d.getFullYear() === now.getFullYear())
+      return d.toLocaleDateString([], { month: "short", day: "numeric" });
+    return d.toLocaleDateString([], {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  } catch {
+    return raw;
+  }
+}
+
+// ── Map a Gmail thread API response to the shape the frontend expects
+function threadToEmail(thread) {
+  const msgs = thread.messages || [];
+  const lastMsg = msgs[msgs.length - 1] || {};
+  const firstMsg = msgs[0] || {};
+  const lastHdrs = lastMsg.payload?.headers || [];
+  const firstHdrs = firstMsg.payload?.headers || [];
+  const subject =
+    hdr(firstHdrs, "subject") || hdr(lastHdrs, "subject") || "(no subject)";
+  const allLabels = msgs.flatMap((m) => m.labelIds || []);
+  const isSent = allLabels.includes("SENT") && !allLabels.includes("INBOX");
   return {
-    id: row.id,
-    threadId: row.id,
-    from: row.fromAddr,
-    to: row.toAddr || "",
-    origFrom: row.origFromAddr || row.fromAddr || "",
-    subject: row.subject,
-    date: row.lastDateStr,
-    snippet: row.snippet,
-    body: "",
-    html: "",
-    unread: row.unread > 0,
-    starred: row.starred === 1, // ← expose starred flag to frontend
-    msgCount: row.msgCount,
+    id: thread.id,
+    threadId: thread.id,
+    from: hdr(lastHdrs, "from"),
+    to: hdr(lastHdrs, "to") || hdr(firstHdrs, "to"),
+    cc: hdr(lastHdrs, "cc") || hdr(firstHdrs, "cc"),
+    origFrom: hdr(firstHdrs, "from"),
+    subject,
+    date: fmtDate(hdr(lastHdrs, "date")),
+    snippet: thread.snippet || "",
+    unread: allLabels.includes("UNREAD"),
+    starred: allLabels.includes("STARRED"),
+    isSent,
+    msgCount: msgs.length,
   };
 }
 
-function messageRowToFull(row) {
-  let attachments = [];
-  try {
-    attachments = JSON.parse(row.attachments || "[]");
-  } catch {}
-  const flags = (() => {
-    try {
-      return JSON.parse(row.flags || "[]");
-    } catch {
-      return [];
-    }
-  })();
+// ── Map a full Gmail message to the shape the frontend expects ─────
+function messageToFull(msg) {
+  const headers = msg.payload?.headers || [];
+  const flags = msg.labelIds || [];
   return {
-    id: row.id,
-    threadId: row.threadId,
-    from: row.fromAddr,
-    to: row.toAddr || "",
-    subject: row.subject,
-    date: row.dateStr,
-    snippet: row.snippet,
-    body: row.bodyText || "",
-    html: row.bodyHtml || "",
-    attachments,
-    unread: !flags.includes("\\Seen"),
+    id: msg.id,
+    threadId: msg.threadId,
+    from: hdr(headers, "from"),
+    to: hdr(headers, "to"),
+    subject: hdr(headers, "subject") || "(no subject)",
+    date: fmtDate(hdr(headers, "date")),
+    snippet: msg.snippet || "",
+    body: extractBody(msg.payload, "text/plain"),
+    html: extractBody(msg.payload, "text/html"),
+    attachments: extractAtts(msg.payload),
+    unread: flags.includes("UNREAD"),
   };
 }
 
 // ── POST /api/gmail/list ──────────────────────────────────────────
+// Fetches directly from Gmail REST API — no SQLite involved.
+// Uses Gmail's nextPageToken for cursor-based pagination.
 exports.listEmails = async (req, res) => {
   const userId = req.user?.username;
   try {
-    await ensureSync(userId);
-    const db = cache.getDb(userId);
+    const token = await getAccessToken(userId);
+    const api = gmailApi(token);
+
     const folder = req.body.folder || "inbox";
+    const pageToken = req.body.pageToken || null; // cursor from previous page
     const search = req.body.search || "";
-    const page = parseInt(req.body.page || "0");
-    const LIMIT = 20;
-    const syncStatus = sync.getManager(userId)?.getStatus() || {
-      status: "connecting",
+
+    // Map UI folder key → Gmail label IDs
+    const labelMap = {
+      inbox: "INBOX",
+      sent: "SENT",
+      drafts: "DRAFTS",
+      starred: "STARRED",
     };
-    const hasCached = cache.hasCachedData(db, folder);
-    if (hasCached) {
-      const rows = cache.listThreads(db, folder, LIMIT, page * LIMIT, search);
-      const emails = rows.map(threadRowToEmail);
-      return res.json({
-        emails,
-        hasMore: rows.length === LIMIT,
-        page,
-        fromCache: true,
-        syncStatus,
-      });
+
+    const params = { maxResults: 20 };
+    if (search) {
+      // When searching, pass raw query (Gmail handles label filtering within search)
+      params.q = search;
+    } else {
+      const labelId = labelMap[folder];
+      if (labelId) params.labelIds = labelId;
     }
-    res.json({
-      emails: [],
-      hasMore: false,
-      page: 0,
-      fromCache: false,
-      syncStatus,
-    });
+    if (pageToken) params.pageToken = pageToken;
+
+    // Step 1: get list of thread IDs for this page
+    const listRes = await api.get("/threads", { params });
+    const threadStubs = listRes.data.threads || [];
+    const nextPageToken = listRes.data.nextPageToken || null;
+
+    if (!threadStubs.length) {
+      return res.json({ emails: [], nextPageToken: null, hasMore: false });
+    }
+
+    // Step 2: batch-fetch thread metadata in parallel
+    const threadDetails = await Promise.all(
+      threadStubs.map((t) =>
+        api
+          .get(`/threads/${t.id}`, {
+            params: {
+              format: "metadata",
+              metadataHeaders: ["From", "To", "Subject", "Date"],
+            },
+          })
+          .then((r) => r.data)
+          .catch(() => null)
+      )
+    );
+
+    const emails = threadDetails.filter(Boolean).map(threadToEmail);
+
+    res.json({ emails, nextPageToken, hasMore: !!nextPageToken });
   } catch (err) {
     console.error("Gmail list error:", err.message);
     res.status(500).json({ error: err.message });
@@ -173,34 +274,26 @@ exports.listEmails = async (req, res) => {
 exports.getThread = async (req, res) => {
   const userId = req.user?.username;
   try {
-    await ensureSync(userId);
-    const db = cache.getDb(userId);
-    const rows = cache.getThread(db, req.body.threadId);
-    if (!rows.length) return res.json({ messages: [] });
-    const messages = rows.map(messageRowToFull);
-    const unreadIds = rows
-      .filter((r) => {
-        try {
-          return !JSON.parse(r.flags || "[]").includes("\\Seen");
-        } catch {
-          return false;
-        }
-      })
-      .map((r) => r.id);
+    const token = await getAccessToken(userId);
+    const api = gmailApi(token);
+
+    const threadRes = await api.get(`/threads/${req.body.threadId}`, {
+      params: { format: "full" },
+    });
+    const messages = (threadRes.data.messages || []).map(messageToFull);
+
+    // Mark unread messages as read (fire-and-forget)
+    const unreadIds = messages.filter((m) => m.unread).map((m) => m.id);
     if (unreadIds.length) {
-      cache.markRead(db, unreadIds);
-      getAccessToken(userId)
-        .then((token) =>
-          Promise.all(
-            unreadIds.map((id) =>
-              gmailApi(token)
-                .post(`/messages/${id}/modify`, { removeLabelIds: ["UNREAD"] })
-                .catch(() => {})
-            )
-          )
+      Promise.all(
+        unreadIds.map((id) =>
+          api
+            .post(`/messages/${id}/modify`, { removeLabelIds: ["UNREAD"] })
+            .catch(() => {})
         )
-        .catch(() => {});
+      ).catch(() => {});
     }
+
     res.json({ messages });
   } catch (err) {
     console.error("Gmail thread error:", err.message);
@@ -208,58 +301,130 @@ exports.getThread = async (req, res) => {
   }
 };
 
+// ── POST /api/gmail/message (backward compat) ─────────────────────
+exports.getMessage = async (req, res) => {
+  const userId = req.user?.username;
+  try {
+    const token = await getAccessToken(userId);
+    const api = gmailApi(token);
+    const r = await api.get(`/messages/${req.body.messageId}`, {
+      params: { format: "full" },
+    });
+    res.json(messageToFull(r.data));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// ── MIME builder helpers ──────────────────────────────────────────
+// Builds a raw RFC 2822 message string (to be base64url-encoded for Gmail API).
+// attachments: [{ name, mimeType, buffer }]  ← buffer is a Node.js Buffer
+function buildMimeMessage({
+  from,
+  to,
+  cc,
+  bcc,
+  subject,
+  body,
+  attachments = [],
+}) {
+  const boundary = `----=_Part_${Date.now()}_${Math.random()
+    .toString(36)
+    .slice(2)}`;
+
+  // Encode header value for non-ASCII characters (RFC 2047 Base64)
+  const encodeHdr = (s) => {
+    if (!s || !/[^\x00-\x7F]/.test(s)) return s || "";
+    return `=?UTF-8?B?${Buffer.from(s).toString("base64")}?=`;
+  };
+
+  const hdrLines = [`MIME-Version: 1.0`, `From: ${from}`, `To: ${to}`];
+  if (cc) hdrLines.push(`Cc: ${cc}`);
+  if (bcc) hdrLines.push(`Bcc: ${bcc}`);
+  hdrLines.push(`Subject: ${encodeHdr(subject)}`);
+
+  if (!attachments.length) {
+    // Simple plain-text message — no multipart needed
+    return [
+      ...hdrLines,
+      `Content-Type: text/plain; charset=utf-8`,
+      `Content-Transfer-Encoding: quoted-printable`,
+      "",
+      body,
+    ].join("\r\n");
+  }
+
+  // Multipart/mixed with attachments
+  const lines = [
+    ...hdrLines,
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    "",
+    `--${boundary}`,
+    `Content-Type: text/plain; charset=utf-8`,
+    `Content-Transfer-Encoding: quoted-printable`,
+    "",
+    body,
+  ];
+
+  for (const att of attachments) {
+    const safeName = att.name.replace(/"/g, '\\"');
+    // att.buffer is a Node Buffer — convert to base64 in 76-char lines (RFC 2045)
+    const b64 = att.buffer.toString("base64").replace(/.{76}/g, "$&\r\n");
+    lines.push(
+      `--${boundary}`,
+      `Content-Type: ${
+        att.mimeType || "application/octet-stream"
+      }; name="${safeName}"`,
+      `Content-Disposition: attachment; filename="${safeName}"`,
+      `Content-Transfer-Encoding: base64`,
+      "",
+      b64
+    );
+  }
+
+  lines.push(`--${boundary}--`);
+  return lines.join("\r\n");
+}
+
 // ── POST /api/gmail/send ──────────────────────────────────────────
+// Accepts multipart/form-data (from multer) so files are binary streams,
+// not base64 inside JSON — avoids PayloadTooLargeError entirely.
 exports.sendEmail = async (req, res) => {
   const userId = req.user?.username;
   try {
     const token = await getAccessToken(userId);
+    const api = gmailApi(token);
     const creds = await getCredentials(userId);
-    const { to, subject, body, threadId } = req.body;
-    const raw = [
-      `From: ${creds.userEmail}`,
-      `To: ${to}`,
-      `Subject: ${subject}`,
-      "Content-Type: text/plain; charset=utf-8",
-      "MIME-Version: 1.0",
-      "",
+
+    // req.body fields come from multer's form-data parsing
+    const { to, cc, bcc, subject, body, threadId } = req.body;
+
+    // req.files populated by multer.array("attachments")
+    const attachments = (req.files || []).map((f) => ({
+      name: f.originalname,
+      mimeType: f.mimetype || "application/octet-stream",
+      buffer: f.buffer, // raw Buffer — no base64 overhead in transit
+    }));
+
+    const raw = buildMimeMessage({
+      from: creds.userEmail,
+      to,
+      cc: cc || "",
+      bcc: bcc || "",
+      subject,
       body,
-    ].join("\r\n");
-    const sendRes = await gmailApi(token).post("/messages/send", {
+      attachments,
+    });
+
+    const sendRes = await api.post("/messages/send", {
       raw: Buffer.from(raw).toString("base64url"),
       ...(threadId ? { threadId } : {}),
     });
 
-    // ── Immediately cache the sent message so it appears without
-    //    waiting for the next 30s poll ─────────────────────────────
-    const sentMsgId = sendRes.data?.id;
-    if (sentMsgId) {
-      (async () => {
-        try {
-          const api = gmailApi(token);
-          const fullMsg = await api.get(`/messages/${sentMsgId}`, {
-            params: { format: "full" },
-          });
-          const db = cache.getDb(userId);
-          const { msgToRow } = require("../services/gmailMapService");
-          const { message, thread } = msgToRow(fullMsg.data);
-          cache.upsertMessage(db, message);
-          cache.upsertThread(db, thread);
-          sync.broadcast(userId, "thread_updated", {
-            threadId: message.threadId,
-            messageId: sentMsgId,
-          });
-          sync.broadcast(userId, "inbox_updated", { folder: "sent" });
-        } catch (cacheErr) {
-          console.error(
-            `[sendEmail] cache error for ${sentMsgId}:`,
-            cacheErr.message
-          );
-        }
-      })();
-    }
-
-    res.json({ success: true, messageId: sentMsgId });
+    broadcast(userId, "inbox_updated", { folder: "sent" });
+    res.json({ success: true, messageId: sendRes.data?.id });
   } catch (err) {
+    console.error("sendEmail error:", err.message);
     res.status(500).json({ error: err.message });
   }
 };
@@ -302,22 +467,23 @@ exports.getProfilePicture = async (req, res) => {
 };
 
 // ── POST /api/gmail/contact-photos ───────────────────────────────
+// Note: contact photos are now fetched fresh from People API each time
+// (no SQLite cache). In practice the frontend batches well so this
+// is called infrequently — at most once per page-load per unique sender.
 exports.getContactPhotos = async (req, res) => {
   const userId = req.user?.username;
   try {
-    const db = cache.getDb(userId);
     const requested = (req.body.emails || [])
       .slice(0, 30)
       .map((e) => e.toLowerCase());
     if (!requested.length) return res.json({});
-    const cached = cache.getContactPhotos(db, requested);
-    const missing = cache.getMissingPhotoEmails(db, requested);
-    if (!missing.length) return res.json(cached);
+
     const token = await getAccessToken(userId);
     const headers = { Authorization: `Bearer ${token}` };
-    const fresh = {};
+    const result = {};
+
     await Promise.all(
-      missing.map(async (email) => {
+      requested.map(async (email) => {
         try {
           const r = await axios.get(
             "https://people.googleapis.com/v1/otherContacts:search",
@@ -339,11 +505,12 @@ exports.getContactPhotos = async (req, res) => {
                 item.person.photos?.find((p) => !p.default)?.url ||
                 item.person.photos?.[0]?.url;
               if (photo) {
-                fresh[email] = photo;
+                result[email] = photo;
                 return;
               }
             }
           }
+          // Fallback: searchContacts
           const r2 = await axios.get(
             "https://people.googleapis.com/v1/people:searchContacts",
             {
@@ -365,36 +532,34 @@ exports.getContactPhotos = async (req, res) => {
                 item.person.photos?.find((p) => !p.default)?.url ||
                 item.person.photos?.[0]?.url;
               if (photo) {
-                fresh[email] = photo;
+                result[email] = photo;
                 return;
               }
             }
           }
-          fresh[email] = null;
+          result[email] = null;
         } catch {
-          fresh[email] = null;
+          result[email] = null;
         }
       })
     );
-    cache.saveContactPhotos(db, fresh);
-    res.json({ ...cached, ...fresh });
+
+    res.json(result);
   } catch (err) {
     res.json({});
   }
 };
 
 // ── GET /api/gmail/sync-status ────────────────────────────────────
-exports.getSyncStatus = async (req, res) => {
-  const userId = req.user?.username;
-  try {
-    await ensureSync(userId);
-    res.json(sync.getManager(userId)?.getStatus() || { status: "connecting" });
-  } catch (err) {
-    res.json({ status: "error", error: err.message });
-  }
+// With direct-API architecture there's no background sync — always live.
+exports.getSyncStatus = async (_req, res) => {
+  res.json({ status: "live", lastSyncAt: Date.now() });
 };
 
-// ── GET /api/gmail/events — SSE real-time stream ──────────────────
+// ── GET /api/gmail/events — SSE stream ───────────────────────────
+// Keeps a persistent connection open.  When the user sends an email
+// (or a future webhook fires) we push `inbox_updated` so the frontend
+// can auto-refresh without polling.
 exports.sseEvents = async (req, res) => {
   const userId = req.user?.username;
   res.setHeader("Content-Type", "text/event-stream");
@@ -403,15 +568,19 @@ exports.sseEvents = async (req, res) => {
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
   res.write("event: ping\ndata: {}\n\n");
-  const remove = sync.addSseClient(userId, res);
-  try {
-    await ensureSync(userId);
-    const mgr = sync.getManager(userId);
-    if (mgr)
-      res.write(
-        `event: sync_status\ndata: ${JSON.stringify(mgr.getStatus())}\n\n`
-      );
-  } catch {}
+
+  // Register client
+  if (!sseClients.has(userId)) sseClients.set(userId, new Set());
+  sseClients.get(userId).add(res);
+
+  // Send an initial 'live' status so the badge updates immediately
+  res.write(
+    `event: sync_status\ndata: ${JSON.stringify({
+      status: "live",
+      lastSyncAt: Date.now(),
+    })}\n\n`
+  );
+
   const ping = setInterval(() => {
     try {
       res.write("event: ping\ndata: {}\n\n");
@@ -419,88 +588,14 @@ exports.sseEvents = async (req, res) => {
       clearInterval(ping);
     }
   }, 25000);
+
   req.on("close", () => {
     clearInterval(ping);
-    remove();
+    sseClients.get(userId)?.delete(res);
   });
 };
 
-// ── POST /api/gmail/message (backward compat) ─────────────────────
-exports.getMessage = async (req, res) => {
-  const userId = req.user?.username;
-  try {
-    const db = cache.getDb(userId);
-    const row = cache.getMessage(db, req.body.messageId);
-    if (row) return res.json(messageRowToFull(row));
-    const token = await getAccessToken(userId);
-    const r = await gmailApi(token).get(`/messages/${req.body.messageId}`, {
-      params: { format: "full" },
-    });
-    res.json(r.data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-};
-
-// ── POST /api/gmail/fetch-older ───────────────────────────────────
-// Called by the frontend when local SQLite is exhausted and the user
-// wants older emails that haven't been synced yet from Gmail.
-exports.fetchOlderEmails = async (req, res) => {
-  const userId = req.user?.username;
-  try {
-    await ensureSync(userId);
-    const auth = { getToken: () => getAccessToken(userId) };
-    const { added, hasMore } = await sync.fetchOlderPage(userId, auth);
-    const db = cache.getDb(userId);
-    const folder = req.body.folder || "inbox";
-    const LIMIT = 20;
-    const rows = cache.listThreads(db, folder, LIMIT, 0);
-    res.json({
-      added,
-      hasMore,
-      emails: rows.map(threadRowToEmail),
-    });
-  } catch (err) {
-    console.error("fetchOlderEmails error:", err.message);
-    res.status(500).json({ error: err.message });
-  }
-};
-
-// ── GET /api/gmail/storage-quota ─────────────────────────────────
-exports.getStorageQuota = async (req, res) => {
-  try {
-    const token = await getAccessToken(req.user?.username);
-    const r = await axios.get(
-      "https://www.googleapis.com/drive/v3/about?fields=storageQuota",
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-    const q = r.data.storageQuota || {};
-    res.json({
-      limit: parseInt(q.limit || "0"), // total bytes
-      usage: parseInt(q.usage || "0"), // used bytes (all Google products)
-      usageInDrive: parseInt(q.usageInDrive || "0"),
-    });
-  } catch (err) {
-    // Drive scope may not be granted — fall back gracefully so the UI
-    // doesn't get stuck on "Loading storage…"
-    try {
-      const token = await getAccessToken(req.user?.username);
-      const p = await axios.get(
-        "https://gmail.googleapis.com/gmail/v1/users/me/profile",
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      res.json({
-        limit: 0,
-        usage: 0,
-        scopeError: true,
-        messagesTotal: p.data.messagesTotal || 0,
-      });
-    } catch {
-      res.json({ limit: 0, usage: 0, scopeError: true });
-    }
-  }
-};
-
+// ── GET /api/gmail/contacts ───────────────────────────────────────
 exports.getContacts = async (req, res) => {
   try {
     const q = (req.query.q || "").trim();
@@ -508,16 +603,13 @@ exports.getContacts = async (req, res) => {
 
     const userId = req.user?.username;
     const token = await getAccessToken(userId);
-    const client = gmailApi(token);
+    const api = gmailApi(token);
     const creds = await getCredentials(userId);
-    const userEmail = creds.userEmail;
     const lower = q.toLowerCase();
 
     const [sentRes, rcvdRes] = await Promise.allSettled([
-      client.get("/messages", {
-        params: { q: `in:sent ${q}`, maxResults: 15 },
-      }),
-      client.get("/messages", {
+      api.get("/messages", { params: { q: `in:sent ${q}`, maxResults: 15 } }),
+      api.get("/messages", {
         params: { q: `in:anywhere ${q}`, maxResults: 15 },
       }),
     ]);
@@ -528,12 +620,11 @@ exports.getContacts = async (req, res) => {
         for (const m of r.value.data.messages || []) msgIds.add(m.id);
       }
     }
-
     if (!msgIds.size) return res.json({ contacts: [] });
 
     const metaList = await Promise.allSettled(
       [...msgIds].slice(0, 20).map((id) =>
-        client.get(`/messages/${id}`, {
+        api.get(`/messages/${id}`, {
           params: { format: "metadata", metadataHeaders: ["From", "To", "Cc"] },
         })
       )
@@ -542,8 +633,7 @@ exports.getContacts = async (req, res) => {
     const ADDR_RE = /([^<,\n]*?)\s*<([^>@]+@[^>]+)>/g;
     const BARE_RE = /^[^\s,]+@[^\s,]+$/;
     const seen = new Map();
-
-    const myEmail = (userEmail || "").toLowerCase();
+    const myEmail = (creds.userEmail || "").toLowerCase();
 
     for (const result of metaList) {
       if (result.status !== "fulfilled") continue;
@@ -560,7 +650,6 @@ exports.getContacts = async (req, res) => {
         if (!email || email === myEmail) continue;
         if (!seen.has(email)) seen.set(email, { email, name, photo: null });
       }
-
       for (const part of raw.split(/[,\n]/)) {
         const bare = part.trim();
         if (BARE_RE.test(bare) && bare !== myEmail) {
@@ -581,5 +670,38 @@ exports.getContacts = async (req, res) => {
   } catch (err) {
     console.error("Gmail contacts error:", err.message);
     res.status(500).json({ error: err.message });
+  }
+};
+
+// ── GET /api/gmail/storage-quota ─────────────────────────────────
+exports.getStorageQuota = async (req, res) => {
+  try {
+    const token = await getAccessToken(req.user?.username);
+    const r = await axios.get(
+      "https://www.googleapis.com/drive/v3/about?fields=storageQuota",
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    const q = r.data.storageQuota || {};
+    res.json({
+      limit: parseInt(q.limit || "0"),
+      usage: parseInt(q.usage || "0"),
+      usageInDrive: parseInt(q.usageInDrive || "0"),
+    });
+  } catch {
+    try {
+      const token = await getAccessToken(req.user?.username);
+      const p = await axios.get(
+        "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      res.json({
+        limit: 0,
+        usage: 0,
+        scopeError: true,
+        messagesTotal: p.data.messagesTotal || 0,
+      });
+    } catch {
+      res.json({ limit: 0, usage: 0, scopeError: true });
+    }
   }
 };

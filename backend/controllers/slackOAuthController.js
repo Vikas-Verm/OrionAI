@@ -1,12 +1,7 @@
 const axios = require("axios");
+const jwt = require("jsonwebtoken");
 const Integration = require("../models/Integration");
 
-// ── Scopes needed for full Slack as a user ─────────────────
-// channels:read, groups:read, im:read, mpim:read  → list convos
-// channels:history, groups:history, im:history    → read messages
-// chat:write                                       → send messages
-// users:read                                       → resolve names
-// emoji:read, reactions:read                       → nice to have
 const SCOPES = [
   "channels:read",
   "channels:history",
@@ -19,25 +14,30 @@ const SCOPES = [
   "chat:write",
   "users:read",
   "users.profile:read",
+  "search:read",
   "emoji:read",
 ].join(",");
 
 // ── GET /api/integrations/slack/oauth/start ────────────────
+// No authenticate middleware on this route — browser redirect
+// can't send Authorization header. Token comes as query param.
 async function slackOAuthStart(req, res) {
+  // 1. Get JWT from query param (sent by frontend)
+  const userId = req.user?.username;
+
+  // 3. Build Slack OAuth URL
   const state = Buffer.from(
-    JSON.stringify({
-      userId: req.user?.username,
-      ts: Date.now(),
-    })
+    JSON.stringify({ userId, ts: Date.now() })
   ).toString("base64url");
 
   const url = new URL("https://slack.com/oauth/v2/authorize");
   url.searchParams.set("client_id", process.env.SLACK_CLIENT_ID);
-  url.searchParams.set("user_scope", SCOPES); // user_scope = act as the user
+  url.searchParams.set("user_scope", SCOPES);
   url.searchParams.set("redirect_uri", process.env.SLACK_REDIRECT_URI);
   url.searchParams.set("state", state);
 
-  res.redirect(url.toString());
+  console.log("Slack OAuth start → redirecting for userId:", userId);
+  res.json({ url: url.toString() });
 }
 
 // ── GET /api/integrations/slack/oauth/callback ────────────
@@ -45,9 +45,13 @@ async function slackOAuthCallback(req, res) {
   const { code, state, error } = req.query;
 
   if (error) {
-    return res.redirect(
-      `${process.env.FRONTEND_URL}/integrations?slack=error&msg=${error}`
-    );
+    // Close popup with error
+    return res.send(`
+      <script>
+        window.opener?.postMessage({ type: 'slack-oauth-error', error: '${error}' }, '*')
+        window.close()
+      </script>
+    `);
   }
 
   let userId;
@@ -55,13 +59,15 @@ async function slackOAuthCallback(req, res) {
     const decoded = JSON.parse(Buffer.from(state, "base64url").toString());
     userId = decoded.userId;
   } catch {
-    return res.redirect(
-      `${process.env.FRONTEND_URL}/integrations?slack=error&msg=invalid_state`
-    );
+    return res.send(`
+      <script>
+        window.opener?.postMessage({ type: 'slack-oauth-error', error: 'invalid_state' }, '*')
+        window.close()
+      </script>
+    `);
   }
 
   try {
-    // Exchange code for token
     const tokenRes = await axios.post(
       "https://slack.com/api/oauth.v2.access",
       null,
@@ -78,46 +84,66 @@ async function slackOAuthCallback(req, res) {
     const data = tokenRes.data;
     if (!data.ok) throw new Error(data.error || "Slack OAuth failed");
 
-    // authed_user contains the USER token (not bot token)
     const userToken = data.authed_user?.access_token;
-    const authedUser = data.authed_user?.id;
-    if (!userToken)
-      throw new Error("No user token returned — ensure user_scope is set");
+    const authedUserId = data.authed_user?.id;
+    if (!userToken) throw new Error("No user token returned");
 
-    // Get user profile
-    const profileRes = await axios.get("https://slack.com/api/users.identity", {
+    // Get profile
+    const authTest = await axios.get("https://slack.com/api/auth.test", {
       headers: { Authorization: `Bearer ${userToken}` },
     });
-    const profile = profileRes.data.user || {};
-    const teamName = profileRes.data.team?.name || data.team?.name || "";
 
-    // Save to Integration
+    let displayName = authTest.data.user || "";
+    let realName = authTest.data.user || "";
+    try {
+      const profileRes = await axios.get(
+        "https://slack.com/api/users.profile.get",
+        {
+          headers: { Authorization: `Bearer ${userToken}` },
+        }
+      );
+      if (profileRes.data.ok) {
+        displayName = profileRes.data.profile?.display_name || displayName;
+        realName = profileRes.data.profile?.real_name || realName;
+      }
+    } catch {}
+
     await Integration.findOneAndUpdate(
       { userId, type: "slack" },
       {
-        userId,
-        type: "slack",
-        slack: {
-          userToken,
-          userId: authedUser,
-          userName: profile.name || "",
-          realName: profile.real_name || "",
-          teamName,
-          teamId: data.team?.id || "",
-          connectedAt: new Date(),
+        $set: {
+          userId,
+          type: "slack",
+          enabled: true,
+          "slack.userToken": userToken,
+          "slack.userId": authedUserId,
+          "slack.userName": displayName,
+          "slack.realName": realName,
+          "slack.teamName": authTest.data.team || "",
+          "slack.teamId": authTest.data.team_id || "",
+          "slack.connectedAt": new Date(),
         },
       },
       { upsert: true, new: true }
     );
 
-    res.redirect(`${process.env.FRONTEND_URL}/integrations?slack=connected`);
+    // ✅ Send postMessage to parent window then close — same as Gmail
+    res.send(`
+      <script>
+        window.opener?.postMessage({ type: 'slack-oauth-success' }, '*')
+        window.close()
+      </script>
+    `);
   } catch (err) {
     console.error("Slack OAuth callback error:", err.message);
-    res.redirect(
-      `${
-        process.env.FRONTEND_URL
-      }/integrations?slack=error&msg=${encodeURIComponent(err.message)}`
-    );
+    res.send(`
+      <script>
+        window.opener?.postMessage({ type: 'slack-oauth-error', error: '${encodeURIComponent(
+          err.message
+        )}' }, '*')
+        window.close()
+      </script>
+    `);
   }
 }
 

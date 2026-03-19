@@ -171,6 +171,8 @@ async function parseIntent(req, res) {
   try {
     const { message, history = [] } = req.body;
     const plan = await parseAgentIntent(message, history);
+    console.log("Parsed agent intent:", plan);
+
     res.json(plan);
   } catch (err) {
     console.error("Agent parse error:", err.message);
