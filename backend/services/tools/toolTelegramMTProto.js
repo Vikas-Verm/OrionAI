@@ -645,4 +645,5 @@ module.exports = {
   sendReaction,
   markAsRead,
   logout,
+  getClient,
 };

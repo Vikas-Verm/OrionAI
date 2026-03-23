@@ -326,9 +326,69 @@
                                 </div>
                             </div>
                         </template>
+                        <!-- WHATSAPP — QR code connect -->
+                        <template v-if="card.type === 'whatsapp'">
+                            <div v-if="getStatus('whatsapp') === 'connected'" class="int-oauth-connected">
+                                <div class="int-oauth-connected-row">
+                                    <span class="int-oauth-connected-icon">✅</span>
+                                    <div class="int-oauth-connected-info">
+                                        <div class="int-oauth-connected-title">WhatsApp connected</div>
+                                        <div class="int-oauth-connected-email">
+                                            +{{ connected.whatsapp?.whatsapp?.phone || 'Connected' }}
+                                        </div>
+                                    </div>
+                                    <button class="int-oauth-reconnect-btn"
+                                        :disabled="removing === 'whatsapp'"
+                                        @click.stop="removeIntegration('whatsapp')">
+                                        <span v-if="removing === 'whatsapp'" class="int-spinner int-spinner-danger"></span>
+                                        <span v-else>Disconnect</span>
+                                    </button>
+                                </div>
+                                <button class="int-oauth-btn-google" style="margin-top:10px"
+                                    @click.stop="emit('openModule', 'whatsapp')">
+                                    <span style="font-size:15px">💬</span>
+                                    Open WhatsApp
+                                </button>
+                            </div>
+ 
+                            <!-- QR connect flow -->
+                            <div v-else class="int-oauth-block" style="flex-direction:column;align-items:center;gap:14px">
+ 
+                                <!-- Step 1: Show connect button -->
+                                <div v-if="!whatsappQR && !whatsappConnecting" style="display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center">
+                                    <span style="font-size:36px">💬</span>
+                                    <div class="int-oauth-text">
+                                        <div class="int-oauth-title">Connect WhatsApp</div>
+                                        <div class="int-oauth-desc">Scan a QR code — works like WhatsApp Web. No Meta approval needed.</div>
+                                    </div>
+                                    <button class="int-oauth-btn-google" @click.stop="startWhatsAppConnect">
+                                        <span style="font-size:15px">💬</span>
+                                        Connect WhatsApp
+                                    </button>
+                                </div>
+ 
+                                <!-- Step 2: Initializing -->
+                                <div v-else-if="whatsappConnecting && !whatsappQR"
+                                    style="display:flex;flex-direction:column;align-items:center;gap:10px;padding:16px 0">
+                                    <span class="int-spinner" style="width:28px;height:28px;border-width:3px"></span>
+                                    <div style="font-size:13px;color:var(--text-secondary)">Starting WhatsApp...</div>
+                                </div>
+ 
+                                <!-- Step 3: Show QR -->
+                                <div v-else-if="whatsappQR" style="display:flex;flex-direction:column;align-items:center;gap:12px">
+                                    <img :src="whatsappQR" alt="WhatsApp QR Code"
+                                        style="width:200px;height:200px;border-radius:12px;border:3px solid #25D366" />
+                                    <div style="font-size:12px;color:var(--text-secondary);text-align:center;max-width:220px">
+                                        Open <strong>WhatsApp</strong> on your phone →<br>
+                                        Settings → Linked Devices → Link a Device
+                                    </div>
+                                    <div style="font-size:11px;color:var(--text-muted)">QR code refreshes every 60s</div>
+                                </div>
+                            </div>
+                        </template>
 
                         <!-- Action buttons: only for manual-token integrations -->
-                        <div v-if="!['gmail', 'google_calendar', 'telegram', 'slack'].includes(card.type)" class="int-actions">
+                        <div v-if="!['gmail', 'google_calendar', 'telegram', 'slack', 'whatsapp'].includes(card.type)" class="int-actions">
                             <button class="int-btn int-btn-test" :disabled="testing === card.type"
                                 @click="testConnection(card.type)">
                                 <span v-if="testing === card.type" class="int-spinner"></span>
@@ -364,8 +424,9 @@
 
 <script setup>
 import { ref, computed, onMounted, reactive } from 'vue'
+import { onUnmounted } from 'vue'
 import api from '../../services/api'
-import { store } from '../../stores/app'
+// import { store } from '../../stores/app'
 const emit = defineEmits(['close', 'connected', 'openModule'])
 
 const search       = ref('')
@@ -379,13 +440,62 @@ const connected    = reactive({})
 const oauthEmails = reactive({ gmail: null, google_calendar: null })
 
 const cards = [
-    { type: 'slack',            name: 'Slack',            desc: 'Read and send messages as yourself',          emoji: '💬',  color: '#4A154B' },
-    { type: 'notion',           name: 'Notion',           desc: 'Create pages and update databases',           emoji: '📝',  color: '#000000' },
-    { type: 'jira',             name: 'Jira',             desc: 'Create and track issues automatically',       emoji: '🎫',  color: '#0052CC' },
-    { type: 'gmail',            name: 'Gmail',            desc: 'Send from your real Gmail account',           emoji: '📬',  color: '#EA4335' },
-    { type: 'webhook',          name: 'Custom Webhook',   desc: 'POST agent data to any endpoint',             emoji: '🔗',  color: '#6366f1' },
-    { type: 'google_calendar',  name: 'Google Calendar',  desc: 'View, create and manage calendar events',     emoji: '📅',  color: '#1a73e8' },
-    { type: 'telegram',         name: 'Telegram',         desc: 'Read and send messages via your Telegram account', emoji: '✈️', color: '#229ED9' },
+  {
+    type:  'slack',
+    name:  'Slack',
+    desc:  'Read and send messages as yourself',
+    color: '#4A154B',
+    img:   'https://upload.wikimedia.org/wikipedia/commons/thumb/d/d5/Slack_icon_2019.svg/2048px-Slack_icon_2019.svg.png',
+  },
+  {
+    type:  'notion',
+    name:  'Notion',
+    desc:  'Create pages and update databases',
+    color: '#000000',
+    img:   'https://upload.wikimedia.org/wikipedia/commons/4/45/Notion_app_logo.png',
+  },
+  {
+    type:  'jira',
+    name:  'Jira',
+    desc:  'Create and track issues automatically',
+    color: '#0052CC',
+    emoji: '🎫',
+  },
+  {
+    type:  'gmail',
+    name:  'Gmail',
+    desc:  'Send from your real Gmail account',
+    color: '#FFFFFF',
+    img: 'https://ssl.gstatic.com/ui/v1/icons/mail/rfr/gmail.ico',
+  },
+  {
+    type:  'webhook',
+    name:  'Custom Webhook',
+    desc:  'POST agent data to any endpoint',
+    color: '#6366f1',
+    emoji: '🔗',
+  },
+  {
+    type:  'google_calendar',
+    name:  'Google Calendar',
+    desc:  'View, create and manage calendar events',
+    color: '#1a73e8',
+    img:   'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a5/Google_Calendar_icon_%282020%29.svg/2048px-Google_Calendar_icon_%282020%29.svg.png',
+  },
+  {
+    type:  'telegram',
+    name:  'Telegram',
+    desc:  'Read and send messages via your Telegram account',
+    color: '#FFFFFF',
+    img:   'https://upload.wikimedia.org/wikipedia/commons/thumb/8/82/Telegram_logo.svg/2048px-Telegram_logo.svg.png',
+  },
+  {
+    type:  'whatsapp',
+    name:  'WhatsApp',
+    desc:  'Read and send messages via WhatsApp Web',
+    color: '#25D366',
+    img:   'https://upload.wikimedia.org/wikipedia/commons/thumb/6/6b/WhatsApp.svg/2044px-WhatsApp.svg.png',
+  },
 ]
 
 const INITIAL_FORMS = {
@@ -451,6 +561,8 @@ async function saveIntegration(type) {
         testResults[type] = { ok: false, error: err.response?.data?.error || 'Save failed' }
     } finally { saving.value = null }
 }
+
+onUnmounted(() => { clearInterval(whatsappPollTimer) })
 
 async function testConnection(type) {
     await saveIntegration(type)
@@ -527,6 +639,48 @@ async function startSlackOAuth() {
   }
 }
 
+const whatsappConnecting = ref(false)
+const whatsappQR         = ref(null)
+let   whatsappPollTimer  = null
+ 
+async function startWhatsAppConnect() {
+    whatsappConnecting.value = true
+    whatsappQR.value         = null
+ 
+    try {
+        // Tell backend to initialize WhatsApp client
+        await api.post('/api/whatsapp/connect')
+ 
+        // Poll for QR code every 3 seconds
+        whatsappPollTimer = setInterval(async () => {
+            try {
+                const { data } = await api.get('/api/whatsapp/status')
+ 
+                if (data.status === 'connected') {
+                    // Connected! Clear poll and reload
+                    clearInterval(whatsappPollTimer)
+                    whatsappConnecting.value = false
+                    whatsappQR.value         = null
+                    await loadIntegrations()
+                    emit('connected')
+                } else if (data.qrImage) {
+                    whatsappQR.value = data.qrImage
+                }
+            } catch {console.error('Failed to poll WhatsApp status') }
+        }, 3000)
+ 
+        // Timeout after 2 minutes
+        setTimeout(() => {
+            clearInterval(whatsappPollTimer)
+            whatsappConnecting.value = false
+        }, 120_000)
+ 
+    } catch (err) {
+        console.error('WhatsApp connect failed:', err)
+        whatsappConnecting.value = false
+    }
+}
+
 // ── Remove ────────────────────────────────────────────────
 async function removeIntegration(type) {
     removing.value    = type
@@ -599,8 +753,8 @@ async function removeIntegration(type) {
 }
 .int-card.expanded { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), var(--shadow-md); }
 .int-card-top { display: flex; align-items: center; gap: 14px; padding: 18px 20px; }
-.int-card-icon { width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.int-logo { width: 24px; height: 24px; filter: brightness(0) invert(1); }
+.int-card-icon { width: 48px; height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; padding: 10px; box-sizing: border-box; }
+.int-logo { width: 26px; height: 26px; object-fit: contain; border-radius: 4px; }
 .int-emoji { font-size: 22px; }
 .int-card-info { flex: 1; min-width: 0; }
 .int-card-name { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 2px; }

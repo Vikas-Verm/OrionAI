@@ -16,10 +16,10 @@
 
 "use strict";
 
-const { chatCompleteNoSystem } = require("./services/llmService");
+const { chatCompleteNoSystem } = require("../llmService");
 const { resolveAgent } = require("./agentRegistry");
-const { normalizeStepParams } = require("./agentParamNormalizer");
-const Skill = require("./models/skill");
+const { normalizeStepParams } = require("../agentParamNormalizer");
+const Skill = require("../../models/skill");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TOOL UI REGISTRY  (icon + label shown in the chat bubble)

@@ -4,6 +4,7 @@ const mongoose = require("mongoose");
 const Skill = require("../models/skill");
 
 const SKILLS = [
+  // ── JIRA ──────────────────────────────────────────────────────────────────
   {
     toolName: "jira_get_backlog",
     icon: "📋",
@@ -59,12 +60,7 @@ const SKILLS = [
         description: "Person name or leave empty for current user",
         example: "Ashish Saini",
       },
-      {
-        name: "showAll",
-        type: "boolean",
-        required: false,
-        default: "false",
-      },
+      { name: "showAll", type: "boolean", required: false, default: "false" },
     ],
     presentation: {
       steps: [
@@ -99,33 +95,11 @@ const SKILLS = [
         required: true,
         example: "Login page crash",
       },
-      {
-        name: "description",
-        type: "string",
-        required: false,
-      },
-      {
-        name: "priority",
-        type: "string",
-        required: false,
-        default: "Medium",
-      },
-      {
-        name: "issueType",
-        type: "string",
-        required: false,
-        default: "Task",
-      },
-      {
-        name: "assigneeName",
-        type: "string",
-        required: false,
-      },
-      {
-        name: "dueDate",
-        type: "string",
-        required: false,
-      },
+      { name: "description", type: "string", required: false },
+      { name: "priority", type: "string", required: false, default: "Medium" },
+      { name: "issueType", type: "string", required: false, default: "Task" },
+      { name: "assigneeName", type: "string", required: false },
+      { name: "dueDate", type: "string", required: false },
     ],
     presentation: {
       steps: [
@@ -187,16 +161,8 @@ const SKILLS = [
     description: "Assign ticket to a team member",
     triggers: ["assign ticket", "reassign ticket", "assign to"],
     params: [
-      {
-        name: "ticketKey",
-        type: "string",
-        required: true,
-      },
-      {
-        name: "assigneeName",
-        type: "string",
-        required: true,
-      },
+      { name: "ticketKey", type: "string", required: true },
+      { name: "assigneeName", type: "string", required: true },
     ],
     presentation: {
       steps: [
@@ -219,16 +185,8 @@ const SKILLS = [
     description: "Add comment to ticket",
     triggers: ["add comment", "comment on ticket", "post comment"],
     params: [
-      {
-        name: "ticketKey",
-        type: "string",
-        required: true,
-      },
-      {
-        name: "comment",
-        type: "string",
-        required: true,
-      },
+      { name: "ticketKey", type: "string", required: true },
+      { name: "comment", type: "string", required: true },
     ],
     presentation: {
       steps: [
@@ -408,7 +366,6 @@ const SKILLS = [
         type: "array",
         required: false,
         default: '["slack","email"]',
-        description: "Notification channels",
       },
       {
         name: "slackChannel",
@@ -416,12 +373,7 @@ const SKILLS = [
         required: false,
         default: "#engineering",
       },
-      {
-        name: "emailTo",
-        type: "string",
-        required: false,
-        description: "Override email address",
-      },
+      { name: "emailTo", type: "string", required: false },
     ],
     presentation: {
       steps: [
@@ -436,6 +388,8 @@ const SKILLS = [
         '{"tool":"jira_notify_overdue","params":{"assigneeName":"Ashish","channels":["slack"]}}',
     },
   },
+
+  // ── GMAIL ─────────────────────────────────────────────────────────────────
   {
     toolName: "gmail_search_emails",
     icon: "📬",
@@ -469,13 +423,7 @@ const SKILLS = [
     category: "gmail",
     description: "Fetch a specific email",
     triggers: ["open email", "read email", "show email"],
-    params: [
-      {
-        name: "emailId",
-        type: "string",
-        required: true,
-      },
-    ],
+    params: [{ name: "emailId", type: "string", required: true }],
     promptExample: {
       userSays: "Open the latest email",
       output: '{"tool":"gmail_get_email","params":{"emailId":"latest"}}',
@@ -512,6 +460,8 @@ const SKILLS = [
       output: '{"tool":"gmail_get_unread","params":{}}',
     },
   },
+
+  // ── CALENDAR ──────────────────────────────────────────────────────────────
   {
     toolName: "calendar_get_today",
     icon: "📅",
@@ -566,6 +516,8 @@ const SKILLS = [
         '{"tool":"calendar_create_event","params":{"title":"Meeting","dateTime":"tomorrow 5pm","attendees":["Rahul"]}}',
     },
   },
+
+  // ── TELEGRAM ──────────────────────────────────────────────────────────────
   {
     toolName: "telegram_send_message",
     icon: "📤",
@@ -618,6 +570,418 @@ const SKILLS = [
       output: '{"tool":"telegram_get_unread","params":{}}',
     },
   },
+  {
+    toolName: "telegram_get_messages",
+    icon: "💬",
+    label: "Read Telegram messages",
+    category: "telegram",
+    description: "Read messages from a specific Telegram chat",
+    triggers: [
+      "telegram messages from",
+      "what did X say on telegram",
+      "show telegram chat",
+    ],
+    params: [
+      { name: "contact", type: "string", required: true },
+      { name: "limit", type: "number", required: false, default: 20 },
+    ],
+    promptExample: {
+      userSays: "Show messages from Rahul on telegram",
+      output:
+        '{"tool":"telegram_get_messages","params":{"contact":"Rahul","limit":20}}',
+    },
+  },
+  {
+    toolName: "telegram_list_chats",
+    icon: "📋",
+    label: "List Telegram chats",
+    category: "telegram",
+    description: "List all Telegram conversations",
+    triggers: [
+      "list telegram chats",
+      "telegram contacts",
+      "who messaged me on telegram",
+    ],
+    params: [],
+    promptExample: {
+      userSays: "List my telegram chats",
+      output: '{"tool":"telegram_list_chats","params":{}}',
+    },
+  },
+
+  // ── SLACK ─────────────────────────────────────────────────────────────────
+  {
+    toolName: "slack_send_message",
+    icon: "📤",
+    label: "Send Slack message",
+    category: "slack",
+    description: "Send a message to a Slack channel or person (DM)",
+    triggers: [
+      "send slack message",
+      "message on slack",
+      "dm on slack",
+      "tell on slack",
+      "notify on slack",
+      "slack message to",
+      "send hii on slack",
+      "send hi on slack",
+    ],
+    params: [
+      {
+        name: "channel",
+        type: "string",
+        required: true,
+        description:
+          "Channel name (e.g. #general) or person name for DM (e.g. Rahul)",
+        example: "rahul",
+      },
+      {
+        name: "message",
+        type: "string",
+        required: true,
+        example: "Hi! How are you?",
+      },
+    ],
+    presentation: {
+      steps: [
+        { icon: "🧠", label: "Understanding request" },
+        { icon: "🔍", label: "Finding Slack channel" },
+        { icon: "📤", label: "Sending message" },
+      ],
+    },
+    promptExample: {
+      userSays: "Send Hii to Adi on slack",
+      output:
+        '{"tool":"slack_send_message","params":{"channel":"adi","message":"Hii!"}}',
+    },
+  },
+  {
+    toolName: "slack_read_messages",
+    icon: "💬",
+    label: "Read Slack messages",
+    category: "slack",
+    description: "Read recent messages from a Slack channel or DM",
+    triggers: [
+      "read slack",
+      "show slack messages",
+      "slack messages from",
+      "what's in slack",
+      "check slack channel",
+      "read #channel",
+    ],
+    params: [
+      {
+        name: "channel",
+        type: "string",
+        required: true,
+        description: "Channel name or person name",
+        example: "general",
+      },
+      {
+        name: "limit",
+        type: "number",
+        required: false,
+        default: 20,
+      },
+    ],
+    presentation: {
+      steps: [
+        { icon: "🧠", label: "Understanding request" },
+        { icon: "🔍", label: "Finding channel" },
+        { icon: "💬", label: "Reading messages" },
+      ],
+    },
+    promptExample: {
+      userSays: "Show messages from #general on slack",
+      output:
+        '{"tool":"slack_read_messages","params":{"channel":"general","limit":20}}',
+    },
+  },
+  {
+    toolName: "slack_get_unread",
+    icon: "🔔",
+    label: "Slack unread messages",
+    category: "slack",
+    description: "Show all unread Slack messages across all channels",
+    triggers: [
+      "unread slack",
+      "slack notifications",
+      "any slack messages",
+      "check slack",
+      "slack unread",
+      "new slack messages",
+    ],
+    params: [],
+    presentation: {
+      steps: [
+        { icon: "🧠", label: "Understanding request" },
+        { icon: "🔔", label: "Checking unread messages" },
+        { icon: "📋", label: "Summarising" },
+      ],
+    },
+    promptExample: {
+      userSays: "Do I have any unread slack messages?",
+      output: '{"tool":"slack_get_unread","params":{}}',
+    },
+  },
+  {
+    toolName: "slack_list_channels",
+    icon: "📋",
+    label: "List Slack channels",
+    category: "slack",
+    description: "List all Slack channels and DMs the user is part of",
+    triggers: [
+      "list slack channels",
+      "show slack channels",
+      "my slack channels",
+      "what channels am i in",
+    ],
+    params: [],
+    presentation: {
+      steps: [
+        { icon: "🧠", label: "Understanding request" },
+        { icon: "📋", label: "Fetching channels" },
+      ],
+    },
+    promptExample: {
+      userSays: "Show all my slack channels",
+      output: '{"tool":"slack_list_channels","params":{}}',
+    },
+  },
+  {
+    toolName: "fetch_document",
+    icon: "🔍",
+    label: "Fetch document",
+    category: "document",
+    description:
+      "Fetch a business document (invoice, bill, purchase order, credit note, debit note, payment request, proof of delivery) from the database by number, or get the latest one.",
+    triggers: ["send invoice", "fetch document", "get bill", "latest invoice"],
+    params: [
+      {
+        name: "collection",
+        type: "string",
+        required: true,
+        description:
+          "One of: Invoices, Bills, PurchaseOrders, CreditNotes, DebitNotes, PaymentRequests, ProofOfDeliveries",
+        example: "Invoices",
+      },
+      {
+        name: "identifier",
+        type: "string",
+        required: false,
+        description: "Document number e.g. INV-001. Leave empty for latest.",
+      },
+      {
+        name: "fallbackToLatest",
+        type: "boolean",
+        required: false,
+        default: "false",
+        description: "Set true to get the most recent document",
+      },
+    ],
+    promptExample: {
+      userSays: "Send the latest invoice",
+      output:
+        '{"tool":"fetch_document","params":{"collection":"Invoices","fallbackToLatest":true}}',
+    },
+  },
+  {
+    toolName: "generate_pdf",
+    icon: "📄",
+    label: "Generate PDF",
+    category: "document",
+    description:
+      "Generate a PDF from a previously fetched document. Must call fetch_document before this.",
+    triggers: [],
+    params: [],
+    promptExample: {
+      userSays: "(used automatically after fetch_document)",
+      output: '{"tool":"generate_pdf","params":{}}',
+    },
+  },
+  {
+    toolName: "send_email",
+    icon: "📧",
+    label: "Send email",
+    category: "document",
+    description:
+      "Send an email to a recipient, with optional PDF attachment from a previous generate_pdf step.",
+    triggers: ["email to", "send email"],
+    params: [
+      {
+        name: "to",
+        type: "string",
+        required: true,
+        description: "Recipient email address",
+        example: "client@example.com",
+      },
+      {
+        name: "subject",
+        type: "string",
+        required: false,
+        description: "Email subject line",
+      },
+    ],
+    promptExample: {
+      userSays: "Email the invoice to client@example.com",
+      output:
+        '{"tool":"send_email","params":{"to":"client@example.com","subject":"Invoice"}}',
+    },
+  },
+  {
+    toolName: "send_whatsapp",
+    icon: "💬",
+    label: "Send WhatsApp",
+    category: "document",
+    description: "Send a WhatsApp message to a phone number.",
+    triggers: ["whatsapp", "send whatsapp"],
+    params: [
+      {
+        name: "to",
+        type: "string",
+        required: true,
+        description: "Phone number with country code",
+        example: "+919999999999",
+      },
+      {
+        name: "message",
+        type: "string",
+        required: false,
+        description: "Message text",
+      },
+    ],
+    promptExample: {
+      userSays: "Send WhatsApp to +919999999999",
+      output: '{"tool":"send_whatsapp","params":{"to":"+919999999999"}}',
+    },
+  },
+
+  // ── Calendar (add missing ones) ───────────────────────────────────────────
+  {
+    toolName: "calendar_get_events",
+    icon: "🔍",
+    label: "Search calendar events",
+    category: "calendar",
+    description:
+      "Get calendar events for a specific date, date range, or search by topic. For a specific date use dateFrom and dateTo (YYYY-MM-DD). For topic search use query.",
+    triggers: [
+      "events on",
+      "schedule for",
+      "what's on",
+      "meetings on",
+      "show schedule of",
+    ],
+    params: [
+      {
+        name: "dateFrom",
+        type: "string",
+        required: false,
+        description:
+          "Start date YYYY-MM-DD. For single day, set same as dateTo.",
+        example: "2026-03-23",
+      },
+      {
+        name: "dateTo",
+        type: "string",
+        required: false,
+        description:
+          "End date YYYY-MM-DD. For single day, set same as dateFrom.",
+        example: "2026-03-23",
+      },
+      {
+        name: "query",
+        type: "string",
+        required: false,
+        description:
+          "Topic/keyword search. Only use when no specific date is given.",
+        example: "standup",
+      },
+    ],
+    promptExample: {
+      userSays: "Show my schedule of 23/03/2026",
+      output:
+        '{"tool":"calendar_get_events","params":{"dateFrom":"2026-03-23","dateTo":"2026-03-23"}}',
+    },
+  },
+  {
+    toolName: "calendar_delete",
+    icon: "🗑️",
+    label: "Delete calendar event",
+    category: "calendar",
+    description: "Delete or cancel a calendar event by its title.",
+    triggers: ["delete event", "cancel meeting", "remove event"],
+    params: [
+      {
+        name: "title",
+        type: "string",
+        required: true,
+        description: "Title of the event to delete",
+        example: "Standup",
+      },
+    ],
+    promptExample: {
+      userSays: "Cancel my standup meeting",
+      output: '{"tool":"calendar_delete","params":{"title":"Standup"}}',
+    },
+  },
+  {
+    toolName: "calendar_update",
+    icon: "✏️",
+    label: "Update calendar event",
+    category: "calendar",
+    description: "Reschedule or update an existing calendar event.",
+    triggers: ["reschedule", "update meeting", "move meeting"],
+    params: [
+      {
+        name: "title",
+        type: "string",
+        required: true,
+        description: "Title of the event to update",
+        example: "Standup",
+      },
+      {
+        name: "startDateTime",
+        type: "string",
+        required: false,
+        description: "New datetime in ISO8601",
+        example: "2026-03-25T10:00:00+05:30",
+      },
+    ],
+    promptExample: {
+      userSays: "Reschedule standup to tomorrow 10am",
+      output:
+        '{"tool":"calendar_update","params":{"title":"Standup","startDateTime":"2026-03-20T10:00:00+05:30"}}',
+    },
+  },
+  {
+    toolName: "calendar_respond",
+    icon: "✅",
+    label: "Respond to calendar invite",
+    category: "calendar",
+    description:
+      "Accept, decline, or mark tentative for a calendar invitation.",
+    triggers: ["accept invite", "decline invite", "rsvp"],
+    params: [
+      {
+        name: "title",
+        type: "string",
+        required: true,
+        description: "Title of the event",
+        example: "Team sync",
+      },
+      {
+        name: "response",
+        type: "string",
+        required: true,
+        description: "One of: accept, decline, tentative",
+      },
+    ],
+    promptExample: {
+      userSays: "Accept the team sync invite",
+      output:
+        '{"tool":"calendar_respond","params":{"title":"Team sync","response":"accept"}}',
+    },
+  },
 ];
 
 async function seed() {
@@ -627,7 +991,7 @@ async function seed() {
   for (const skill of SKILLS) {
     await Skill.findOneAndUpdate(
       { toolName: skill.toolName },
-      { ...skill, updatedAt: new Date() },
+      { ...skill, enabled: true, updatedAt: new Date() },
       { upsert: true, new: true }
     );
     console.log(`✅ Seeded: ${skill.toolName}`);

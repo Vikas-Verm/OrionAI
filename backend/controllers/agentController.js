@@ -1,14 +1,12 @@
 const mongoose = require("mongoose");
 const Conversation = require("../models/Conversation");
-const {
-  parseAgentIntent,
-  runAgent,
-  loadToolRegistry,
-} = require("../services/agentService");
+const { runAgent, loadToolRegistry } = require("../services/agentService");
+const { parseAgentIntent } = require("../services/agentPlanner");
+const { orchestrate } = require("../services/multiAgentOrchestrator");
 const Integration = require("../models/Integration");
 const { google } = require("googleapis");
 const { normalizeStepParams } = require("../services/agentParamNormalizer");
-// Try both common paths for llmService
+
 let chatCompleteNoSystem;
 try {
   ({ chatCompleteNoSystem } = require("../services/llmService"));
@@ -23,7 +21,7 @@ try {
   }
 }
 
-// ── stepSummary — human-readable one-liner per tool result ───────────────────
+// ── stepSummary ───────────────────────────────────────────────────────────────
 function stepSummary(tool, result) {
   switch (tool) {
     case "fetch_document":
@@ -39,7 +37,7 @@ function stepSummary(tool, result) {
     case "notify_internal":
       return result.message;
 
-    // ── Jira: read ───────────────────────────────────────
+    // Jira read
     case "jira_get_backlog":
       return `Fetched ${result.totalOpen} open tickets in ${result.projectKey}`;
     case "jira_get_overdue":
@@ -65,7 +63,7 @@ function stepSummary(tool, result) {
     case "jira_search":
       return `Found ${result.count ?? 0} tickets`;
 
-    // ── Jira: write ──────────────────────────────────────
+    // Jira write
     case "jira_create_ticket":
       return `Created ${result.key} — ${result.title}`;
     case "jira_move_ticket":
@@ -85,7 +83,7 @@ function stepSummary(tool, result) {
         result.totalPeople > 1 ? "s" : ""
       } about ${result.totalTickets} overdue tickets`;
 
-    // ── Google Calendar ──────────────────────────────────
+    // Calendar
     case "calendar_get_today":
       return result.count
         ? `${result.count} event${result.count !== 1 ? "s" : ""} today`
@@ -108,6 +106,8 @@ function stepSummary(tool, result) {
         : "No pending invites";
     case "calendar_respond":
       return result.summary || "RSVP sent";
+
+    // Telegram
     case "telegram_list_chats":
       return `${result.total || 0} Telegram chats · ${
         result.unreadCount || 0
@@ -138,21 +138,52 @@ function stepSummary(tool, result) {
       return result.ok
         ? result.summary
         : `No Telegram contact found: "${result.contact}"`;
+
+    // Slack
+    case "slack_send_message":
+      return result.slackSent
+        ? `Message sent to ${result.slackChannel}`
+        : `Slack message failed`;
+    case "slack_read_messages":
+      return (
+        result.summary ||
+        `Read ${result.richSlackMessages?.length || 0} messages`
+      );
+    case "slack_get_unread":
+      return result.summary || `${result.totalUnread || 0} unread messages`;
+    case "slack_list_channels":
+      return (
+        result.summary ||
+        `Found ${result.richSlackChannels?.length || 0} channels`
+      );
+
+    // WhatsApp
+    case "whatsapp_send_message":
+      return result.ok
+        ? `WhatsApp sent to ${result.to}`
+        : `WhatsApp send failed`;
+    case "whatsapp_get_messages":
+      return result.ok
+        ? `${result.count} messages from ${result.chatName}`
+        : `Chat not found`;
+    case "whatsapp_get_unread":
+      return result.totalUnread > 0
+        ? `${result.totalUnread} unread across ${result.chatCount} chats`
+        : "No unread WhatsApp messages";
+    case "whatsapp_list_chats":
+      return `${result.total || 0} WhatsApp chats`;
+
     default:
       return "Done";
   }
 }
 
-// ── buildFinalSummary — receives TOOL_REGISTRY as param, no global needed ────
+// ── buildFinalSummary ─────────────────────────────────────────────────────────
 function buildFinalSummary(results, TOOL_REGISTRY) {
   const done = results.filter((r) => r.status === "done");
-
-  // Single step with rich summary — use it directly
-  if (done.length === 1 && done[0].result?.summary) {
+  if (done.length === 1 && done[0].result?.summary)
     return done[0].result.summary;
-  }
 
-  // Multi-step — show step summaries then append last rich content
   const stepLines = done.map((r) => {
     const meta = TOOL_REGISTRY[r.tool] || { icon: "⚙️" };
     return `${meta.icon} ${stepSummary(r.tool, r.result)}`;
@@ -162,8 +193,13 @@ function buildFinalSummary(results, TOOL_REGISTRY) {
   if (lastResult?.summary && lastResult.summary.length > 60) {
     return stepLines.join("\n") + "\n\n" + lastResult.summary;
   }
-
   return stepLines.join("\n");
+}
+
+// ── extractRichTickets ────────────────────────────────────────────────────────
+function extractRichTickets(tool, result) {
+  if (!result) return null;
+  return result.richTickets || result.tickets || null;
 }
 
 // ── POST /api/agent/parse ─────────────────────────────────────────────────────
@@ -172,7 +208,6 @@ async function parseIntent(req, res) {
     const { message, history = [] } = req.body;
     const plan = await parseAgentIntent(message, history);
     console.log("Parsed agent intent:", plan);
-
     res.json(plan);
   } catch (err) {
     console.error("Agent parse error:", err.message);
@@ -187,7 +222,8 @@ function validateSteps(steps) {
     return true;
   });
 }
-// ── POST /api/agent/run  (SSE) ────────────────────────────────────────────────
+
+// ── POST /api/agent/run (SSE) ─────────────────────────────────────────────────
 async function runPlan(req, res) {
   const { steps, sessionId } = req.body;
   const userId = req.user?.username;
@@ -197,7 +233,6 @@ async function runPlan(req, res) {
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders();
 
-  // BigInt-safe JSON serializer — gramjs returns BigInt IDs which crash JSON.stringify
   function safeStringify(obj) {
     return JSON.stringify(obj, (key, value) =>
       typeof value === "bigint" ? Number(value) : value
@@ -209,30 +244,114 @@ async function runPlan(req, res) {
 
   try {
     const db = mongoose.connection.db;
-
-    // ── Load registry ONCE per run — DB + static merged ──
     const TOOL_REGISTRY = await loadToolRegistry();
 
     let executionSteps = steps || [];
 
-    // ── AUTO FALLBACK (when planner fails) ─────────────
+    // ── FIX: autoInferSingleTool removed — graceful fallback ─────────────────
     if (!executionSteps.length) {
-      console.log("⚠️ Planner returned empty steps — using fallback");
-
-      executionSteps = await autoInferSingleTool(
-        req.body.userMessage || "",
-        userId
-      );
+      console.log("⚠️ Planner returned empty steps — cannot execute");
+      send({
+        type: "complete",
+        success: false,
+        summary: "Could not understand the request. Please try rephrasing.",
+      });
+      send({ type: "done" });
+      res.write("data: [DONE]\n\n");
+      res.end();
+      return;
     }
 
     send({ type: "start", totalSteps: executionSteps.length });
     await new Promise((r) => setTimeout(r, 150));
+
     const normalizedSteps = validateSteps(
       executionSteps.map((s) =>
         normalizeStepParams(s, req.body.userMessage || "")
       )
     );
+
+    // ── Try multi-agent orchestration first ───────────────────────────────────
+    const orchestratorResult = await orchestrate(
+      req.body.userMessage || "",
+      userId,
+      db,
+      async (progress) => {
+        const meta = TOOL_REGISTRY[progress.tool] || {
+          icon: progress.icon || "🤖",
+          label: progress.label || progress.tool,
+        };
+        if (progress.status === "running") {
+          send({
+            type: "step_start",
+            tool: progress.tool,
+            icon: meta.icon,
+            label: meta.label,
+          });
+        }
+        if (progress.status === "done") {
+          send({
+            type: "step_done",
+            tool: progress.tool,
+            icon: meta.icon,
+            label: meta.label,
+            summary: progress.summary || progress.result?.summary || "Done",
+          });
+        }
+        if (progress.status === "error") {
+          send({
+            type: "step_error",
+            tool: progress.tool,
+            icon: meta.icon,
+            label: meta.label,
+            error: progress.error,
+          });
+        }
+      }
+    );
+
+    // Orchestrator handled it — return early
+    if (orchestratorResult) {
+      const summary = orchestratorResult.summary || "All tasks completed.";
+      send({ type: "complete", success: true, summary });
+
+      if (sessionId && userId) {
+        try {
+          await Conversation.findOneAndUpdate(
+            { sessionId, userId },
+            {
+              $push: {
+                messages: {
+                  $each: [
+                    {
+                      role: "user",
+                      content: req.body.userMessage || "[Agent task]",
+                    },
+                    {
+                      role: "assistant",
+                      content: summary,
+                      isAgent: true,
+                      agentDone: true,
+                      steps: [],
+                    },
+                  ],
+                },
+              },
+              $set: { updatedAt: new Date() },
+            },
+            { upsert: true }
+          );
+        } catch {}
+      }
+      send({ type: "done" });
+      res.write("data: [DONE]\n\n");
+      res.end();
+      return;
+    }
+
+    // ── Normal single-agent run ───────────────────────────────────────────────
     console.log("Agent executing steps:", normalizedSteps);
+
     const results = await runAgent(
       normalizedSteps,
       db,
@@ -253,51 +372,69 @@ async function runPlan(req, res) {
         }
 
         if (progress.status === "done") {
+          const r = progress.result; // ← use r consistently for all fields
+
           send({
             type: "step_done",
             tool: progress.tool,
             icon: meta.icon,
             label: meta.label,
-            summary: stepSummary(progress.tool, progress.result),
-            richSummary: progress.result?.summary || null,
-            richTickets: progress.result?.tickets || null,
-            byAssignee: progress.result?.byAssignee || null,
+            summary: stepSummary(progress.tool, r),
+            richSummary: r?.summary || null,
+
+            // ── Jira ─────────────────────────────────────────────────────────
+            richTickets: extractRichTickets(progress.tool, r),
+            byAssignee: r?.byAssignee || null,
             jiraDomain: process.env.JIRA_DOMAIN || null,
-            sprintName: progress.result?.sprintName || null,
-            notifications: progress.result?.notifications || null,
-            richEmails: progress.result?.emails
-              ? progress.result.emails
-              : progress.result?.id && progress.result?.subject
-              ? [progress.result]
-              : null,
-            emailQuery: progress.result?.query || null,
-            // Calendar
-            richEvents:
-              progress.result?.events ||
-              (progress.result?.id && progress.result?.title
-                ? [progress.result]
-                : null),
-            calendarByDay: progress.result?.byDay || null,
-            richTelegramMessages: progress.result?.messages || null,
-            telegramChatName: progress.result?.chatName || null,
-            telegramChatId: String(progress.result?.chatId || ""),
-            telegramChatUsername: progress.result?.chatUsername || null,
-            telegramChats: progress.result?.chats || null,
-            // Unread: result.chats has messages per chat
-            telegramUnreadChats: progress.result?.chats || null,
-            telegramSearchResults: progress.result?.results || null,
-            telegramQuery: progress.result?.query || null,
+            sprintName: r?.sprintName || null,
+            notifications: r?.notifications || null,
+
+            // ── Gmail ─────────────────────────────────────────────────────────
+            richEmails: r?.emails ? r.emails : r?.id && r?.subject ? [r] : null,
+            emailQuery: r?.query || null,
+
+            // ── Calendar ─────────────────────────────────────────────────────
+            richEvents: r?.events || (r?.id && r?.title ? [r] : null),
+            calendarByDay: r?.byDay || null,
+
+            // ── Telegram ─────────────────────────────────────────────────────
+            richTelegramMessages: r?.messages || null,
+            telegramChatName: r?.chatName || null,
+            telegramChatId: String(r?.chatId || ""),
+            telegramChatUsername: r?.chatUsername || null,
+            telegramChats: r?.chats || null,
+            telegramUnreadChats: r?.chats || null,
+            telegramSearchResults: r?.results || null,
+            telegramQuery: r?.query || null,
             telegramSent:
-              progress.result?.ok &&
+              r?.ok &&
               (progress.tool === "telegram_send_message" ||
                 progress.tool === "telegram_reply_message")
-                ? { to: progress.result.to, message: progress.result.message }
+                ? { to: r.to, message: r.message }
                 : null,
             telegramContact:
-              progress.result?.ok &&
-              progress.tool === "telegram_get_contact_info"
-                ? progress.result
-                : null,
+              r?.ok && progress.tool === "telegram_get_contact_info" ? r : null,
+
+            // ── Slack ─────────────────────────────────────────────────────────
+            richSlackMessages: r?.richSlackMessages || null,
+            richSlackChannels: r?.richSlackChannels || null,
+            richSlackUnread: r?.richSlackUnread || null,
+            slackChannel: r?.slackChannel || null,
+            slackChannelId: r?.slackChannelId || null,
+            slackSent: r?.slackSent || null,
+            slackMessage: r?.slackMessage || null,
+            totalUnread: r?.totalUnread || null,
+
+            // ── WhatsApp — FIX: use r not progress.result ─────────────────────
+            richWhatsAppMessages: r?.messages || null,
+            richWhatsAppUnread: r?.chats || null,
+            richWhatsAppChats: r?.chats || null,
+            whatsappChatName: r?.chatName || null,
+            whatsappChatId: String(r?.chatId || ""),
+            whatsappSent:
+              r?.ok && progress.tool === "whatsapp_send_message" ? true : null,
+            whatsappTo: r?.to || null,
+            whatsappMessage: r?.message || null,
           });
           await new Promise((r) => setTimeout(r, 60));
         }
@@ -322,14 +459,13 @@ async function runPlan(req, res) {
 
     send({ type: "complete", success: !failed, summary });
 
-    // ── Persist to DB with steps + richTickets ────────────
+    // ── Persist to DB ─────────────────────────────────────────────────────────
     if (sessionId && userId) {
       try {
         const persistedSteps = results
           .filter((r) => r.status === "done")
           .map((r) => {
             const meta = TOOL_REGISTRY[r.tool] || { icon: "⚙️", label: r.tool };
-
             return {
               tool: r.tool,
               icon: meta.icon,
@@ -337,14 +473,14 @@ async function runPlan(req, res) {
               status: "done",
               summary: stepSummary(r.tool, r.result),
 
-              // ───────── JIRA ─────────
-              richTickets: r.result?.tickets || null,
+              // Jira
+              richTickets: extractRichTickets(r.tool, r.result),
               byAssignee: r.result?.byAssignee || null,
               jiraDomain: process.env.JIRA_DOMAIN || null,
               sprintName: r.result?.sprintName || null,
               notifications: r.result?.notifications || null,
 
-              // ───────── EMAIL ─────────
+              // Email
               richEmails: r.result?.emails
                 ? r.result.emails
                 : r.result?.id && r.result?.subject
@@ -352,24 +488,21 @@ async function runPlan(req, res) {
                 : null,
               emailQuery: r.result?.query || null,
 
-              // ───────── CALENDAR ─────────
+              // Calendar
               richEvents:
                 r.result?.events ||
                 (r.result?.id && r.result?.title ? [r.result] : null),
               calendarByDay: r.result?.byDay || null,
 
-              // ───────── TELEGRAM ─────────
+              // Telegram
               richTelegramMessages: r.result?.messages || null,
               telegramChatName: r.result?.chatName || null,
               telegramChatId: r.result?.chatId || null,
               telegramChatUsername: r.result?.chatUsername || null,
-
               telegramChats: r.result?.chats || null,
               telegramUnreadChats: r.result?.chats || null,
-
               telegramSearchResults: r.result?.results || null,
               telegramQuery: r.result?.query || null,
-
               telegramSentMessages:
                 r.tool === "telegram_send_message" ||
                 r.tool === "telegram_reply_message"
@@ -384,11 +517,30 @@ async function runPlan(req, res) {
                       },
                     ]
                   : null,
-
               telegramContact:
                 r.result?.ok && r.tool === "telegram_get_contact_info"
                   ? r.result
                   : null,
+
+              // Slack
+              richSlackMessages: r.result?.richSlackMessages || null,
+              richSlackChannels: r.result?.richSlackChannels || null,
+              richSlackUnread: r.result?.richSlackUnread || null,
+              slackChannel: r.result?.slackChannel || null,
+              slackChannelId: r.result?.slackChannelId || null,
+              slackSent: r.result?.slackSent || null,
+              slackMessage: r.result?.slackMessage || null,
+              totalUnread: r.result?.totalUnread || null,
+
+              // ── WhatsApp — FIX: was missing from persistedSteps ───────────
+              richWhatsAppMessages: r.result?.messages || null,
+              richWhatsAppUnread: r.result?.chats || null,
+              richWhatsAppChats: r.result?.chats || null,
+              whatsappChatName: r.result?.chatName || null,
+              whatsappChatId: r.result?.chatId || null,
+              whatsappSent: r.tool === "whatsapp_send_message" ? true : null,
+              whatsappTo: r.result?.to || null,
+              whatsappMessage: r.result?.message || null,
             };
           });
 
@@ -430,7 +582,7 @@ async function runPlan(req, res) {
   }
 }
 
-// ── POST /api/agent/gmail-reply ──────────────────────────────────────────────
+// ── POST /api/agent/gmail-reply ───────────────────────────────────────────────
 async function gmailReplyDirect(req, res) {
   const userId = req.user?.username;
   const { threadId, messageId, replyTo, subject, body } = req.body;
@@ -471,10 +623,7 @@ async function gmailReplyDirect(req, res) {
 
     await gmail.users.messages.send({
       userId: "me",
-      requestBody: {
-        raw: encoded,
-        threadId: threadId || undefined,
-      },
+      requestBody: { raw: encoded, threadId: threadId || undefined },
     });
 
     res.json({ success: true });
@@ -484,16 +633,13 @@ async function gmailReplyDirect(req, res) {
   }
 }
 
-// ── POST /api/agent/gmail-suggest-reply ─────────────────────────────────────
+// ── POST /api/agent/gmail-suggest-reply ──────────────────────────────────────
 async function gmailSuggestReply(req, res) {
   const { subject, from, body, snippet } = req.body;
-
-  if (!chatCompleteNoSystem) {
+  if (!chatCompleteNoSystem)
     return res.status(500).json({ error: "LLM service not available" });
-  }
 
   const emailContent = body?.trim() || snippet?.trim() || "(no content)";
-
   try {
     const prompt = `You are a professional email assistant. Write a concise, helpful reply to the following email.
 
@@ -507,12 +653,11 @@ Instructions:
 - Be concise (3-6 sentences max)
 - Match the tone of the original email
 - Do NOT include a subject line
-- Do NOT include "Dear..." or formal salutations — start directly with the reply content
-- End with a simple closing like "Thanks," or "Best regards," followed by a new line (no name needed)
+- Do NOT include "Dear..." or formal salutations
+- End with a simple closing like "Thanks," or "Best regards,"
 - Return ONLY the reply body, nothing else`;
 
     const suggested = await chatCompleteNoSystem(prompt, 300, 0.5);
-    console.log("Suggested reply:", suggested);
     res.json({ suggested: suggested.trim() });
   } catch (err) {
     console.error("gmailSuggestReply error:", err.message);
@@ -520,7 +665,7 @@ Instructions:
   }
 }
 
-// ── POST /api/agent/calendar-rsvp ───────────────────────────────────────────
+// ── POST /api/agent/calendar-rsvp ────────────────────────────────────────────
 async function calendarRsvpDirect(req, res) {
   const userId = req.user?.username;
   const { eventId, response } = req.body;
@@ -536,16 +681,12 @@ async function calendarRsvpDirect(req, res) {
   }
 }
 
-// ── POST /api/agent/telegram-reply ──────────────────────────────────────────
-// Called by TelegramRenderer when user replies from within an agent bubble.
-// Persists the sent message to the conversation so it survives page refresh.
+// ── POST /api/agent/telegram-reply ───────────────────────────────────────────
 async function saveTelegramReply(req, res) {
   const { sessionId, chatId, text, fileNames } = req.body;
   const userId = req.user?.username;
-
-  if (!sessionId || !chatId) {
+  if (!sessionId || !chatId)
     return res.status(400).json({ error: "sessionId and chatId required" });
-  }
 
   try {
     const conv = await Conversation.findOne({ sessionId, userId });
@@ -561,11 +702,8 @@ async function saveTelegramReply(req, res) {
     };
 
     let updated = false;
-
-    // Walk agent messages and find any step that owns this chatId
     for (const message of conv.messages) {
       if (!message.isAgent || !Array.isArray(message.steps)) continue;
-
       for (const step of message.steps) {
         const stepChatId = String(step.telegramChatId || "");
         const hasChat =
@@ -573,11 +711,9 @@ async function saveTelegramReply(req, res) {
           (step.telegramUnreadChats || []).some(
             (c) => String(c.chatId) === String(chatId)
           );
-
         if (hasChat) {
-          if (!Array.isArray(step.telegramSentMessages)) {
+          if (!Array.isArray(step.telegramSentMessages))
             step.telegramSentMessages = [];
-          }
           step.telegramSentMessages.push(sentMsg);
           updated = true;
         }
@@ -588,7 +724,6 @@ async function saveTelegramReply(req, res) {
       conv.markModified("messages");
       await conv.save();
     }
-
     res.json({ ok: true, updated });
   } catch (err) {
     console.error("saveTelegramReply error:", err.message);

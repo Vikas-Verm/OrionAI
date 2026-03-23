@@ -1,28 +1,22 @@
 <template>
-    <!-- ── Slack: sent message ──────────────────────── -->
+    <!-- ── Slack: sent message ─────────────────────────────────── -->
     <div v-if="step.slackSent" class="slk-sent-card">
       <div class="slk-sent-header">
         <SlackLogo :size="14" />
-        <span>Message sent to {{ step.slackChannel }}</span>
+        <span>Message sent to <strong>{{ step.slackChannel }}</strong></span>
       </div>
       <div class="slk-sent-body">{{ step.slackMessage }}</div>
-      <button class="slk-open-btn" @click="emit('openSlack')">
-        Open Slack ↗
-      </button>
+      <a href="https://app.slack.com" target="_blank" class="slk-open-btn">Open Slack ↗</a>
     </div>
   
-    <!-- ── Slack: unread summary ───────────────────── -->
+    <!-- ── Slack: unread list ──────────────────────────────────── -->
     <div v-else-if="step.richSlackUnread?.length" class="slk-unread-card">
       <div class="slk-card-header">
         <SlackLogo :size="14" />
         <span>{{ step.summary }}</span>
       </div>
       <div class="slk-unread-list">
-        <div
-          v-for="ch in step.richSlackUnread"
-          :key="ch.id"
-          class="slk-unread-row"
-          @click="emit('openChannel', ch)">
+        <div v-for="ch in step.richSlackUnread" :key="ch.id" class="slk-unread-row">
           <div class="slk-ch-icon" :style="{ background: ch.type === 'dm' ? '#2EB67D' : '#1264A3' }">
             {{ ch.type === 'dm' ? ch.name.slice(0,1).toUpperCase() : '#' }}
           </div>
@@ -33,47 +27,40 @@
           <span class="slk-unread-badge">{{ ch.unread }}</span>
         </div>
       </div>
-      <button class="slk-open-btn" @click="emit('openSlack')">Open Slack ↗</button>
+      <a href="https://app.slack.com" target="_blank" class="slk-open-btn">Open Slack ↗</a>
     </div>
   
-    <!-- ── Slack: message list ──────────────────────── -->
+    <!-- ── Slack: message thread ──────────────────────────────── -->
     <div v-else-if="step.richSlackMessages?.length" class="slk-msgs-card">
       <div class="slk-card-header">
         <SlackLogo :size="14" />
-        <span>{{ step.slackChannel }}</span>
+        <span>#{{ step.slackChannel }}</span>
       </div>
       <div class="slk-msgs-list">
-        <div
-          v-for="msg in step.richSlackMessages"
-          :key="msg.id"
-          :class="['slk-msg-row', msg.fromMe ? 'me' : '']">
-          <div class="slk-msg-avatar" :style="{ background: avatarColor(msg.fromName) }">
-            {{ msg.fromName?.slice(0,1).toUpperCase() }}
+        <div v-for="m in step.richSlackMessages" :key="m.id" :class="['slk-msg-row', m.fromMe ? 'me' : '']">
+          <div class="slk-msg-avatar" :style="{ background: avatarColor(m.fromName) }">
+            {{ m.fromName?.slice(0,1).toUpperCase() }}
           </div>
           <div class="slk-msg-body">
             <div class="slk-msg-meta">
-              <span class="slk-msg-name">{{ msg.fromMe ? 'You' : msg.fromName }}</span>
-              <span class="slk-msg-time">{{ fmtTime(msg.date) }}</span>
+              <span class="slk-msg-name">{{ m.fromMe ? 'You' : m.fromName }}</span>
+              <span class="slk-msg-time">{{ fmtTime(m.date) }}</span>
             </div>
-            <div class="slk-msg-text">{{ msg.text }}</div>
+            <div class="slk-msg-text">{{ m.text }}</div>
           </div>
         </div>
       </div>
-      <button class="slk-open-btn" @click="emit('openSlack')">Open Slack ↗</button>
+      <a href="https://app.slack.com" target="_blank" class="slk-open-btn">Open Slack ↗</a>
     </div>
   
-    <!-- ── Slack: channel list ──────────────────────── -->
+    <!-- ── Slack: channel list ────────────────────────────────── -->
     <div v-else-if="step.richSlackChannels?.length" class="slk-chs-card">
       <div class="slk-card-header">
         <SlackLogo :size="14" />
         <span>{{ step.summary }}</span>
       </div>
       <div class="slk-chs-list">
-        <div
-          v-for="ch in step.richSlackChannels.slice(0, 10)"
-          :key="ch.id"
-          class="slk-ch-row"
-          @click="emit('openChannel', ch)">
+        <div v-for="ch in step.richSlackChannels.slice(0,12)" :key="ch.id" class="slk-ch-row">
           <span class="slk-ch-prefix" :style="{ color: ch.type === 'dm' ? '#2EB67D' : '#36C5F0' }">
             {{ ch.type === 'dm' ? '●' : '#' }}
           </span>
@@ -81,10 +68,10 @@
           <span v-if="ch.unread > 0" class="slk-unread-badge">{{ ch.unread }}</span>
         </div>
       </div>
-      <button class="slk-open-btn" @click="emit('openSlack')">Open Slack ↗</button>
+      <a href="https://app.slack.com" target="_blank" class="slk-open-btn">Open Slack ↗</a>
     </div>
   
-    <!-- ── Fallback: text summary ──────────────────── -->
+    <!-- ── Fallback ───────────────────────────────────────────── -->
     <div v-else class="slk-summary">
       <SlackLogo :size="13" />
       <span>{{ step.summary }}</span>
@@ -92,14 +79,26 @@
   </template>
   
   <script setup>
-  import { defineComponent, h } from 'vue'
+  import { computed, defineComponent, h } from 'vue'
   
+  // Props match AgentBubble + MessageBubble interface
   const props = defineProps({
-    step: { type: Object, required: true },
+    steps: { type: Array,  default: () => [] },
+    msg:   { type: Object, default: () => ({}) },
   })
-  const emit = defineEmits(['openSlack', 'openChannel'])
   
-  // Inline Slack logo component
+  // Pick the first step that has Slack data
+  const step = computed(() => {
+    const richFields = ['richSlackMessages','richSlackUnread','richSlackChannels','slackSent']
+    return (
+      props.steps.find(s => richFields.some(f => s[f] != null)) ||
+      props.steps.find(s => ['slack_read_messages','slack_send_message','slack_get_unread','slack_list_channels'].includes(s.tool)) ||
+      props.steps[0] ||
+      {}
+    )
+  })
+  
+  // ── Inline Slack logo ──────────────────────────────────────────────────────
   const SlackLogo = defineComponent({
     props: { size: { default: 16 } },
     render() {
@@ -109,15 +108,15 @@
         h('path', { fill: '#2EB67D', d: 'M18.956 8.834a2.528 2.528 0 012.522-2.521A2.528 2.528 0 0124 8.834a2.527 2.527 0 01-2.522 2.521h-2.522V8.834zM17.688 8.834a2.527 2.527 0 01-2.521 2.521 2.527 2.527 0 01-2.521-2.521V2.522A2.528 2.528 0 0115.167 0a2.528 2.528 0 012.521 2.522v6.312z' }),
         h('path', { fill: '#ECB22E', d: 'M15.167 18.956a2.528 2.528 0 012.521 2.522A2.528 2.528 0 0115.167 24a2.527 2.527 0 01-2.521-2.522v-2.522h2.521zM15.167 17.688a2.527 2.527 0 01-2.521-2.523 2.527 2.527 0 012.521-2.52h6.313A2.528 2.528 0 0124 15.165a2.528 2.528 0 01-2.522 2.523h-6.311z' }),
       ])
-    }
+    },
   })
   
   const COLORS = ['#E01E5A','#36C5F0','#2EB67D','#ECB22E','#4A154B','#1264A3']
   function avatarColor(name) {
     if (!name) return '#E01E5A'
-    let h = 0
-    for (const c of name) h = (h * 31 + c.charCodeAt(0)) & 0xffffffff
-    return COLORS[Math.abs(h) % COLORS.length]
+    let hash = 0
+    for (const c of name) hash = (hash * 31 + c.charCodeAt(0)) & 0xffffffff
+    return COLORS[Math.abs(hash) % COLORS.length]
   }
   function fmtTime(iso) {
     if (!iso) return ''
@@ -130,98 +129,76 @@
   .slk-unread-card,
   .slk-msgs-card,
   .slk-chs-card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border-subtle);
-    border-radius: 10px;
+    background: var(--card-bg, rgba(255,255,255,0.05));
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px;
     overflow: hidden;
-    margin-top: 6px;
-    min-width: 280px;
-    max-width: 420px;
+    margin-top: 10px;
   }
-  
   .slk-card-header,
   .slk-sent-header {
-    display: flex; align-items: center; gap: 8px;
-    padding: 9px 12px;
-    background: rgba(224,30,90,0.08);
-    border-bottom: 1px solid var(--border-subtle);
-    font-size: 12px; font-weight: 600; color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    background: rgba(54,197,240,0.08);
+    font-size: 13px;
+    font-weight: 600;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
   }
-  
-  /* Sent card */
   .slk-sent-body {
-    padding: 10px 12px;
-    font-size: 13px; color: var(--text-primary); line-height: 1.45;
-    white-space: pre-wrap; word-break: break-word;
+    padding: 12px 14px;
+    font-size: 13px;
+    line-height: 1.5;
+    opacity: 0.85;
   }
-  
-  /* Unread list */
-  .slk-unread-list { padding: 6px 0; }
+  /* Unread */
+  .slk-unread-list { padding: 4px 0; }
   .slk-unread-row {
     display: flex; align-items: center; gap: 10px;
-    padding: 7px 12px; cursor: pointer;
-    transition: background 0.1s;
+    padding: 8px 14px;
   }
-  .slk-unread-row:hover { background: rgba(255,255,255,0.04); }
   .slk-ch-icon {
+    width: 30px; height: 30px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 700; color: white; flex-shrink: 0;
+  }
+  .slk-ch-info { flex: 1; min-width: 0; }
+  .slk-ch-name { font-size: 13px; font-weight: 500; }
+  .slk-ch-type { font-size: 11px; opacity: 0.5; margin-top: 1px; }
+  .slk-unread-badge {
+    background: #E01E5A; color: white;
+    font-size: 11px; font-weight: 700;
+    padding: 2px 7px; border-radius: 10px; flex-shrink: 0;
+  }
+  /* Messages */
+  .slk-msgs-list { padding: 6px 0; max-height: 280px; overflow-y: auto; }
+  .slk-msg-row { display: flex; gap: 10px; padding: 6px 14px; }
+  .slk-msg-row.me { flex-direction: row-reverse; }
+  .slk-msg-avatar {
     width: 28px; height: 28px; border-radius: 6px;
     display: flex; align-items: center; justify-content: center;
     font-size: 12px; font-weight: 700; color: white; flex-shrink: 0;
   }
-  .slk-ch-info  { flex: 1; min-width: 0; }
-  .slk-ch-name  { font-size: 13px; font-weight: 600; color: var(--text-primary); }
-  .slk-ch-type  { font-size: 11px; color: var(--text-muted); }
-  .slk-unread-badge {
-    background: #E01E5A; color: white; font-size: 10px; font-weight: 700;
-    min-width: 18px; height: 18px; border-radius: 9px;
-    display: flex; align-items: center; justify-content: center; padding: 0 4px;
-    flex-shrink: 0;
-  }
-  
-  /* Message list */
-  .slk-msgs-list { padding: 8px 0; display: flex; flex-direction: column; gap: 6px; }
-  .slk-msg-row {
-    display: flex; gap: 8px; align-items: flex-start;
-    padding: 3px 12px;
-  }
-  .slk-msg-avatar {
-    width: 24px; height: 24px; border-radius: 5px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 10px; font-weight: 700; color: white; flex-shrink: 0; margin-top: 2px;
-  }
-  .slk-msg-meta { display: flex; align-items: baseline; gap: 6px; margin-bottom: 1px; }
-  .slk-msg-name { font-size: 12px; font-weight: 700; color: var(--text-primary); }
-  .slk-msg-time { font-size: 10px; color: var(--text-muted); }
-  .slk-msg-text { font-size: 12.5px; color: var(--text-primary); line-height: 1.4; word-break: break-word; }
-  .slk-msg-row.me .slk-msg-name { color: #36C5F0; }
-  
-  /* Channel list */
-  .slk-chs-list  { padding: 6px 0; }
-  .slk-ch-row {
-    display: flex; align-items: center; gap: 8px;
-    padding: 6px 12px; cursor: pointer;
-    transition: background 0.1s;
-  }
-  .slk-ch-row:hover { background: rgba(255,255,255,0.04); }
-  .slk-ch-prefix { font-size: 14px; font-weight: 600; flex-shrink: 0; }
-  .slk-ch-rname  { flex: 1; font-size: 13px; color: var(--text-primary); }
-  
+  .slk-msg-body { flex: 1; min-width: 0; }
+  .slk-msg-row.me .slk-msg-body { text-align: right; }
+  .slk-msg-meta { display: flex; gap: 8px; align-items: baseline; margin-bottom: 2px; }
+  .slk-msg-row.me .slk-msg-meta { justify-content: flex-end; }
+  .slk-msg-name { font-size: 12px; font-weight: 600; }
+  .slk-msg-time { font-size: 11px; opacity: 0.45; }
+  .slk-msg-text { font-size: 13px; line-height: 1.45; opacity: 0.85; word-break: break-word; }
+  /* Channels */
+  .slk-chs-list { padding: 4px 0; }
+  .slk-ch-row { display: flex; align-items: center; gap: 8px; padding: 7px 14px; font-size: 13px; }
+  .slk-ch-prefix { font-size: 15px; width: 16px; text-align: center; flex-shrink: 0; }
+  .slk-ch-rname { flex: 1; }
   /* Open button */
   .slk-open-btn {
-    display: block; width: 100%;
-    padding: 8px 12px;
-    background: rgba(224,30,90,0.08);
-    border: none; border-top: 1px solid var(--border-subtle);
-    color: #E01E5A; font-size: 12px; font-weight: 600;
-    text-align: center; cursor: pointer;
-    transition: background 0.1s;
+    display: block; text-align: center; padding: 8px;
+    font-size: 12px; color: #36C5F0; text-decoration: none;
+    border-top: 1px solid rgba(255,255,255,0.06);
   }
-  .slk-open-btn:hover { background: rgba(224,30,90,0.14); }
-  
-  /* Fallback summary */
-  .slk-summary {
-    display: flex; align-items: center; gap: 8px;
-    font-size: 13px; color: var(--text-primary);
-    padding: 4px 0;
-  }
+  .slk-open-btn:hover { background: rgba(54,197,240,0.06); }
+  /* Fallback */
+  .slk-summary { display: flex; align-items: center; gap: 8px; padding: 10px 14px; font-size: 13px; opacity: 0.8; }
   </style>

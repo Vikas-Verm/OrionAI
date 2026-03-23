@@ -674,7 +674,7 @@
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import api from '../services/api'
 
-const emit = defineEmits(['close', 'openIntegrations'])
+ defineEmits(['close', 'openIntegrations'])
 
 // ── Core state ──────────────────────────────────────────────
 const me = ref(null)
@@ -850,6 +850,18 @@ const emojiMap = ref({
   new:'🆕', cool_sym:'🆒', information_source:'ℹ️', mega:'📣', loudspeaker:'📢',
 })
 
+const slackThemes = ref([
+  { id: 'aubergine',  name: 'Aubergine',  sidebarBg: '#4A154B', activeItem: '#1164A3', textColor: '#CFC3CF', mainBg: 'var(--bg-base)' },
+  { id: 'ocean',      name: 'Ocean',      sidebarBg: '#1264A3', activeItem: '#0b4c8c', textColor: '#C9DEF0', mainBg: 'var(--bg-base)' },
+  { id: 'forest',     name: 'Forest',     sidebarBg: '#1B4332', activeItem: '#40916C', textColor: '#B7E4C7', mainBg: 'var(--bg-base)' },
+  { id: 'midnight',   name: 'Midnight',   sidebarBg: '#0F1729', activeItem: '#1264A3', textColor: '#9EAABB', mainBg: 'var(--bg-base)' },
+  { id: 'slate',      name: 'Slate',      sidebarBg: '#2C3849', activeItem: '#1164A3', textColor: '#C2CAD4', mainBg: 'var(--bg-base)' },
+  { id: 'crimson',    name: 'Crimson',    sidebarBg: '#7B0D1E', activeItem: '#E01E5A', textColor: '#F5C2C7', mainBg: 'var(--bg-base)' },
+  { id: 'orion',      name: 'Orion',      sidebarBg: '#0d0d1a', activeItem: '#6366f1', textColor: '#b0b0cc', mainBg: 'var(--bg-base)' },
+  { id: 'banana',     name: 'Banana',     sidebarBg: '#F2C94C', activeItem: '#E0A800', textColor: '#1C1C00', mainBg: 'var(--bg-base)' },
+  { id: 'clementine', name: 'Clementine', sidebarBg: '#F0541E', activeItem: '#C04000', textColor: '#FDE8E0', mainBg: 'var(--bg-base)' },
+  { id: 'jade',       name: 'Jade',       sidebarBg: '#007A5A', activeItem: '#148567', textColor: '#C6EFDF', mainBg: 'var(--bg-base)' },
+])
 // ── Custom workspace emojis from Slack API ──────────────────
 // { 'emoji-name': 'https://...image-url' }
 const customEmojis = ref({})
@@ -859,7 +871,7 @@ const channelsList   = computed(() => channels.value.filter(c => ['public','priv
 const dmsList        = computed(() => channels.value.filter(c => c.type === 'dm'))
 const channelUnread  = computed(() => channelsList.value.reduce((s, c) => s + (c.unread || 0), 0))
 const dmUnread       = computed(() => dmsList.value.reduce((s, c) => s + (c.unread || 0), 0))
-const totalUnread    = computed(() => channelUnread.value + dmUnread.value)
+// const totalUnread    = computed(() => channelUnread.value + dmUnread.value)
 const filteredBrowse = computed(() => { const q = browseQ.value.toLowerCase(); return channelsList.value.filter(c => !q || c.name.toLowerCase().includes(q)) })
 
 // ── Load workspace ──────────────────────────────────────────
@@ -883,10 +895,12 @@ async function loadAll() {
     }
   } catch(e) {
     channels.value = []
+    console.log(e)
   } finally {
     loading.value = false
   }
 }
+
 
 // ── Open channel ────────────────────────────────────────────
 async function openChannel(ch) {
@@ -916,7 +930,7 @@ async function refreshMessages() {
     messages.value = res.data.messages || []
     if (messages.value.length > 0) lastMsgTs.value = messages.value[messages.value.length - 1].id
     await nextTick(); scrollToBottom()
-  } catch(e) {}
+  } catch(e) {console.log(e)}
 }
 
 // ── FIX 8: Smart polling for real-time messages ─────────────
@@ -954,7 +968,7 @@ function startPolling() {
           }
         }
       }
-    } catch(e) {}
+    } catch(e) {console.log(e)}
   }, prefs.value.pollInterval * 1000)
 }
 
@@ -1016,6 +1030,7 @@ async function sendMessage() {
   } catch(e) {
     messages.value = messages.value.filter(m => m.id !== tmpId)
     sendText.value = text
+    console.log(e)
   } finally { sending.value = false }
 }
 
@@ -1039,7 +1054,7 @@ async function addReaction(msgId, name) {
   try {
     await api.post(`/api/slack/messages/${msgId}/react`, { emoji: name, channelId: activeChannelId.value })
     await refreshMessages()
-  } catch(e) {}
+  } catch(e) {console.log(e)}
 }
 
 // ── Reply ───────────────────────────────────────────────────
@@ -1066,6 +1081,7 @@ async function startHuddle() {
       // Fallback: open Slack deep link
       const url = `https://app.slack.com/huddle/${me.value?.teamId || ''}/${activeChannelId.value}`
       window.open(url, '_blank')
+      console.log(e)
     }
   }
 }
@@ -1078,18 +1094,18 @@ function openStatusModal() {
 }
 async function saveStatus() {
   userStatus.value = { ...statusDraft.value }
-  try { await api.post('/api/slack/status/update', statusDraft.value) } catch(e) {}
+  try { await api.post('/api/slack/status/update', statusDraft.value) } catch(e) {console.log(e)}
 }
 async function clearStatus() {
   userStatus.value = { emoji: '', text: '' }
   statusDraft.value = { emoji: '', text: '' }
-  try { await api.post('/api/slack/status/update', { emoji: '', text: '' }) } catch(e) {}
+  try { await api.post('/api/slack/status/update', { emoji: '', text: '' }) } catch(e) {console.log(e) }
 }
 
 // ── FIX 4: Away toggle ──────────────────────────────────────
 async function toggleAway() {
   isAway.value = !isAway.value
-  try { await api.post('/api/slack/status/away', { away: isAway.value }) } catch(e) {}
+  try { await api.post('/api/slack/status/away', { away: isAway.value }) } catch(e) {console.log(e)}
 }
 
 // ── Preferences ─────────────────────────────────────────────
@@ -1103,10 +1119,13 @@ function loadPrefs() {
     prefs.value = { ...prefs.value, ...s }
     // Restore saved slack theme
     if (prefs.value.slackTheme) {
-      const t = slackThemes.find(t => t.id === prefs.value.slackTheme)
+      const t = slackThemes.value.find(t => t.id === prefs.value.slackTheme)
+      const activeTheme = computed(() =>
+  slackThemes.value.find(t => t.id === prefs.value.slackTheme) || slackThemes.value[0]
+)
       if (t) activeTheme.value = t
     }
-  } catch {}
+  } catch {console.log('Failed to load preferences')}
 }
 
 // ── Create channel / DM ─────────────────────────────────────

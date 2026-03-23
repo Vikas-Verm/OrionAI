@@ -1,5 +1,6 @@
 const { google } = require("googleapis");
 const Integration = require("../../models/Integration");
+const Fuse = require("fuse.js");
 
 // ── Helper: build authorized Google Calendar client ──────────────────────────
 async function getCalendarClient(userId) {
@@ -147,10 +148,18 @@ async function calendarGetEvents(params, ctx) {
   const { calendar } = await getCalendarClient(ctx.userId);
   const { query, dateFrom, dateTo, maxResults = 10 } = params;
 
+  // ── FIX: append IST offset so Google gets the correct day ────────────────
+  // new Date("2026-03-23")            → 2026-03-23T00:00:00Z  ← UTC midnight
+  // new Date("2026-03-23T00:00:00+05:30") → 2026-03-22T18:30:00Z ← correct IST start
   const timeMin = dateFrom
-    ? new Date(dateFrom).toISOString()
+    ? new Date(`${dateFrom}T00:00:00+05:30`).toISOString()
     : new Date().toISOString();
-  const timeMax = dateTo ? new Date(dateTo).toISOString() : undefined;
+
+  // For single-day queries, if dateTo is missing default it to dateFrom
+  const effectiveDateTo = dateTo || dateFrom;
+  const timeMax = effectiveDateTo
+    ? new Date(`${effectiveDateTo}T23:59:59+05:30`).toISOString()
+    : undefined;
 
   const listParams = {
     calendarId: "primary",
@@ -160,7 +169,7 @@ async function calendarGetEvents(params, ctx) {
     maxResults,
   };
   if (timeMax) listParams.timeMax = timeMax;
-  if (query) listParams.q = query;
+  if (query && !dateFrom) listParams.q = query; // only text-search when no date given
 
   const res = await calendar.events.list(listParams);
   const events = (res.data.items || []).map(fmtEvent);
@@ -283,29 +292,75 @@ async function calendarUpdate(params, ctx) {
   const evt = fmtEvent(updated.data);
   return { ...evt, summary: `✅ Updated "${evt.title}"` };
 }
+function normalizeTitle(title) {
+  if (!title) return title;
 
+  const noiseWords = [
+    "meeting",
+    "call",
+    "event",
+    "session",
+    "appointment",
+    "schedule",
+  ];
+
+  let cleaned = title.toLowerCase();
+
+  noiseWords.forEach((word) => {
+    const regex = new RegExp(`\\b${word}\\b`, "gi");
+    cleaned = cleaned.replace(regex, "");
+  });
+
+  return cleaned.trim();
+}
 // ── TOOL 6: calendar_delete ───────────────────────────────────────────────────
 async function calendarDelete(params, ctx) {
   const { calendar } = await getCalendarClient(ctx.userId);
-  const { eventId, title } = params;
+  let { eventId, title } = params;
 
   let targetId = eventId;
+
   if (!targetId && title) {
+    const normalizedTitle = normalizeTitle(title);
+
     const res = await calendar.events.list({
       calendarId: "primary",
-      q: title,
       timeMin: new Date().toISOString(),
       singleEvents: true,
-      maxResults: 5,
+      maxResults: 20,
+      orderBy: "startTime",
     });
-    const match = (res.data.items || []).find((e) =>
-      e.summary?.toLowerCase().includes(title.toLowerCase())
-    );
-    if (!match) throw new Error(`No event found matching "${title}"`);
+
+    const events = (res.data.items || []).map((e) => ({
+      id: e.id,
+      summary: e.summary || "",
+      normalized: normalizeTitle(e.summary || ""),
+    }));
+
+    if (!events.length) {
+      throw new Error("No upcoming events found.");
+    }
+
+    const fuse = new Fuse(events, {
+      keys: ["normalized"],
+      threshold: 0.4, // lower = stricter
+    });
+
+    const result = fuse.search(normalizedTitle);
+
+    if (!result.length) {
+      throw new Error(`No event found matching "${title}"`);
+    }
+
+    const match = result[0].item;
     targetId = match.id;
   }
 
-  await calendar.events.delete({ calendarId: "primary", eventId: targetId });
+  await calendar.events.delete({
+    calendarId: "primary",
+    eventId: targetId,
+  });
+
   return {
     success: true,
     summary: `🗑️ Deleted event${title ? ` "${title}"` : ""}`,

@@ -131,7 +131,18 @@
           Live
         </span>
       </div>
-
+      <!-- New email toast banner — shows when WS pushes new Gmail notification -->
+      <transition name="gm-slide-down">
+        <div v-if="newEmailBanner" class="gm-new-email-banner" @click="dismissBanner">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
+            <polyline points="22 6 12 13 2 6"/>
+          </svg>
+          <span>{{ newEmailBanner }}</span>
+          <button class="gm-new-email-banner-btn" @click.stop="refreshEmails(); dismissBanner()">View</button>
+          <button class="gm-new-email-banner-close" @click.stop="dismissBanner">✕</button>
+        </div>
+      </transition>
       <!-- Skeleton -->
       <div v-if="loading" class="gm-list-scroll">
         <div v-for="i in 9" :key="i" class="gm-skel-row">
@@ -477,6 +488,7 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import api from '../services/api'
 import { agentAPI } from '../services/api'
+import { useWebSocket } from '../composables/useWebSocket'
 
 defineEmits(['close', 'open-integrations'])
 
@@ -528,7 +540,36 @@ const showProfileMenu = ref(false)
 const profileWrapRef  = ref(null)
 let   sseSource      = null
 let   observer       = null
+const newEmailBanner = ref(null)
+let   bannerTimer    = null
 
+const { notifications } = useWebSocket()
+let prevNotifCount = notifications.length
+ 
+watch(notifications, (newList) => {
+  // Find newest Gmail notification we haven't seen yet
+  if (newList.length <= prevNotifCount) { prevNotifCount = newList.length; return }
+  const newest = newList[0]
+  if (newest?.app === 'gmail' && newest?.isNew !== false) {
+    const subject = newest.items?.[0]?.subject || newest.summary || 'New email'
+    const from    = newest.items?.[0]?.from    || ''
+    const name    = from.match(/^([^<]+)</)?.[1]?.trim() || from.split('@')[0] || 'Someone'
+    newEmailBanner.value = `${name}: ${subject.slice(0, 50)}${subject.length > 50 ? '…' : ''}`
+ 
+    // Auto-refresh the inbox list so new email appears
+    loadEmails(true)
+ 
+    // Auto-dismiss after 8s
+    clearTimeout(bannerTimer)
+    bannerTimer = setTimeout(dismissBanner, 8000)
+  }
+  prevNotifCount = newList.length
+}, { deep: true })
+ 
+function dismissBanner() {
+  newEmailBanner.value = null
+  clearTimeout(bannerTimer)
+}
 // Close profile menu on any click outside the profile wrap
 function onDocClick(e) {
   if (showProfileMenu.value && profileWrapRef.value && !profileWrapRef.value.contains(e.target)) {
@@ -1033,7 +1074,7 @@ function wrapHtml(html) {
   const link = marketing ? '#1a73e8' : '#8ab4f8'
   const quote= marketing ? '#666'    : '#9aa0a6'
   const qbdr = marketing ? '#ccc'    : '#5f6368'
-
+ 
   return `<!DOCTYPE html><html><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -1048,8 +1089,50 @@ table{max-width:100%!important}
 body>table,body>center,body>div{max-width:100%!important}
 blockquote{border-left:3px solid ${qbdr};margin:8px 0;padding:4px 12px;color:${quote};opacity:.85}
 .gmail_quote,.gmail_attr{color:${quote}}
-/* Hide Gmail quoted text collapse button on dark bg */
 .gmail_extra{color:${quote}}
+ 
+/* ── CALENDAR INVITE FIX ─────────────────────────────────────────────── */
+/* Google Calendar invites use white text on colored backgrounds.
+   When we render them in an iframe with white background, those elements
+   become white-on-white. Fix: detect colored-bg containers and force
+   their text to stay readable. */
+[bgcolor="#ffffff"],[bgcolor="white"],
+[style*="background-color: #fff"],[style*="background-color:#fff"],
+[style*="background-color: white"],[style*="background:#fff"],
+[style*="background: white"],[style*="background:white"] {
+  color: #1f1f1f !important;
+}
+/* Force all text inside white/light containers to be dark */
+[bgcolor="#ffffff"] *,[bgcolor="white"] *,
+[style*="background-color: #fff"] *,[style*="background-color:#fff"] * {
+  color: inherit;
+}
+/* Google's calendar invite specific classes */
+td[style*="color:#ffffff"],td[style*="color: #ffffff"],
+td[style*="color:white"],td[style*="color: white"],
+span[style*="color:#ffffff"],span[style*="color: #ffffff"],
+p[style*="color:#ffffff"],p[style*="color: #ffffff"] {
+  /* Only override white text IF the parent bg is also white/light */
+  /* We do this by not overriding here, but forcing bg on body-level container */
+}
+/* The main trick: the outer container of calendar invites is a white table.
+   Force all text within it to dark unless explicitly on a colored button bg. */
+body > table td:not([bgcolor]):not([style*="background"]) {
+  color: #1f1f1f !important;
+}
+/* Keep colored button text white (e.g. "Join with Google Meet" blue button) */
+[bgcolor="#1a73e8"],[bgcolor="#0070f3"],[bgcolor="#4285F4"],
+[style*="background-color:#1a73e8"],[style*="background-color: #1a73e8"],
+[style*="background-color:#4285f4"],[style*="background-color: #4285f4"],
+[style*="background:#1a73e8"],[style*="background: #1a73e8"] {
+  color: #ffffff !important;
+}
+[bgcolor="#1a73e8"] *,[bgcolor="#4285F4"] *,
+[style*="background-color:#1a73e8"] *,
+[style*="background-color: #1a73e8"] * {
+  color: #ffffff !important;
+}
+/* ── END CALENDAR INVITE FIX ─────────────────────────────────────────── */
 </style>
 <script>
 function sendHeight(){
@@ -1063,7 +1146,10 @@ window.addEventListener('load', () => {
   if(!imgs.length){ setTimeout(sendHeight,300); return; }
   imgs.forEach(img => {
     if(img.complete){ loaded++; if(loaded===imgs.length) sendHeight(); }
-    else { img.addEventListener('load',()=>{ loaded++; if(loaded===imgs.length) sendHeight(); }); img.addEventListener('error',()=>{ loaded++; if(loaded===imgs.length) sendHeight(); }); }
+    else {
+      img.addEventListener('load',()=>{ loaded++; if(loaded===imgs.length) sendHeight(); });
+      img.addEventListener('error',()=>{ loaded++; if(loaded===imgs.length) sendHeight(); });
+    }
   });
   setTimeout(sendHeight,800);
   setTimeout(sendHeight,2000);
@@ -1101,7 +1187,7 @@ function onFrameMessage(e) {
         const cur = parseInt(frame.style.height) || 0
         if (h > cur) frame.style.height = (h + 8) + 'px'
       }
-    } catch {}
+    } catch {console.log('Frame message from inaccessible frame, ignoring')}
   })
 }
 
@@ -1964,4 +2050,56 @@ onUnmounted(() => {
 }
 .gm-refresh-btn:disabled { opacity:.4; cursor:not-allowed; }
 .gm-spin { animation:spin .7s linear infinite; }
+
+.gm-new-email-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 13px;
+  background: rgba(66, 133, 244, 0.12);
+  border-bottom: 1px solid rgba(66, 133, 244, 0.25);
+  font-size: 12.5px;
+  color: var(--text-primary);
+  cursor: pointer;
+  animation: gm-pulse-once 0.4s ease;
+}
+.gm-new-email-banner svg { color: #4285F4; flex-shrink: 0; }
+.gm-new-email-banner span {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gm-new-email-banner-btn {
+  flex-shrink: 0;
+  padding: 3px 10px;
+  background: #4285F4;
+  border: none;
+  border-radius: 12px;
+  color: white;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.gm-new-email-banner-close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+}
+.gm-new-email-banner-close:hover { color: var(--text-primary); }
+ 
+@keyframes gm-pulse-once {
+  0%   { opacity: 0; transform: translateY(-8px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+ 
+/* Slide down transition for banner */
+.gm-slide-down-enter-active { transition: all 0.25s cubic-bezier(0.34,1.56,0.64,1); }
+.gm-slide-down-leave-active { transition: all 0.15s ease; }
+.gm-slide-down-enter-from  { opacity: 0; transform: translateY(-10px); }
+.gm-slide-down-leave-to    { opacity: 0; transform: translateY(-6px); }
 </style>

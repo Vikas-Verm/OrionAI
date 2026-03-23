@@ -1,7 +1,8 @@
+const { auth } = require("googleapis/build/src/apis/abusiveexperiencereport");
 const jwt = require("jsonwebtoken");
 
 function authenticate(req, res, next) {
-  const authHeader = req.headers.authorization;
+  const authHeader = req.headers.authorization || req.query.token;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return res.status(401).json({ error: "No token provided" });
   }

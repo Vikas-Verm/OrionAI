@@ -1,3 +1,9 @@
+/**
+ * useAgent.js
+ *
+ * Vue composable — frontend orchestration for the Super Agent.
+ */
+
 import { ref, nextTick } from "vue";
 import { store } from "../stores/app";
 import { agentAPI, streamAgentRun } from "../services/api";
@@ -6,7 +12,8 @@ export function useAgent() {
   const agentRunning = ref(false);
   const pendingParams = ref(null);
 
-  // ── Step missing param check ───────────────────────────
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
   function getMissingParams(steps) {
     return steps
       .filter((s) => (s.tool === "send_email" || s.tool === "send_whatsapp") && !s.params?.to)
@@ -17,14 +24,12 @@ export function useAgent() {
       }));
   }
 
-  // ── Push user message to chat ─────────────────────────
   async function pushUserMsg(message, scrollToBottom) {
     store.messages.push({ role: "user", content: message });
     await nextTick();
     scrollToBottom?.();
   }
 
-  // ── Create agent bubble in chat ───────────────────────
   function createAgentBubble(plan) {
     const idx = store.messages.length;
     store.messages.push({
@@ -45,7 +50,6 @@ export function useAgent() {
     return idx;
   }
 
-  // ── Reactive splice helper ────────────────────────────
   function patchMsg(idx, patch) {
     const msg = store.messages[idx];
     if (!msg) return;
@@ -59,7 +63,8 @@ export function useAgent() {
     store.messages.splice(idx, 1, { ...msg, steps });
   }
 
-  // ── Execute plan via SSE ──────────────────────────────
+  // ── SSE execution ─────────────────────────────────────────────────────────
+
   async function executePlan(plan, scrollToBottom, userMessage) {
     agentRunning.value = true;
     const bubbleIdx = createAgentBubble(plan);
@@ -120,12 +125,20 @@ export function useAgent() {
 
       function finish() {
         agentRunning.value = false;
+
+        // ── Update chat title in sidebar so agent conversations appear ──────
+        // The backend already saved the messages; just refresh the chat list
+        if (store.currentSessionId && typeof store.loadChats === "function") {
+          store.loadChats();
+        }
+
         resolve();
       }
     });
   }
 
-  // ── Handle individual SSE events ──────────────────────
+  // ── SSE event handler ─────────────────────────────────────────────────────
+
   function handleEvent(event, bubbleIdx, scrollToBottom) {
     switch (event.type) {
       case "step_start":
@@ -142,34 +155,34 @@ export function useAgent() {
           summary: event.summary,
           richSummary: event.richSummary || null,
 
-          // ── Jira ──────────────────────────────────────
+          // Jira
           richTickets: event.richTickets || null,
           byAssignee: event.byAssignee || null,
           jiraDomain: event.jiraDomain || null,
           sprintName: event.sprintName || null,
           notifications: event.notifications || null,
 
-          // ── Gmail ─────────────────────────────────────
+          // Gmail
           richEmails: event.richEmails || null,
           emailQuery: event.emailQuery || null,
 
-          // ── Calendar ──────────────────────────────────
+          // Calendar
           richEvents: event.richEvents || null,
           calendarByDay: event.calendarByDay || null,
 
-          // ── Telegram ──────────────────────────────────
+          // Telegram
           richTelegramMessages: event.richTelegramMessages || null,
+          telegramUnreadChats: event.telegramUnreadChats || null,
+          telegramChats: event.telegramChats || null,
           telegramChatName: event.telegramChatName || null,
           telegramChatId: event.telegramChatId || null,
           telegramChatUsername: event.telegramChatUsername || null,
-          telegramChats: event.telegramChats || null,
-          telegramUnreadChats: event.telegramUnreadChats || null,
           telegramSearchResults: event.telegramSearchResults || null,
           telegramQuery: event.telegramQuery || null,
           telegramSent: event.telegramSent || null,
           telegramContact: event.telegramContact || null,
 
-          // ── Slack ─────────────────────────────────────
+          // Slack
           richSlackMessages: event.richSlackMessages || null,
           richSlackChannels: event.richSlackChannels || null,
           richSlackUnread: event.richSlackUnread || null,
@@ -185,7 +198,10 @@ export function useAgent() {
         break;
 
       case "step_error":
-        patchStep(bubbleIdx, event.tool, { status: "error", error: event.error });
+        patchStep(bubbleIdx, event.tool, {
+          status: "error",
+          error: event.error,
+        });
         break;
 
       case "complete":
@@ -202,7 +218,8 @@ export function useAgent() {
     }
   }
 
-  // ── Public: called from App.vue onSend ────────────────
+  // ── Public API ────────────────────────────────────────────────────────────
+
   async function handleAgentMessage(message, scrollToBottom) {
     await pushUserMsg(message, scrollToBottom);
 
@@ -227,7 +244,6 @@ export function useAgent() {
     return true;
   }
 
-  // ── Provide missing params then execute ───────────────
   async function provideMissingParams(values, scrollToBottom) {
     if (!pendingParams.value) return;
     const { plan, userMessage } = pendingParams.value;
@@ -241,5 +257,10 @@ export function useAgent() {
     await executePlan(plan, scrollToBottom, userMessage);
   }
 
-  return { agentRunning, pendingParams, handleAgentMessage, provideMissingParams };
+  return {
+    agentRunning,
+    pendingParams,
+    handleAgentMessage,
+    provideMissingParams,
+  };
 }

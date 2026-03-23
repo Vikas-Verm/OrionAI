@@ -18,5 +18,5 @@
   
   <script setup>
   import { store } from '../../stores/app'
-  const emit = defineEmits(['exportPDF'])
+  const emit = defineEmits(['exportPDF', 'openModule'])
   </script>

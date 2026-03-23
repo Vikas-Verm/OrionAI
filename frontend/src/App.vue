@@ -28,10 +28,11 @@
         <SlackPage     v-else-if="activeModule === 'slack'"     @close="closeModule" />
         <JiraPage      v-else-if="activeModule === 'jira'"      @close="closeModule" />
         <CalendarPage  v-else-if="activeModule === 'calendar' || activeModule === 'google_calendar'" @close="closeModule" />
+        <WhatsAppPage v-else-if="activeModule === 'whatsapp'" @close="closeModule" />
 
         <!-- ── Normal chat view ── -->
         <template v-else>
-          <MainHeader @exportPDF="exportChatPDF" />
+          <MainHeader @exportPDF="exportChatPDF" @openModule="onOpenModuleFromSettings" />
           <div class="split-view">
             <div class="chat-pane">
               <DocPanel />
@@ -54,6 +55,8 @@
         </template>
 
       </div>
+      <!-- Floating notification bell — visible across all views -->
+      <!-- <FloatingNotificationBell @openModule="onOpenModuleFromSettings" /> -->
     </div>
   </div>
 </template>
@@ -65,6 +68,7 @@ import { useSession } from './composables/useSession'
 import { useChat } from './composables/useChat'
 import { useFiles }  from './composables/useFiles'
 import { useAgent }  from './composables/useAgent'
+import { useWebSocket } from './composables/useWebSocket'
 import api from './services/api'
 import html2pdf from 'html2pdf.js'
 
@@ -82,11 +86,15 @@ import ParamPrompt from './components/agent/ParamPrompt.vue'
 
 // Integrations & modules
 import IntegrationsPage from './components/integrations/IntegrationsPage.vue'
+// import FloatingNotificationBell from './components/notification/FloatingNotificationBell.vue'
 import TelegramPage  from './views/TelegramPage.vue'
 import GmailPage     from './views/GmailPage.vue'
 import SlackPage     from './views/SlackPage.vue'
 import JiraPage      from './views/JiraPage.vue'
 import CalendarPage  from './views/CalendarPage.vue'
+import WhatsAppPage from './views/WhatsAppPage.vue'
+
+//Notifications
 
 const isLoggedIn = computed(() => !!store.token && !!store.user)
 
@@ -95,7 +103,7 @@ const { loadSessions, startNewChat, switchSession: _switchSession, deleteSession
 const { sendMessage, regenerate } = useChat()
 const { handleFileSelect, removeAttachment, connectDatabase } = useFiles()
 const { handleAgentMessage, provideMissingParams, pendingParams } = useAgent()
-
+const { start, stop } = useWebSocket()
 // Refs
 const sidebarRef          = ref(null)
 const showingIntegrations = ref(false)
@@ -117,6 +125,12 @@ onMounted(async () => {
   document.addEventListener('orion:open-telegram', (e) => {
     showingIntegrations.value = false
     activeModule.value = 'telegram'
+    console.log(e)
+  })
+
+  document.addEventListener('orion:open-module', (e) => {
+    showingIntegrations.value = false
+    activeModule.value = e.detail?.module || null
   })
 
   if (store.token) {
@@ -129,6 +143,7 @@ onMounted(async () => {
         store.currentSessionId = store.sessions[0].sessionId
         await switchSession(store.currentSessionId)
       }
+      start() 
     } catch { logout() }
   }
 })
@@ -136,6 +151,7 @@ onMounted(async () => {
 onUnmounted(() => {
   document.removeEventListener('keydown', handleKeyboard)
   document.removeEventListener('orion:open-telegram', () => {})
+  stop()
 })
 
 // ── Auth ──────────────────────────────────────────────────
@@ -147,6 +163,7 @@ async function onLoginSuccess() {
     store.currentSessionId = store.sessions[0].sessionId
     await switchSession(store.currentSessionId)
   }
+  start()
 }
 
 function logout() {

@@ -1,16 +1,9 @@
 /**
- * toolSlack.js  (updated — uses user OAuth token, not webhook)
+ * toolSlack.js
+ * 📁 backend/services/tools/toolSlack.js
  *
- * Agent tool: read_slack / send_slack
- *
- * Supported params:
- *   action        — "read" | "send" | "list_channels" | "unread"
- *   channel       — channel name or ID (for send / read)
- *   message       — message text (for send)
- *   limit         — number of messages to fetch (default 10)
- *
- * ctx:
- *   userId        — passed through runAgent context
+ * Fix: resolveChannelId now searches DMs by user display name / real name,
+ * so "Adi", "Rahul", etc. correctly resolve to the DM channel.
  */
 
 const axios = require("axios");
@@ -46,31 +39,6 @@ async function slackPOST(token, method, body = {}) {
   return res.data;
 }
 
-async function resolveChannelId(token, channelName) {
-  const clean = channelName.replace(/^#/, "").toLowerCase();
-
-  // Try all types
-  for (const types of ["public_channel,private_channel", "im,mpim"]) {
-    const data = await slackAPI(token, "conversations.list", {
-      types,
-      limit: 200,
-      exclude_archived: true,
-    }).catch(() => ({ channels: [] }));
-
-    const found = (data.channels || []).find(
-      (ch) =>
-        ch.name?.toLowerCase() === clean ||
-        ch.id?.toLowerCase() === clean.toLowerCase()
-    );
-    if (found) return found.id;
-  }
-
-  // fallback: if it looks like a channel ID already (starts with C, D, G)
-  if (/^[CDGW]/i.test(channelName)) return channelName;
-
-  throw new Error(`Slack channel not found: "${channelName}"`);
-}
-
 async function resolveUserName(token, userId) {
   if (!userId) return "Unknown";
   try {
@@ -86,12 +54,106 @@ async function resolveUserName(token, userId) {
   }
 }
 
-// ── Main tool function ─────────────────────────────────────
+/**
+ * Resolve a channel name / person name / channel ID → Slack channel ID.
+ *
+ * Search order:
+ *   1. Public + private channels by name
+ *   2. DMs by channel name (user ID)
+ *   3. ✅ NEW: DMs by user display_name / real_name (fixes "Adi", "Rahul" etc.)
+ *   4. Fallback: treat as raw channel ID if it starts with C/D/G/W
+ */
+async function resolveChannelId(token, channelName) {
+  const clean = channelName.replace(/^#/, "").toLowerCase().trim();
+
+  // ── Step 1: Search public + private channels by name ──────────────────────
+  try {
+    const data = await slackAPI(token, "conversations.list", {
+      types: "public_channel,private_channel",
+      limit: 200,
+      exclude_archived: true,
+    });
+    const found = (data.channels || []).find(
+      (ch) => ch.name?.toLowerCase() === clean || ch.id?.toLowerCase() === clean
+    );
+    if (found) return found.id;
+  } catch {}
+
+  // ── Step 2: Search DMs by userId match ────────────────────────────────────
+  let dmChannels = [];
+  try {
+    const data = await slackAPI(token, "conversations.list", {
+      types: "im",
+      limit: 200,
+      exclude_archived: true,
+    });
+    dmChannels = data.channels || [];
+
+    const foundDM = dmChannels.find(
+      (ch) => ch.id?.toLowerCase() === clean || ch.user?.toLowerCase() === clean
+    );
+    if (foundDM) return foundDM.id;
+  } catch {}
+
+  // ── Step 3: ✅ Search DMs by user display_name / real_name ───────────────
+  // This is what fixes "Send Hi to Adi" — look up each DM user's profile
+  if (dmChannels.length) {
+    // Fetch all workspace users once
+    try {
+      const usersData = await slackAPI(token, "users.list", { limit: 500 });
+      const users = usersData.members || [];
+
+      // Find user whose name matches the input
+      const matchedUser = users.find((u) => {
+        if (u.deleted || u.is_bot) return false;
+        const displayName = (u.profile?.display_name || "")
+          .toLowerCase()
+          .trim();
+        const realName = (u.profile?.real_name || "").toLowerCase().trim();
+        const name = (u.name || "").toLowerCase().trim();
+        return (
+          displayName === clean ||
+          realName === clean ||
+          name === clean ||
+          displayName.startsWith(clean) ||
+          realName.startsWith(clean) ||
+          // Handle "Adi" matching "Adity" or "Aditya"
+          displayName.split(" ").some((part) => part === clean) ||
+          realName.split(" ").some((part) => part === clean)
+        );
+      });
+
+      if (matchedUser) {
+        // Find the DM channel with this user
+        const dmWithUser = dmChannels.find((ch) => ch.user === matchedUser.id);
+        if (dmWithUser) return dmWithUser.id;
+
+        // No existing DM open — open one
+        const opened = await slackPOST(token, "conversations.open", {
+          users: matchedUser.id,
+        });
+        if (opened.channel?.id) return opened.channel.id;
+      }
+    } catch (err) {
+      console.warn("Slack user search failed:", err.message);
+    }
+  }
+
+  // ── Step 4: Treat as raw channel ID ───────────────────────────────────────
+  if (/^[CDGW]/i.test(channelName)) return channelName;
+
+  throw new Error(
+    `Slack channel/user not found: "${channelName}". ` +
+      `Make sure the name matches a channel or person in your Slack workspace.`
+  );
+}
+
+// ── Main tool function ─────────────────────────────────────────────────────
 async function toolSlack(params, ctx) {
   const { action = "read", channel, message, limit = 10 } = params;
   const token = await getToken(ctx.userId);
 
-  // ── LIST CHANNELS ─────────────────────────
+  // ── LIST CHANNELS ─────────────────────────────────────────────────────────
   if (action === "list_channels") {
     const data = await slackAPI(token, "conversations.list", {
       types: "im,public_channel,private_channel,mpim",
@@ -114,16 +176,13 @@ async function toolSlack(params, ctx) {
     };
   }
 
-  // ── UNREAD ───────────────────────────────
+  // ── UNREAD ────────────────────────────────────────────────────────────────
   if (action === "unread") {
     const data = await slackAPI(token, "conversations.list", {
       types: "im,public_channel,private_channel,mpim",
       limit: 200,
       exclude_archived: true,
     });
-
-    const authData = await slackAPI(token, "auth.test");
-    const myId = authData.user_id;
 
     let totalUnread = 0;
     const unreadChannels = [];
@@ -152,7 +211,7 @@ async function toolSlack(params, ctx) {
     };
   }
 
-  // ── READ MESSAGES ────────────────────────
+  // ── READ MESSAGES ─────────────────────────────────────────────────────────
   if (action === "read") {
     if (!channel) throw new Error("channel param required for read action");
 
@@ -183,7 +242,7 @@ async function toolSlack(params, ctx) {
     };
   }
 
-  // ── SEND MESSAGE ─────────────────────────
+  // ── SEND MESSAGE ──────────────────────────────────────────────────────────
   if (action === "send") {
     if (!channel) throw new Error("channel param required for send action");
     if (!message?.trim())
@@ -210,4 +269,9 @@ async function toolSlack(params, ctx) {
   );
 }
 
-module.exports = { toolSlack };
+// Keep backward compat — old code calls toolSendSlack
+async function toolSendSlack(params, ctx) {
+  return toolSlack({ action: "send", ...params }, ctx);
+}
+
+module.exports = { toolSlack, toolSendSlack };

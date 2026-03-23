@@ -3,7 +3,8 @@ const twilio = require("twilio");
 const { PDFDocument, rgb, StandardFonts } = require("pdf-lib");
 const { chatCompleteNoSystem } = require("./llmService");
 const { SCHEMA_DESCRIPTION, ALLOWED_COLLECTIONS } = require("./dbQueryService");
-const { toolSendSlack } = require("./tools/toolSlack");
+const { toolSlack } = require("./tools/toolSlack");
+const { toolWhatsApp } = require("./tools/toolWhatsapp");
 const {
   toolGetBacklog,
   toolGetOverdueTickets,
@@ -83,6 +84,14 @@ const STATIC_TOOL_REGISTRY = {
   telegram_search_messages: { icon: "🔍", label: "Search Telegram messages" },
   telegram_reply_message: { icon: "↩️", label: "Reply on Telegram" },
   telegram_get_contact_info: { icon: "👤", label: "Get Telegram contact info" },
+  slack_read_messages: { icon: "💬", label: "Read Slack messages" },
+  slack_send_message: { icon: "📤", label: "Send Slack message" },
+  slack_get_unread: { icon: "🔔", label: "Slack unread" },
+  slack_list_channels: { icon: "📋", label: "List Slack channels" },
+  whatsapp_send_message: { icon: "💬", label: "Send WhatsApp" },
+  whatsapp_get_messages: { icon: "💬", label: "Read WhatsApp" },
+  whatsapp_get_unread: { icon: "🔔", label: "WhatsApp unread" },
+  whatsapp_list_chats: { icon: "💬", label: "WhatsApp chats" },
 };
 
 // ── Load Jira + custom tools from DB and merge with static ───────────────────
@@ -128,80 +137,108 @@ function presentStep(toolName, index, TOOL_REGISTRY) {
 }
 // ── Build classifier prompt dynamically from DB skills ───────────────────────
 async function buildClassifierPrompt(userMessage) {
-  let toolLines = [];
-
+  // ── Load all enabled skills from DB grouped by category ─────────────────
+  let skillsByCategory = {};
   try {
-    const skills = await Skill.find({ enabled: true, category: "jira" });
-    toolLines = skills.map((s) => {
-      const exampleOutput =
-        s.promptExample?.output || `{"tool":"${s.toolName}","params":{}}`;
-      const lines = [`- ${s.triggers.join(" / ")} → ${exampleOutput}`];
-      if (s.promptExample?.userSays) {
-        lines.push(`  Example: "${s.promptExample.userSays}"`);
-      }
-      return lines.join("\n");
-    });
+    const skills = await Skill.find({ enabled: true });
+    for (const s of skills) {
+      if (!skillsByCategory[s.category]) skillsByCategory[s.category] = [];
+      skillsByCategory[s.category].push(s);
+    }
   } catch (err) {
     console.error("buildClassifierPrompt DB fetch failed:", err.message);
   }
 
+  // ── Build prompt lines per category ──────────────────────────────────────
+  function buildSkillLines(category) {
+    const skills = skillsByCategory[category] || [];
+    return skills.map((s) => {
+      const out =
+        s.promptExample?.output || `{"tool":"${s.toolName}","params":{}}`;
+      const lines = [`- ${s.triggers.join(" / ")} → ${out}`];
+      if (s.promptExample?.userSays)
+        lines.push(`  Example: "${s.promptExample.userSays}"`);
+      return lines.join("\n");
+    });
+  }
+
+  const jiraLines = buildSkillLines("jira");
+  const slackLines = buildSkillLines("slack");
+  const gmailLines = buildSkillLines("gmail");
+  const telegramLines = buildSkillLines("telegram");
+  const calendarLines = buildSkillLines("calendar");
+
   return [
-    `I need help understanding this user request: "${userMessage}"`,
+    `User request: "${userMessage}"`,
     "",
-    "Is this one of these task types?",
+    "Classify this request and return a JSON plan.",
+    "For multi-step requests (e.g. 'create a Jira ticket AND message Rahul on Slack'),",
+    "include ALL steps in the steps array — they execute sequentially.",
+    "When a Slack/Telegram message should reference a Jira ticket from a previous step,",
+    "use {{ticketKey}} in the message param — it will be replaced automatically.",
     "",
-    "TYPE A — DOCUMENT DELIVERY: user wants to send, email, share, or dispatch a business document to a person.",
-    "TYPE B — JIRA TASK: user mentions Jira, tickets, backlog, sprint, overdue, due dates, tasks, bugs, assignee.",
+
+    // ── TYPE A: Document Delivery ──────────────────────────────────────────
+    "TYPE A — DOCUMENT DELIVERY: user wants to send/email/share a business document.",
+    "Collections: invoice→Invoices | bill→Bills | PO→PurchaseOrders | CN→CreditNotes | DN→DebitNotes | payment→PaymentRequests | POD→ProofOfDeliveries",
+    'Format: {"isAgentTask":true,"confidence":0.95,"intent":"...","steps":[{"tool":"fetch_document","params":{"collection":"Invoices","identifier":"INV-001","identifierField":"number","fallbackToLatest":false}},{"tool":"generate_pdf","params":{}},{"tool":"send_email","params":{"to":"email@example.com"}}]}',
+    "Use fallbackToLatest:true when user says latest/recent/last.",
     "",
-    "Document collections: invoice→Invoices | bill→Bills | PO→PurchaseOrders | CN→CreditNotes | DN→DebitNotes | payment→PaymentRequests | POD→ProofOfDeliveries",
+
+    // ── TYPE B: Jira ───────────────────────────────────────────────────────
+    "TYPE B — JIRA: user mentions Jira, tickets, backlog, sprint, overdue, bugs, assignee.",
+    ...jiraLines,
+    'Format: {"isAgentTask":true,"confidence":0.93,"intent":"...","steps":[{"tool":"TOOL_NAME","params":{...}}]}',
+    "Always embed assigneeName inside jira_create_ticket params — never use a separate jira_assign_ticket step.",
     "",
-    "If TYPE A — respond with:",
-    '{"isAgentTask":true,"confidence":0.95,"intent":"brief description","steps":[{"tool":"fetch_document","params":{"collection":"Invoices","identifier":"INV-001","identifierField":"number","fallbackToLatest":false}},{"tool":"generate_pdf","params":{}},{"tool":"send_email","params":{"to":"email@example.com","subject":"Invoice"}}]}',
-    "Use fallbackToLatest:true when user says latest/recent/last. Use empty string for to if no recipient.",
+
+    // ── TYPE C: Gmail ──────────────────────────────────────────────────────
+    "TYPE C — GMAIL:",
+    ...gmailLines,
+    "- check inbox / show emails → gmail_get_inbox {maxResults:10}",
+    "- show unread emails → gmail_get_inbox {unreadOnly:true,maxResults:10}",
+    "- reply to email → chain gmail_get_email then gmail_reply_email",
+    'Format: {"isAgentTask":true,"confidence":0.93,"intent":"...","steps":[{"tool":"gmail_get_inbox","params":{"maxResults":10}}]}',
     "",
-    "If TYPE B — Jira, pick the right tool:",
-    ...toolLines,
+
+    // ── TYPE D: Calendar ───────────────────────────────────────────────────
+    "TYPE D — GOOGLE CALENDAR:",
+    ...calendarLines,
+    "- find events on date Y → calendar_get_events {dateFrom:'YYYY-MM-DD'}",
+    "- reschedule/update event X → calendar_update {title:'X', startDateTime}",
+    "- delete/cancel event X → calendar_delete {title:'X'}",
+    "- check pending invites → calendar_get_invites",
+    "- accept/decline invite X → calendar_respond {title:'X', response:'accept'|'decline'|'tentative'}",
+    'Format: {"isAgentTask":true,"confidence":0.93,"intent":"...","steps":[{"tool":"calendar_get_today","params":{}}]}',
     "",
-    'Jira response format: {"isAgentTask":true,"confidence":0.93,"intent":"brief description","steps":[{"tool":"TOOL_NAME","params":{...}}]}',
-    "IMPORTANT: Always put assigneeName inside jira_create_ticket params, never as a separate jira_assign_ticket step.",
+
+    // ── TYPE E: Telegram ───────────────────────────────────────────────────
+    "TYPE E — TELEGRAM:",
+    ...telegramLines,
+    "- search telegram for X → telegram_search_messages {query:'X'}",
+    "- who is X on telegram → telegram_get_contact_info {contact:'X'}",
+    'Format: {"isAgentTask":true,"confidence":0.93,"intent":"...","steps":[{"tool":"telegram_get_messages","params":{"contact":"Rahul","limit":20}}]}',
     "",
+
+    // ── TYPE F: Slack ──────────────────────────────────────────────────────
+    "TYPE F — SLACK:",
+    ...slackLines,
+    "NOTE: For slack_send_message, 'channel' can be a person name (DM), a channel name like 'general', or a channel ID.",
+    "NOTE: When sending to a person by name (e.g. 'Adi', 'Rahul'), set channel to their first name in lowercase.",
     "",
-    "If TYPE C — GMAIL (user wants to read/check/search/send/reply to emails):",
-    "- check inbox / show emails / what's in my inbox → gmail_get_inbox with params {maxResults:10}",
-    "- show unread emails → gmail_get_inbox with params {unreadOnly:true,maxResults:10}",
-    '- search emails from X / find emails about Y → gmail_search_emails with params {query:"from:X" or "subject:Y"}',
-    '- open / read / show email about X → gmail_get_email with params {subject:"X"}',
-    "- summarize email / summarize thread → chain: gmail_get_email then gmail_summarize_thread",
-    '- send email to X about Y → gmail_send_email with params {to:"email@x.com",subject:"Y",body:"..."}',
-    "- reply to email / respond to email → chain: gmail_get_email then gmail_reply_email",
-    'Gmail format: {"isAgentTask":true,"confidence":0.93,"intent":"..","steps":[{"tool":"gmail_get_inbox","params":{"maxResults":10}}]}',
+    "MULTI-AGENT EXAMPLES (combine steps freely across types):",
+    "- 'create a bug ticket for GST issue and message Rahul on slack about it'",
+    '  → [{"tool":"jira_create_ticket","params":{"title":"GST setting issue","issueType":"Bug"}},{"tool":"slack_send_message","params":{"channel":"rahul","message":"Bug ticket {{ticketKey}} created for GST setting issue."}}]',
+    "- 'check my unread slack and telegram messages'",
+    '  → [{"tool":"slack_get_unread","params":{}},{"tool":"telegram_get_unread","params":{}}]',
+    "- 'send latest invoice to client and notify #billing on slack'",
+    '  → [{"tool":"fetch_document","params":{"collection":"Invoices","fallbackToLatest":true}},{"tool":"generate_pdf","params":{}},{"tool":"send_email","params":{"to":"client@example.com"}},{"tool":"slack_send_message","params":{"channel":"billing","message":"Invoice sent to client ✅"}}]',
     "",
-    "If TYPE D — GOOGLE CALENDAR (user wants to check/create/update/delete events or invites):",
-    "- what's on my calendar / show today's events → calendar_get_today",
-    "- show this week / what do I have this week → calendar_get_week",
-    "- find events about X / events on date Y → calendar_get_events with params {query:'X'} or {dateFrom:'YYYY-MM-DD'}",
-    "- schedule / create / add meeting → calendar_create with params {title, startDateTime (ISO8601), durationMinutes, attendees:['email@x.com'], addMeet:false}",
-    "- reschedule / update event X → calendar_update with params {title:'X', startDateTime}",
-    "- delete / cancel event X → calendar_delete with params {title:'X'}",
-    "- check pending invites / RSVPs → calendar_get_invites",
-    "- accept / decline / maybe invite X → calendar_respond with params {title:'X', response:'accept'|'decline'|'tentative'}",
-    'Calendar format: {"isAgentTask":true,"confidence":0.93,"intent":"..","steps":[{"tool":"calendar_create","params":{"title":"Meeting","startDateTime":"2026-03-11T10:00:00+05:30","durationMinutes":30}}]}',
+
+    // ── Not an agent task ──────────────────────────────────────────────────
+    'If NONE of the above (general questions, coding, analytics, casual chat): {"isAgentTask":false,"confidence":0.95,"intent":"","steps":[]}',
     "",
-    'If NEITHER (general questions, coding, analytics, casual chat): {"isAgentTask":false,"confidence":0.95,"intent":"","steps":[]}',
-    "",
-    "",
-    "If TYPE E — TELEGRAM (user wants to read, search, send, reply to Telegram messages):",
-    "- show telegram messages / what did X say on telegram → telegram_get_messages with params {contact:'X', limit:20}",
-    "- list telegram chats / who messaged me on telegram → telegram_list_chats",
-    "- send telegram message to X → telegram_send_message with params {contact:'X', message:'...'}",
-    "- show unread / what are my unread telegram messages → telegram_get_unread with params {limit:10}",
-    "- search telegram for X / find messages about X in telegram → telegram_search_messages with params {query:'X'}",
-    "- search for X in chat with Y / find X in telegram conversation with Y → telegram_search_messages with params {query:'X', contact:'Y'}",
-    "- reply to X on telegram / respond to X → telegram_reply_message with params {contact:'X', message:'...'}",
-    "- who is X on telegram / get info about X on telegram → telegram_get_contact_info with params {contact:'X'}",
-    'Telegram format: {"isAgentTask":true,"confidence":0.93,"intent":"..","steps":[{"tool":"telegram_get_messages","params":{"contact":"Rahul","limit":20}}]}',
-    "",
-    "Respond with ONLY the JSON object, nothing else.",
+    "Respond with ONLY valid JSON. No markdown, no explanation.",
   ].join("\n");
 }
 
@@ -874,7 +911,7 @@ async function runAgent(steps, db, onProgress, userId) {
           break;
 
         case "send_slack":
-          result = await toolSendSlack(params, ctx);
+          result = await toolSlack(params, ctx);
           break;
 
         // ── Jira: read tools ────────────────────────────────────────
@@ -956,7 +993,7 @@ async function runAgent(steps, db, onProgress, userId) {
           for (const n of result.notifications || []) {
             if (n.channels.includes("slack") && n.slackChannel) {
               try {
-                await toolSendSlack(
+                await toolSlack(
                   { channel: n.slackChannel, message: n.slackBody },
                   ctx
                 );
@@ -1074,6 +1111,53 @@ async function runAgent(steps, db, onProgress, userId) {
           break;
         case "telegram_get_contact_info":
           result = await toolTelegramGetContactInfo(params, ctx);
+          break;
+        case "slack_read_messages":
+          result = await toolSlack(
+            {
+              action: "read",
+              channel: params.channel,
+              limit: params.limit || 20,
+            },
+            ctx
+          );
+          break;
+
+        case "slack_send_message":
+          result = await toolSlack(
+            {
+              action: "send",
+              channel: params.channel,
+              message: params.message,
+            },
+            ctx
+          );
+          break;
+
+        case "slack_get_unread":
+          result = await toolSlack({ action: "unread" }, ctx);
+          break;
+
+        case "slack_list_channels":
+          result = await toolSlack({ action: "list_channels" }, ctx);
+          break;
+        case "whatsapp_send_message":
+          result = await toolWhatsApp({ action: "send", ...params }, ctx);
+          break;
+
+        case "whatsapp_get_messages":
+          result = await toolWhatsApp(
+            { action: "get_messages", ...params },
+            ctx
+          );
+          break;
+
+        case "whatsapp_get_unread":
+          result = await toolWhatsApp({ action: "get_unread", ...params }, ctx);
+          break;
+
+        case "whatsapp_list_chats":
+          result = await toolWhatsApp({ action: "list_chats", ...params }, ctx);
           break;
         default:
           throw new Error(`Unknown tool: "${tool}"`);

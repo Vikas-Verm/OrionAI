@@ -20,6 +20,8 @@ const skillSchema = new mongoose.Schema({
       "calendar",
       "gmail",
       "custom",
+      "whatsapp",
+      "notifications",
     ],
     default: "custom",
   },
