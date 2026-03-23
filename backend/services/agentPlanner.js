@@ -10,6 +10,7 @@
 
 const Skill = require("../models/skill");
 const { chatCompleteNoSystem } = require("./llmService");
+const { getMemoryContext } = require("./memoryService");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Load all enabled tools from Skill DB
@@ -51,16 +52,16 @@ function formatTools(tools) {
 // ─────────────────────────────────────────────────────────────────────────────
 // PARSE AGENT INTENT
 // ─────────────────────────────────────────────────────────────────────────────
-async function parseAgentIntent(userMessage, history = []) {
+async function parseAgentIntent(userMessage, history = [], userId = null) {
   try {
     const tools = await loadToolsFromDB();
     const toolsText = formatTools(tools);
     const now = new Date();
     const today = now.toISOString().split("T")[0]; // YYYY-MM-DD
     const dayName = now.toLocaleDateString("en-US", { weekday: "long" });
-
+    const memoryCtx = userId ? await getMemoryContext(userId).catch(() => "") : "";
     const prompt = [
-      `You are an AI agent planner. Analyze the user request and decide which tools to call.`,
+      `You are an AI agent planner.${memoryCtx ? `\n${memoryCtx}\n` : ""} Analyze the user request and decide which tools to call.`,
       ``,
       `Current date: ${today} (${dayName}, IST timezone UTC+05:30)`,
       ``,

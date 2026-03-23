@@ -206,7 +206,7 @@ function extractRichTickets(tool, result) {
 async function parseIntent(req, res) {
   try {
     const { message, history = [] } = req.body;
-    const plan = await parseAgentIntent(message, history);
+    const plan = await parseAgentIntent(message, history, req.user?.username);
     console.log("Parsed agent intent:", plan);
     res.json(plan);
   } catch (err) {
@@ -543,7 +543,25 @@ async function runPlan(req, res) {
               whatsappMessage: r.result?.message || null,
             };
           });
-
+        try {
+          const {
+            extractAndSaveFacts,
+            saveRecentContext,
+          } = require("../services/memoryService");
+          await extractAndSaveFacts(
+            userId,
+            req.body.userMessage || "",
+            results
+          );
+          for (const r of results.filter((r) => r.status === "done")) {
+            await saveRecentContext(
+              userId,
+              r.tool,
+              stepSummary(r.tool, r.result),
+              {}
+            );
+          }
+        } catch {}
         await Conversation.findOneAndUpdate(
           { sessionId, userId },
           {

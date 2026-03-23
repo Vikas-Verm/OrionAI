@@ -3,31 +3,27 @@
     <LoginScreen v-if="!isLoggedIn" @success="onLoginSuccess" />
 
     <div v-else class="app">
-      <Sidebar ref="sidebarRef"
-        :activeView="activeModule || (showingIntegrations ? 'settings' : 'agent')"
+      <OnboardingFlow ref="onboardingRef" @done="() => { }" @openIntegrations="onOpenIntegrations"
+        @runCommand="onOnboardingCommand" />
+      <Sidebar ref="sidebarRef" :activeView="activeModule || (showingIntegrations ? 'settings' : 'agent')"
         :showingIntegrations="showingIntegrations"
         @newChat="() => { activeModule = null; showingIntegrations = false; startNewChat() }"
-        @switchSession="switchSession"
-        @deleteSession="deleteSession"
-        @logout="logout"
-        @openIntegrations="onOpenIntegrations"
-        @openIntegration="onOpenIntegration" />
+        @switchSession="switchSession" @deleteSession="deleteSession" @logout="logout"
+        @openIntegrations="onOpenIntegrations" @openIntegration="onOpenIntegration" />
 
       <div class="main">
 
         <!-- ── Integration settings (inside main, sidebar stays visible) ── -->
-        <IntegrationsPage
-          v-if="showingIntegrations"
-          @close="showingIntegrations = false; activeModule = null"
-          @connected="sidebarRef?.refreshConnected?.()"
-          @openModule="onOpenModuleFromSettings" />
+        <IntegrationsPage v-if="showingIntegrations" @close="showingIntegrations = false; activeModule = null"
+          @connected="sidebarRef?.refreshConnected?.()" @openModule="onOpenModuleFromSettings" />
 
         <!-- ── Module pages (inside main, sidebar stays visible) ── -->
-        <TelegramPage  v-else-if="activeModule === 'telegram'"  @close="closeModule" />
-        <GmailPage     v-else-if="activeModule === 'gmail'"     @close="closeModule" />
-        <SlackPage     v-else-if="activeModule === 'slack'"     @close="closeModule" />
-        <JiraPage      v-else-if="activeModule === 'jira'"      @close="closeModule" />
-        <CalendarPage  v-else-if="activeModule === 'calendar' || activeModule === 'google_calendar'" @close="closeModule" />
+        <TelegramPage v-else-if="activeModule === 'telegram'" @close="closeModule" />
+        <GmailPage v-else-if="activeModule === 'gmail'" @close="closeModule" />
+        <SlackPage v-else-if="activeModule === 'slack'" @close="closeModule" />
+        <JiraPage v-else-if="activeModule === 'jira'" @close="closeModule" />
+        <CalendarPage v-else-if="activeModule === 'calendar' || activeModule === 'google_calendar'"
+          @close="closeModule" />
         <WhatsAppPage v-else-if="activeModule === 'whatsapp'" @close="closeModule" />
 
         <!-- ── Normal chat view ── -->
@@ -36,18 +32,10 @@
           <div class="split-view">
             <div class="chat-pane">
               <DocPanel />
-              <MessageList ref="messageListRef"
-                @usePrompt="usePrompt"
-                @regenerate="onRegenerate" />
-              <InputArea ref="inputAreaRef"
-                @send="onSend"
-                @upload="onUpload"
-                @removeFile="removeAttachment"
+              <MessageList ref="messageListRef" @usePrompt="usePrompt" @regenerate="onRegenerate" />
+              <InputArea ref="inputAreaRef" @send="onSend" @upload="onUpload" @removeFile="removeAttachment"
                 @connectDB="connectDatabase" />
-              <ParamPrompt
-                v-if="pendingParams"
-                :pending="pendingParams"
-                @submit="onAgentParamsSubmit"
+              <ParamPrompt v-if="pendingParams" :pending="pendingParams" @submit="onAgentParamsSubmit"
                 @cancel="pendingParams = null" />
             </div>
             <CanvasPane />
@@ -66,32 +54,33 @@ import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { store, clearAuth, setMode } from './stores/app'
 import { useSession } from './composables/useSession'
 import { useChat } from './composables/useChat'
-import { useFiles }  from './composables/useFiles'
-import { useAgent }  from './composables/useAgent'
+import { useFiles } from './composables/useFiles'
+import { useAgent } from './composables/useAgent'
 import { useWebSocket } from './composables/useWebSocket'
 import api from './services/api'
 import html2pdf from 'html2pdf.js'
 
 // Layout
 import LoginScreen from './components/auth/LoginScreen.vue'
-import Sidebar     from './components/layout/MainSidebar.vue'
-import MainHeader  from './components/layout/MainHeader.vue'
+import Sidebar from './components/layout/MainSidebar.vue'
+import MainHeader from './components/layout/MainHeader.vue'
 
 // Chat
 import MessageList from './components/chat/MessageList.vue'
-import InputArea   from './components/input/InputArea.vue'
-import DocPanel    from './components/rag/DocPanel.vue'
-import CanvasPane  from './components/canvas/CanvasPane.vue'
+import InputArea from './components/input/InputArea.vue'
+import DocPanel from './components/rag/DocPanel.vue'
+import CanvasPane from './components/canvas/CanvasPane.vue'
 import ParamPrompt from './components/agent/ParamPrompt.vue'
+import OnboardingFlow from './components/onboarding/OnboardingFlow.vue'
 
 // Integrations & modules
 import IntegrationsPage from './components/integrations/IntegrationsPage.vue'
 // import FloatingNotificationBell from './components/notification/FloatingNotificationBell.vue'
-import TelegramPage  from './views/TelegramPage.vue'
-import GmailPage     from './views/GmailPage.vue'
-import SlackPage     from './views/SlackPage.vue'
-import JiraPage      from './views/JiraPage.vue'
-import CalendarPage  from './views/CalendarPage.vue'
+import TelegramPage from './views/TelegramPage.vue'
+import GmailPage from './views/GmailPage.vue'
+import SlackPage from './views/SlackPage.vue'
+import JiraPage from './views/JiraPage.vue'
+import CalendarPage from './views/CalendarPage.vue'
 import WhatsAppPage from './views/WhatsAppPage.vue'
 
 //Notifications
@@ -105,11 +94,12 @@ const { handleFileSelect, removeAttachment, connectDatabase } = useFiles()
 const { handleAgentMessage, provideMissingParams, pendingParams } = useAgent()
 const { start, stop } = useWebSocket()
 // Refs
-const sidebarRef          = ref(null)
+const sidebarRef = ref(null)
 const showingIntegrations = ref(false)
-const activeModule        = ref(null)   // null | 'telegram' | 'gmail' | 'slack' | 'jira' | 'calendar'
-const messageListRef      = ref(null)
-const inputAreaRef        = ref(null)
+const activeModule = ref(null)   // null | 'telegram' | 'gmail' | 'slack' | 'jira' | 'calendar'
+const messageListRef = ref(null)
+const inputAreaRef = ref(null)
+const onboardingRef = ref(null)
 
 // ── Init ──────────────────────────────────────────────────
 onMounted(async () => {
@@ -143,14 +133,14 @@ onMounted(async () => {
         store.currentSessionId = store.sessions[0].sessionId
         await switchSession(store.currentSessionId)
       }
-      start() 
+      start()
     } catch { logout() }
   }
 })
 
 onUnmounted(() => {
   document.removeEventListener('keydown', handleKeyboard)
-  document.removeEventListener('orion:open-telegram', () => {})
+  document.removeEventListener('orion:open-telegram', () => { })
   stop()
 })
 
@@ -194,7 +184,7 @@ function closeModule() {
 
 // ── Session ───────────────────────────────────────────────
 async function switchSession(sessionId) {
-  activeModule.value        = null   // ← close any open module
+  activeModule.value = null   // ← close any open module
   showingIntegrations.value = false  // ← close settings too
   await _switchSession(sessionId)
   await nextTick()
@@ -271,25 +261,43 @@ async function exportChatPDF() {
   content.innerHTML = `
     <div style="border-bottom:2px solid #6366f1;padding-bottom:16px;margin-bottom:24px;">
       <h1 style="margin:0;font-size:20px;">🔭 OrionAI</h1>
-      <p style="margin:4px 0 0;color:#666;font-size:13px;">${title} · Exported ${new Date().toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' })}</p>
+      <p style="margin:4px 0 0;color:#666;font-size:13px;">${title} · Exported ${new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</p>
     </div>
     ${store.messages.map(m => `
       <div style="margin-bottom:20px;">
-        <div style="font-size:11px;font-weight:600;color:${m.role==='user'?'#6366f1':'#666'};text-transform:uppercase;margin-bottom:6px;">
+        <div style="font-size:11px;font-weight:600;color:${m.role === 'user' ? '#6366f1' : '#666'};text-transform:uppercase;margin-bottom:6px;">
           ${m.role === 'user' ? '👤 You' : '🔭 OrionAI'}
         </div>
-        <div style="background:${m.role==='user'?'#f0f4ff':'#f8f8f8'};border-radius:8px;padding:12px 16px;font-size:13px;line-height:1.7;white-space:pre-wrap;">
-          ${m.content.replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+        <div style="background:${m.role === 'user' ? '#f0f4ff' : '#f8f8f8'};border-radius:8px;padding:12px 16px;font-size:13px;line-height:1.7;white-space:pre-wrap;">
+          ${m.content.replace(/</g, '&lt;').replace(/>/g, '&gt;')}
         </div>
       </div>`).join('')}`
 
   await html2pdf().set({
     margin: [10, 10],
-    filename: `${title.replace(/[^a-z0-9]/gi,'_')}_${Date.now()}.pdf`,
+    filename: `${title.replace(/[^a-z0-9]/gi, '_')}_${Date.now()}.pdf`,
     image: { type: 'jpeg', quality: 0.98 },
     html2canvas: { scale: 2, useCORS: true },
     jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
   }).from(content).save()
+}
+
+function onOnboardingCommand(command) {
+  // Close any open modules, go to chat
+  activeModule.value = null
+  showingIntegrations.value = false
+
+  // Wait for next tick then fire the command in agent mode
+  nextTick(() => {
+    inputAreaRef.value?.setMode?.('agent')
+    inputAreaRef.value?.setTextAndSend?.(command)
+      // Fallback if setTextAndSend not available — just prefill
+      || (inputAreaRef.value?.setText?.(command))
+  })
+}
+
+function showOnboarding() {
+  onboardingRef.value?.show()
 }
 </script>
 
@@ -300,6 +308,7 @@ async function exportChatPDF() {
   overflow: hidden;
   background: var(--bg-base);
 }
+
 .main {
   flex: 1;
   display: flex;
@@ -307,12 +316,14 @@ async function exportChatPDF() {
   overflow: hidden;
   min-width: 0;
 }
+
 .split-view {
   flex: 1;
   display: flex;
   overflow: hidden;
   min-height: 0;
 }
+
 .chat-pane {
   flex: 1;
   display: flex;

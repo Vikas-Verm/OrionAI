@@ -1,4 +1,8 @@
 const mongoose = require("mongoose");
+const {
+  encryptIntegration,
+  decryptIntegration,
+} = require("../services/tokenEncryption");
 
 const integrationSchema = new mongoose.Schema({
   userId: { type: String, required: true, index: true },
@@ -99,10 +103,67 @@ const integrationSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now },
 });
 
+// ── Helper: decrypt a single integration document in-place ───────────────
+function decryptDoc(doc) {
+  if (!doc || !doc.type) return;
+  const type = doc.type;
+  if (doc[type] && typeof doc[type] === "object") {
+    const decrypted = decryptIntegration(
+      type,
+      doc[type].toObject ? doc[type].toObject() : doc[type]
+    );
+    Object.assign(doc[type], decrypted);
+  }
+}
+
+// ── pre save: encrypt before writing ─────────────────────────────────────
+integrationSchema.pre("save", function (next) {
+  const type = this.type;
+  if (this[type] && typeof this[type] === "object") {
+    const encrypted = encryptIntegration(
+      type,
+      this[type].toObject ? this[type].toObject() : this[type]
+    );
+    Object.assign(this[type], encrypted);
+  }
+  next();
+});
+
+// ── pre findOneAndUpdate: encrypt fields being updated ────────────────────
+integrationSchema.pre("findOneAndUpdate", function (next) {
+  const update = this.getUpdate();
+  const set = update?.$set || {};
+
+  // Find any integration type fields being updated (e.g. "gmail.accessToken")
+  for (const key of Object.keys(set)) {
+    const parts = key.split(".");
+    if (parts.length === 2) {
+      const [type, field] = parts;
+      const { SENSITIVE_FIELDS } = require("../services/tokenEncryption");
+      const { encrypt } = require("../services/tokenEncryption");
+      if (SENSITIVE_FIELDS[type]?.includes(field) && set[key]) {
+        set[key] = encrypt(set[key]);
+      }
+    }
+  }
+  next();
+});
 integrationSchema.index({ userId: 1, type: 1 }, { unique: true });
 
 integrationSchema.pre("save", function () {
   this.updatedAt = new Date();
 });
 
+// ── post find: decrypt after reading ─────────────────────────────────────
+integrationSchema.post("find", function (docs) {
+  if (Array.isArray(docs)) docs.forEach(decryptDoc);
+});
+
+integrationSchema.post("findOne", function (doc) {
+  if (doc) decryptDoc(doc);
+});
+
+integrationSchema.post("findOneAndUpdate", function (doc) {
+  if (doc) decryptDoc(doc);
+});
 module.exports = mongoose.model("Integration", integrationSchema);

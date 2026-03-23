@@ -66,7 +66,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, nextTick } from 'vue'  // ← added nextTick
 import { store, inputPlaceholder, setMode, toggleWebMode } from '../../stores/app'
 import { useVoice } from '../../composables/useVoice'
 import FileChips from './FileChips.vue'
@@ -74,8 +74,8 @@ import AttachMenu from './AttachMenu.vue'
 
 const emit = defineEmits(['send', 'upload', 'removeFile', 'connectDB'])
 
-const input       = ref('')
-const textareaRef = ref(null)
+const input         = ref('')
+const textareaRef   = ref(null)
 const attachMenuRef = ref(null)
 
 const { isRecording, toggleVoice } = useVoice((transcript) => {
@@ -100,5 +100,28 @@ function autoResize() {
 function closeMenus() { attachMenuRef.value?.closeMenu() }
 function focusInput()  { textareaRef.value?.focus() }
 
-defineExpose({ closeMenus, focusInput })
+// ── Called by OnboardingFlow when user picks a demo command ─────────────────
+// Switches to agent mode, fills input, and sends — all in one call
+function setTextAndSend(text) {
+  setMode('agent')               // ← switch to agent mode first
+  store.webMode = false
+  input.value = text             // ← fill the textarea
+  nextTick(() => {
+    autoResize()                 // ← resize textarea to fit text
+    onSend()                     // ← send it
+  })
+}
+
+// ── setText without sending — just pre-fills the input ─────────────────────
+function setText(text) {
+  setMode('agent')
+  store.webMode = false
+  input.value = text
+  nextTick(() => {
+    autoResize()
+    textareaRef.value?.focus()
+  })
+}
+
+defineExpose({ closeMenus, focusInput, setTextAndSend, setText })
 </script>

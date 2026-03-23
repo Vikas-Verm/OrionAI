@@ -391,7 +391,7 @@ async function checkSlack(userId, isFirstRun) {
 // ─────────────────────────────────────────────────────────────────────────────
 async function checkWhatsApp(userId) {
   try {
-    const { whatsappGetUnread } = require("./tools/toolWhatsApp");
+    const { whatsappGetUnread } = require("./tools/toolWhatsapp");
     const result = await whatsappGetUnread({}, { userId });
     if (!result) return null;
     return {
