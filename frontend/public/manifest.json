@@ -1,0 +1,41 @@
+{
+    "name": "OrionAI",
+    "short_name": "OrionAI",
+    "description": "Your AI chief of staff — one command across every app",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#0a0a14",
+    "theme_color": "#6366f1",
+    "orientation": "portrait-primary",
+    "icons": [
+      {
+        "src": "/web-app-manifest-192x192.png",
+        "sizes": "192x192",
+        "type": "image/png",
+        "purpose": "any maskable"
+      },
+      {
+        "src": "/web-app-manifest-512x512.png",
+        "sizes": "512x512",
+        "type": "image/png",
+        "purpose": "any maskable"
+      }
+    ],
+    "categories": ["productivity", "business", "utilities"],
+    "shortcuts": [
+      {
+        "name": "Morning Briefing",
+        "short_name": "Briefing",
+        "description": "Get your daily briefing",
+        "url": "/?cmd=morning+briefing",
+        "icons": [{ "src": "/web-app-manifest-192x192.png", "sizes": "192x192" }]
+      },
+      {
+        "name": "New Chat",
+        "short_name": "Chat",
+        "description": "Start a new conversation",
+        "url": "/?new=1",
+        "icons": [{ "src": "/web-app-manifest-512x512.png", "sizes": "192x192" }]
+      }
+    ]
+  }

@@ -34,6 +34,8 @@ const {
   handleGmailWebhook,
   handleSlackWebhook,
 } = require("./services/websocketServer");
+const googleAuthRoutes = require("./routes/googleAuthRoutes");
+const healthRoutes = require("./routes/healthRoutes");
 
 const app = express();
 
@@ -85,7 +87,8 @@ app.post("/api/webhooks/slack", handleSlackWebhook);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/whatsapp", whatsappRoutes);
 app.use("/api/automations", automationRoutes);
-
+app.use("/auth/google", googleAuthRoutes);
+app.use("/api/health", authenticate, healthRoutes);
 app.get("/debug/gmail", async (req, res) => {
   const userId = req.user?.username;
   const mongoose = require("mongoose");

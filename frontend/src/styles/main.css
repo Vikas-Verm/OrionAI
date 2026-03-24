@@ -4,7 +4,7 @@
    ═══════════════════════════════════════════════════════════ */
 
    @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=IBM+Plex+Mono:wght@400;500&family=Geist:wght@300;400;500;600&display=swap');
-
+@import './mobile.css';
    /* ── CSS Variables ───────────────────────────────────────── */
    
    :root {
@@ -1278,3 +1278,5 @@
   flex-direction: column;
   overflow: hidden;
 }
+
+

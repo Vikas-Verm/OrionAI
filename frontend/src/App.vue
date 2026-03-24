@@ -1,7 +1,6 @@
 <template>
   <div>
     <LoginScreen v-if="!isLoggedIn" @success="onLoginSuccess" />
-
     <div v-else class="app">
       <OnboardingFlow ref="onboardingRef" @done="() => { }" @openIntegrations="onOpenIntegrations"
         @runCommand="onOnboardingCommand" />
@@ -10,6 +9,7 @@
         @newChat="() => { activeModule = null; showingIntegrations = false; startNewChat() }"
         @switchSession="switchSession" @deleteSession="deleteSession" @logout="logout"
         @openIntegrations="onOpenIntegrations" @openIntegration="onOpenIntegration" />
+       
 
       <div class="main">
 
@@ -43,6 +43,7 @@
         </template>
 
       </div>
+      <AgentConfirmModal ref="confirmRef" />
       <!-- Floating notification bell — visible across all views -->
       <!-- <FloatingNotificationBell @openModule="onOpenModuleFromSettings" /> -->
     </div>
@@ -83,6 +84,7 @@ import JiraPage from './views/JiraPage.vue'
 import CalendarPage from './views/CalendarPage.vue'
 import WhatsAppPage from './views/WhatsAppPage.vue'
 
+import AgentConfirmModal from './components/agent/AgentConfirmModal.vue'
 //Notifications
 
 const isLoggedIn = computed(() => !!store.token && !!store.user)
@@ -296,9 +298,9 @@ function onOnboardingCommand(command) {
   })
 }
 
-function showOnboarding() {
-  onboardingRef.value?.show()
-}
+// function showOnboarding() {
+//   onboardingRef.value?.show()
+// }
 </script>
 
 <style>

@@ -16,6 +16,7 @@ export default defineConfig({
     open: true,
     allowedHosts: [
       "bedroom-assets-maritime-gate.trycloudflare.com", // ← add this
+      "knee-womens-mailed-expansys.trycloudflare.com",
     ],
   },
 });

@@ -1,4 +1,4 @@
-const Conversation = require("../models/Conversation");
+const Conversation = require("../models/conversation");
 
 async function loadConversation(sessionId) {
   const conversation = await Conversation.findOne({

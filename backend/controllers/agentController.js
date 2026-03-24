@@ -1,5 +1,5 @@
 const mongoose = require("mongoose");
-const Conversation = require("../models/Conversation");
+const Conversation = require("../models/conversation");
 const { runAgent, loadToolRegistry } = require("../services/agentService");
 const { parseAgentIntent } = require("../services/agentPlanner");
 const { orchestrate } = require("../services/multiAgentOrchestrator");

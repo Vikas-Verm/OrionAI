@@ -1,0 +1,19 @@
+@media (max-width: 768px) {
+    .app { flex-direction: column; }
+    .sidebar { width: 100% !important; height: auto; flex-direction: row; overflow-x: auto; }
+    .main { flex: 1; overflow: hidden; }
+   
+    .input-area { padding: 8px 12px 20px; }
+    .input-box  { border-radius: 16px; }
+    textarea    { font-size: 16px !important; } 
+   
+    .mode-bar   { overflow-x: auto; scrollbar-width: none; gap: 6px; padding: 0 0 8px; }
+    .mode-pill  { flex-shrink: 0; padding: 6px 14px; font-size: 12.5px; }
+   
+    .gm-root, .sl-root { flex-direction: column; }
+    .gm-sidebar, .sl-sidebar { width: 100% !important; height: auto; }
+    .gm-list-pane { width: 100% !important; }
+    .gm-detail { display: none; } 
+   
+    .input-area { padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
+  }

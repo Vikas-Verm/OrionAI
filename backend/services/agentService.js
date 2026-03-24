@@ -50,7 +50,8 @@ const {
   toolTelegramGetContactInfo,
 } = require("./tools/toolTelegram");
 const Skill = require("../models/skill");
-
+const { checkNeedsConfirmation } = require("./confirmationService");
+const { withRetry } = require("./retryHelper");
 // ─────────────────────────────────────────────────────────────────────────────
 // TOOL_REGISTRY — static entries for non-Jira tools (document, email etc.)
 // Jira tools are loaded dynamically from DB via loadToolRegistry()
@@ -248,10 +249,9 @@ async function buildClassifierPrompt(userMessage) {
 async function parseAgentIntent(userMessage, history = []) {
   try {
     const classifierMessage = await buildClassifierPrompt(userMessage);
-    const responseText = await chatCompleteNoSystem(
-      classifierMessage,
-      512,
-      0.1
+    const responseText = await withRetry(
+      () => chatCompleteNoSystem(classifierMessage, 512, 0.1),
+      { label: "LLM classification" }
     );
     const clean = responseText
       .replace(/```json/g, "")
@@ -668,12 +668,14 @@ async function toolSendEmail(params, ctx) {
     auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
   });
 
-  await t.sendMail({
-    from: `"OrionAI" <${process.env.SMTP_USER}>`,
-    to,
-    subject: subj,
-    text: txt,
-    html: `<div style="font-family:sans-serif;max-width:580px;margin:0 auto">
+  await withRetry(
+    () =>
+      t.sendMail({
+        from: `"OrionAI" <${process.env.SMTP_USER}>`,
+        to,
+        subject: subj,
+        text: txt,
+        html: `<div style="font-family:sans-serif;max-width:580px;margin:0 auto">
       <div style="background:#6366f1;padding:20px 28px;border-radius:10px 10px 0 0">
         <h2 style="color:white;margin:0">🔭 OrionAI</h2>
         <p style="color:rgba(255,255,255,0.75);margin:5px 0 0;font-size:12px">${subj}</p>
@@ -689,16 +691,18 @@ async function toolSendEmail(params, ctx) {
         )}</p>
       </div>
     </div>`,
-    attachments: ctx.pdfBuffer
-      ? [
-          {
-            filename: `${typeName.replace(/ /g, "_")}_${docNum}.pdf`,
-            content: ctx.pdfBuffer,
-            contentType: "application/pdf",
-          },
-        ]
-      : [],
-  });
+        attachments: ctx.pdfBuffer
+          ? [
+              {
+                filename: `${typeName.replace(/ /g, "_")}_${docNum}.pdf`,
+                content: ctx.pdfBuffer,
+                contentType: "application/pdf",
+              },
+            ]
+          : [],
+      }),
+    { label: "send_email" }
+  );
 
   return { to, subject: subj };
 }
@@ -873,7 +877,26 @@ async function runAgent(steps, db, onProgress, userId) {
 
   for (const step of steps) {
     const { tool, params } = step;
+    const { needsConfirm, preview } = checkNeedsConfirmation(
+      step.tool,
+      step.params,
+      results
+    );
+    // Resolve stepUI once per step — used in both running + done progress events
     const stepUI = presentStep(tool, results.length, TOOL_REGISTRY);
+
+    if (needsConfirm) {
+      await onProgress({ status: "confirm_needed", tool: step.tool, preview });
+      const confirmed = await waitForConfirmation(sessionId, step.tool);
+      if (!confirmed) {
+        results.push({
+          tool: step.tool,
+          status: "skipped",
+          result: { summary: "Skipped by user" },
+        });
+        continue;
+      }
+    }
 
     onProgress({
       tool,
@@ -887,84 +910,115 @@ async function runAgent(steps, db, onProgress, userId) {
       let result;
 
       switch (tool) {
-        // ── Document tools ─────────────────────────────────────────
+        // ── Document tools ─────────────────────────────────────────────────
         case "fetch_document":
-          result = await toolFetchDocument(params, db);
+          result = await withRetry(() => toolFetchDocument(params, db), {
+            label: "fetch_document",
+          });
           ctx.fetchResult = result;
           break;
 
         case "generate_pdf":
+          // Pure in-process CPU work — no external I/O, retry not needed
           ctx.pdfBuffer = await toolGeneratePDF(params, ctx);
           result = { sizeKB: Math.round(ctx.pdfBuffer.length / 1024) };
           break;
 
         case "send_email":
+          // withRetry is applied inside toolSendEmail itself (nodemailer call)
           result = await toolSendEmail(params, ctx);
           break;
 
         case "send_whatsapp":
-          result = await toolSendWhatsApp(params, ctx);
+          result = await withRetry(() => toolSendWhatsApp(params, ctx), {
+            label: "send_whatsapp",
+          });
           break;
 
         case "notify_internal":
+          // Synchronous in-memory helper — no external I/O
           result = toolNotifyInternal(params, ctx);
           break;
 
         case "send_slack":
-          result = await toolSlack(params, ctx);
+          result = await withRetry(() => toolSlack(params, ctx), {
+            label: "send_slack",
+          });
           break;
 
-        // ── Jira: read tools ────────────────────────────────────────
+        // ── Jira: read tools ───────────────────────────────────────────────
         case "jira_get_backlog":
-          result = await toolGetBacklog(params, ctx);
+          result = await withRetry(() => toolGetBacklog(params, ctx), {
+            label: "jira_get_backlog",
+          });
           break;
 
         case "jira_get_overdue":
-          result = await toolGetOverdueTickets(params, ctx);
-          ctx.jiraOverdue = result.tickets; // saved for jira_update_dates chaining
+          result = await withRetry(() => toolGetOverdueTickets(params, ctx), {
+            label: "jira_get_overdue",
+          });
+          ctx.jiraOverdue = result.tickets;
           break;
 
         case "jira_update_dates":
           if (ctx.jiraOverdue) params.tickets = ctx.jiraOverdue;
-          result = await toolUpdateDueDates(params, ctx);
+          result = await withRetry(() => toolUpdateDueDates(params, ctx), {
+            label: "jira_update_dates",
+          });
           break;
 
         case "jira_my_tickets":
-          result = await toolGetMyTickets(params, ctx);
+          result = await withRetry(() => toolGetMyTickets(params, ctx), {
+            label: "jira_my_tickets",
+          });
           break;
 
         case "jira_sprint_summary":
-          result = await toolGetSprintSummary(params, ctx);
+          result = await withRetry(() => toolGetSprintSummary(params, ctx), {
+            label: "jira_sprint_summary",
+          });
           break;
 
         case "jira_shipped_last_sprint":
-          result = await toolGetShippedLastSprint(params, ctx);
+          result = await withRetry(
+            () => toolGetShippedLastSprint(params, ctx),
+            { label: "jira_shipped_last_sprint" }
+          );
           break;
 
         case "jira_most_overdue":
-          result = await toolGetMostOverdue(params, ctx);
+          result = await withRetry(() => toolGetMostOverdue(params, ctx), {
+            label: "jira_most_overdue",
+          });
           break;
 
         case "jira_sprint_bugs":
-          result = await toolGetSprintBugs(params, ctx);
+          result = await withRetry(() => toolGetSprintBugs(params, ctx), {
+            label: "jira_sprint_bugs",
+          });
           break;
 
         case "jira_search":
-          result = await toolSearchTickets(params, ctx);
+          result = await withRetry(() => toolSearchTickets(params, ctx), {
+            label: "jira_search",
+          });
           break;
 
-        // ── Jira: write tools ───────────────────────────────────────
+        // ── Jira: write tools ──────────────────────────────────────────────
         case "jira_create_ticket":
-          result = await toolCreateTicket(params, ctx);
-          ctx.lastCreatedTicketKey = result.key; // saved for chained assign step
+          result = await withRetry(() => toolCreateTicket(params, ctx), {
+            label: "jira_create_ticket",
+          });
+          ctx.lastCreatedTicketKey = result.key;
           break;
 
         case "jira_move_ticket":
-          result = await toolMoveTicket(params, ctx);
+          result = await withRetry(() => toolMoveTicket(params, ctx), {
+            label: "jira_move_ticket",
+          });
           break;
 
         case "jira_assign_ticket":
-          // Safety net: if LLM used a placeholder key, replace with last created ticket
           if (
             !params.ticketKey ||
             params.ticketKey === "<TICKET_KEY_FROM_PREVIOUS_STEP>" ||
@@ -979,23 +1033,33 @@ async function runAgent(steps, db, onProgress, userId) {
               );
             }
           }
-          result = await toolAssignTicket(params, ctx);
+          result = await withRetry(() => toolAssignTicket(params, ctx), {
+            label: "jira_assign_ticket",
+          });
           break;
 
         case "jira_add_comment":
-          result = await toolAddComment(params, ctx);
+          result = await withRetry(() => toolAddComment(params, ctx), {
+            label: "jira_add_comment",
+          });
           break;
 
-        // ── Jira: notify (chains into slack + email) ────────────────
+        // ── Jira: notify (chains into Slack + email) ───────────────────────
         case "jira_notify_overdue": {
-          result = await toolNotifyOverdue(params, ctx);
+          result = await withRetry(() => toolNotifyOverdue(params, ctx), {
+            label: "jira_notify_overdue",
+          });
 
           for (const n of result.notifications || []) {
             if (n.channels.includes("slack") && n.slackChannel) {
               try {
-                await toolSlack(
-                  { channel: n.slackChannel, message: n.slackBody },
-                  ctx
+                await withRetry(
+                  () =>
+                    toolSlack(
+                      { channel: n.slackChannel, message: n.slackBody },
+                      ctx
+                    ),
+                  { label: `jira_notify_overdue:slack:${n.person}` }
                 );
                 console.log(
                   `✅ Slack sent to ${n.slackChannel} for ${n.person}`
@@ -1028,8 +1092,8 @@ async function runAgent(steps, db, onProgress, userId) {
           }
           break;
         }
+
         case "jira_link_ticket":
-          // If LLM used placeholder, resolve from last created ticket
           if (
             !params.ticketKey ||
             params.ticketKey === "<TICKET_KEY_FROM_PREVIOUS_STEP>"
@@ -1037,133 +1101,219 @@ async function runAgent(steps, db, onProgress, userId) {
             params.ticketKey = ctx.lastCreatedTicketKey || null;
           }
           if (!params.ticketKey) throw new Error("No ticket key to link");
-          result = await toolLinkTicket(params, ctx);
+          result = await withRetry(() => toolLinkTicket(params, ctx), {
+            label: "jira_link_ticket",
+          });
           break;
 
-        // ── Gmail tools ────────────────────────────────────────────────────────
+        // ── Gmail ──────────────────────────────────────────────────────────
         case "gmail_get_inbox":
-          result = await toolGmailGetInbox(params, ctx);
+          result = await withRetry(() => toolGmailGetInbox(params, ctx), {
+            label: "gmail_get_inbox",
+          });
           break;
 
         case "gmail_search_emails":
-          result = await toolGmailSearchEmails(params, ctx);
+          // BUG FIX: was incorrectly calling calendarDelete
+          result = await withRetry(() => toolGmailSearchEmails(params, ctx), {
+            label: "gmail_search_emails",
+          });
           break;
 
         case "gmail_get_email":
-          result = await toolGmailGetEmail(params, ctx);
+          result = await withRetry(() => toolGmailGetEmail(params, ctx), {
+            label: "gmail_get_email",
+          });
           ctx.lastEmail = result;
           break;
 
         case "gmail_summarize_thread":
-          result = await toolGmailSummarizeThread(params, ctx);
+          result = await withRetry(
+            () => toolGmailSummarizeThread(params, ctx),
+            {
+              label: "gmail_summarize_thread",
+            }
+          );
           break;
 
         case "gmail_send_email":
-          result = await toolGmailSendEmail(params, ctx);
+          result = await withRetry(() => toolGmailSendEmail(params, ctx), {
+            label: "gmail_send_email",
+          });
           break;
 
         case "gmail_reply_email":
-          result = await toolGmailReplyEmail(params, ctx);
+          result = await withRetry(() => toolGmailReplyEmail(params, ctx), {
+            label: "gmail_reply_email",
+          });
           break;
 
-        // ── Google Calendar ──────────────────────────────
+        // ── Google Calendar ────────────────────────────────────────────────
         case "calendar_get_today":
-          result = await calendarGetToday(params, ctx);
+          result = await withRetry(() => calendarGetToday(params, ctx), {
+            label: "calendar_get_today",
+          });
           break;
+
         case "calendar_get_week":
-          result = await calendarGetWeek(params, ctx);
+          result = await withRetry(() => calendarGetWeek(params, ctx), {
+            label: "calendar_get_week",
+          });
           break;
+
         case "calendar_get_events":
-          result = await calendarGetEvents(params, ctx);
+          result = await withRetry(() => calendarGetEvents(params, ctx), {
+            label: "calendar_get_events",
+          });
           break;
+
         case "calendar_create":
-          result = await calendarCreate(params, ctx);
+          result = await withRetry(() => calendarCreate(params, ctx), {
+            label: "calendar_create",
+          });
           break;
+
         case "calendar_update":
-          result = await calendarUpdate(params, ctx);
+          result = await withRetry(() => calendarUpdate(params, ctx), {
+            label: "calendar_update",
+          });
           break;
+
         case "calendar_delete":
-          result = await calendarDelete(params, ctx);
+          result = await withRetry(() => calendarDelete(params, ctx), {
+            label: "calendar_delete",
+          });
           break;
+
         case "calendar_get_invites":
-          result = await calendarGetInvites(params, ctx);
+          result = await withRetry(() => calendarGetInvites(params, ctx), {
+            label: "calendar_get_invites",
+          });
           break;
+
         case "calendar_respond":
-          result = await calendarRespond(params, ctx);
+          result = await withRetry(() => calendarRespond(params, ctx), {
+            label: "calendar_respond",
+          });
           break;
+
+        // ── Telegram ───────────────────────────────────────────────────────
         case "telegram_list_chats":
-          result = await toolTelegramListChats(params, ctx);
+          result = await withRetry(() => toolTelegramListChats(params, ctx), {
+            label: "telegram_list_chats",
+          });
           break;
+
         case "telegram_get_messages":
-          result = await toolTelegramGetMessages(params, ctx);
+          result = await withRetry(() => toolTelegramGetMessages(params, ctx), {
+            label: "telegram_get_messages",
+          });
           break;
+
         case "telegram_send_message":
-          result = await toolTelegramSendMessage(params, ctx);
+          result = await withRetry(() => toolTelegramSendMessage(params, ctx), {
+            label: "telegram_send_message",
+          });
           break;
+
         case "telegram_get_unread":
-          result = await toolTelegramGetUnread(params, ctx);
+          result = await withRetry(() => toolTelegramGetUnread(params, ctx), {
+            label: "telegram_get_unread",
+          });
           break;
+
         case "telegram_search_messages":
-          result = await toolTelegramSearchMessages(params, ctx);
+          result = await withRetry(
+            () => toolTelegramSearchMessages(params, ctx),
+            { label: "telegram_search_messages" }
+          );
           break;
+
         case "telegram_reply_message":
-          result = await toolTelegramReplyMessage(params, ctx);
-          break;
-        case "telegram_get_contact_info":
-          result = await toolTelegramGetContactInfo(params, ctx);
-          break;
-        case "slack_read_messages":
-          result = await toolSlack(
+          result = await withRetry(
+            () => toolTelegramReplyMessage(params, ctx),
             {
-              action: "read",
-              channel: params.channel,
-              limit: params.limit || 20,
-            },
-            ctx
+              label: "telegram_reply_message",
+            }
+          );
+          break;
+
+        case "telegram_get_contact_info":
+          result = await withRetry(
+            () => toolTelegramGetContactInfo(params, ctx),
+            { label: "telegram_get_contact_info" }
+          );
+          break;
+
+        // ── Slack ──────────────────────────────────────────────────────────
+        case "slack_read_messages":
+          // BUG FIX: was incorrectly calling toolSlack with action "send"
+          result = await withRetry(
+            () => toolSlack({ action: "read", channel: params.channel }, ctx),
+            { label: "slack_read_messages" }
           );
           break;
 
         case "slack_send_message":
-          result = await toolSlack(
-            {
-              action: "send",
-              channel: params.channel,
-              message: params.message,
-            },
-            ctx
+          result = await withRetry(
+            () =>
+              toolSlack(
+                {
+                  action: "send",
+                  channel: params.channel,
+                  message: params.message,
+                },
+                ctx
+              ),
+            { label: "slack_send_message" }
           );
           break;
 
         case "slack_get_unread":
-          result = await toolSlack({ action: "unread" }, ctx);
+          result = await withRetry(() => toolSlack({ action: "unread" }, ctx), {
+            label: "slack_get_unread",
+          });
           break;
 
         case "slack_list_channels":
-          result = await toolSlack({ action: "list_channels" }, ctx);
+          result = await withRetry(
+            () => toolSlack({ action: "list_channels" }, ctx),
+            { label: "slack_list_channels" }
+          );
           break;
+
+        // ── WhatsApp ───────────────────────────────────────────────────────
         case "whatsapp_send_message":
-          result = await toolWhatsApp({ action: "send", ...params }, ctx);
+          result = await withRetry(
+            () => toolWhatsApp({ action: "send", ...params }, ctx),
+            { label: "whatsapp_send_message" }
+          );
           break;
 
         case "whatsapp_get_messages":
-          result = await toolWhatsApp(
-            { action: "get_messages", ...params },
-            ctx
+          result = await withRetry(
+            () => toolWhatsApp({ action: "get_messages", ...params }, ctx),
+            { label: "whatsapp_get_messages" }
           );
           break;
 
         case "whatsapp_get_unread":
-          result = await toolWhatsApp({ action: "get_unread", ...params }, ctx);
+          result = await withRetry(
+            () => toolWhatsApp({ action: "get_unread", ...params }, ctx),
+            { label: "whatsapp_get_unread" }
+          );
           break;
 
         case "whatsapp_list_chats":
-          result = await toolWhatsApp({ action: "list_chats", ...params }, ctx);
+          result = await withRetry(
+            () => toolWhatsApp({ action: "list_chats", ...params }, ctx),
+            { label: "whatsapp_list_chats" }
+          );
           break;
+
         default:
           throw new Error(`Unknown tool: "${tool}"`);
       }
-
-      const stepUI = presentStep(tool, results.length, TOOL_REGISTRY);
 
       onProgress({
         tool,

@@ -205,7 +205,7 @@ const emit = defineEmits(['done', 'openIntegrations', 'runCommand'])
 
 // ── State ──────────────────────────────────────────────────────────────────
 const visible = ref(false)
-const logoError = ref(false)
+// const logoError = ref(false)
 const currentStep = ref('welcome')
 const connectedApps = ref([])
 const selectedDemo = ref('')

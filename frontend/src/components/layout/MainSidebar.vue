@@ -17,60 +17,52 @@
         </span>
       </button>
     </div>
-<!-- Bell dropdown panel (positioned relative to sidebar) -->
-<Transition name="bell-panel">
-  <div v-if="bellOpen" class="bell-panel" @click.stop>
-    <div class="bell-panel-head">
-      <span class="bell-panel-title">Notifications</span>
-      <div style="display:flex;gap:6px;align-items:center;">
-        <button v-if="unreadNotifCount > 0" class="bell-btn-text" @click="markAllRead">
-          Mark all read
-        </button>
-        <button class="bell-btn-close" @click="bellOpen = false">✕</button>
-      </div>
-    </div>
-
-    <!-- Live unreads -->
-    <div v-if="liveBellItems.length">
-      <div class="bell-section-label">LIVE</div>
-      <div
-        v-for="item in liveBellItems" :key="item.app"
-        class="bell-live-card"
-        :style="{ borderLeftColor: item.color }"
-        @click="openAppFromBell(item.route)"
-      >
-        <div class="bell-live-top">
-          <span class="bell-live-icon">{{ item.icon }}</span>
-          <span class="bell-live-label">{{ item.label }}</span>
-          <span class="bell-live-count" :style="{ background: item.color }">{{ item.count }}</span>
+    <!-- Bell dropdown panel (positioned relative to sidebar) -->
+    <Transition name="bell-panel">
+      <div v-if="bellOpen" class="bell-panel" @click.stop>
+        <div class="bell-panel-head">
+          <span class="bell-panel-title">Notifications</span>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <button v-if="unreadNotifCount > 0" class="bell-btn-text" @click="markAllRead">
+              Mark all read
+            </button>
+            <button class="bell-btn-close" @click="bellOpen = false">✕</button>
+          </div>
         </div>
-        <div class="bell-live-summary">{{ item.summary }}</div>
-        <button v-if="item.ai?.action" class="bell-live-action">{{ item.ai.action }} →</button>
-      </div>
-    </div>
 
-    <!-- History -->
-    <div v-if="bellNotifications.length">
-      <div class="bell-section-label">RECENT</div>
-      <div
-        v-for="n in bellNotifications.slice(0, 15)" :key="n.id"
-        class="bell-history-row"
-        :class="{ 'bell-unread': !n.read }"
-        @click="openAppFromBell(n.route); markRead(n.id)"
-      >
-        <span class="bell-history-icon">{{ n.icon }}</span>
-        <div class="bell-history-body">
-          <div class="bell-history-text">{{ n.summary }}</div>
-          <div class="bell-history-meta">{{ n.label }} · {{ bellTimeAgo(n.time) }}</div>
+        <!-- Live unreads -->
+        <div v-if="liveBellItems.length">
+          <div class="bell-section-label">LIVE</div>
+          <div v-for="item in liveBellItems" :key="item.app" class="bell-live-card"
+            :style="{ borderLeftColor: item.color }" @click="openAppFromBell(item.route)">
+            <div class="bell-live-top">
+              <span class="bell-live-icon">{{ item.icon }}</span>
+              <span class="bell-live-label">{{ item.label }}</span>
+              <span class="bell-live-count" :style="{ background: item.color }">{{ item.count }}</span>
+            </div>
+            <div class="bell-live-summary">{{ item.summary }}</div>
+            <button v-if="item.ai?.action" class="bell-live-action">{{ item.ai.action }} →</button>
+          </div>
+        </div>
+
+        <!-- History -->
+        <div v-if="bellNotifications.length">
+          <div class="bell-section-label">RECENT</div>
+          <div v-for="n in bellNotifications.slice(0, 15)" :key="n.id" class="bell-history-row"
+            :class="{ 'bell-unread': !n.read }" @click="openAppFromBell(n.route); markRead(n.id)">
+            <span class="bell-history-icon">{{ n.icon }}</span>
+            <div class="bell-history-body">
+              <div class="bell-history-text">{{ n.summary }}</div>
+              <div class="bell-history-meta">{{ n.label }} · {{ bellTimeAgo(n.time) }}</div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="!liveBellItems.length && !bellNotifications.length" class="bell-empty">
+          🔔 All caught up!
         </div>
       </div>
-    </div>
-
-    <div v-if="!liveBellItems.length && !bellNotifications.length" class="bell-empty">
-      🔔 All caught up!
-    </div>
-  </div>
-</Transition>
+    </Transition>
     <!-- Search -->
     <div class="search-box">
       <input v-model="searchQuery" ref="searchInputRef" placeholder="Search chats..." class="search-input"
@@ -146,10 +138,22 @@
             <span v-if="app.unread > 0" class="int-row-unread" :style="{ background: app.color }">
               {{ app.unread > 999 ? '999+' : app.unread }}
             </span>
+            <span class="app-health-dot" :class="getStatus(app.apiType)"
+              :title="getErrorMessage(app.apiType) || 'Connected'"></span>
           </div>
           <button class="int-row-x" @click.stop="removeApp(app.id)">×</button>
         </div>
-
+        <!-- Reconnect banners for any broken integrations -->
+        <div v-for="app in connectedApps.filter(a => getStatus(a.apiType) === 'error')" :key="app.id + '-error'"
+          class="reconnect-banner" :style="{ borderLeftColor: app.color }">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+            <line x1="12" y1="9" x2="12" y2="13" />
+            <line x1="12" y1="17" x2="12.01" y2="17" />
+          </svg>
+          <span>{{ app.label }} disconnected</span>
+          <button @click="emit('openIntegrations')">Fix →</button>
+        </div>
         <!-- AI summary strip -->
         <div v-if="anySummary" class="int-ai-summary">
           <span class="int-ai-icon">✨</span>
@@ -217,6 +221,8 @@ import { useSession } from '../../composables/useSession'
 import { useTheme } from '../../composables/useTheme'
 import { useWebSocket } from '../../composables/useWebSocket'
 import api from '../../services/api'
+import { useIntegrationHealth } from '../../composables/useIntegrationHealth'
+
 
 const emit = defineEmits([
   'newChat', 'switchSession', 'deleteSession', 'logout',
@@ -250,8 +256,8 @@ const themeOptions = [
 ]
 
 const BELL_META = {
-  gmail:    { label: 'Gmail',    icon: '📧', color: '#EA4335', route: 'gmail'    },
-  slack:    { label: 'Slack',    icon: '💬', color: '#E01E5A', route: 'slack'    },
+  gmail: { label: 'Gmail', icon: '📧', color: '#EA4335', route: 'gmail' },
+  slack: { label: 'Slack', icon: '💬', color: '#E01E5A', route: 'slack' },
   telegram: { label: 'Telegram', icon: '✈️', color: '#229ED9', route: 'telegram' },
 }
 const initials = computed(() => (store.user?.username || '?').slice(0, 2).toUpperCase())
@@ -378,15 +384,17 @@ function bellTimeAgo(date) {
   return `${Math.floor(m / 60)}h ago`
 }
 
-
+const { getStatus, getErrorMessage, startAutoCheck, stopAutoCheck } = useIntegrationHealth()
 onMounted(async () => {
   document.addEventListener('click', onOutsideClick)
   await loadConnected()
   startPolling()
+  startAutoCheck()
 })
 onUnmounted(() => {
   document.removeEventListener('click', onOutsideClick)
   stopPolling()
+  stopAutoCheck()
 })
 
 defineExpose({ searchInputRef, refreshConnected: loadConnected })
@@ -401,7 +409,8 @@ defineExpose({ searchInputRef, refreshConnected: loadConnected })
   flex-direction: column;
   flex-shrink: 0;
   height: 100vh;
-  overflow: visible;  /* allow bell panel to flow inline without clipping */
+  overflow: visible;
+  /* allow bell panel to flow inline without clipping */
 }
 
 .sidebar-brand {
@@ -989,26 +998,50 @@ defineExpose({ searchInputRef, refreshConnected: loadConnected })
 .sidebar-bell {
   position: relative;
   margin-left: 6px;
-  width: 26px; height: 26px;
+  width: 26px;
+  height: 26px;
   border-radius: 8px;
   background: none;
   border: 1px solid var(--border-subtle);
-  color: var(--text-muted, rgba(255,255,255,0.35));
+  color: var(--text-muted, rgba(255, 255, 255, 0.35));
   cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
   transition: all 0.15s;
 }
-.sidebar-bell:hover { background: var(--bg-hover); color: var(--text-primary); }
-.sidebar-bell.bell-active { border-color: rgba(99,102,241,0.4); color: #818cf8; }
-.sidebar-bell.bell-urgent { border-color: rgba(239,68,68,0.5); color: #ef4444; }
+
+.sidebar-bell:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.sidebar-bell.bell-active {
+  border-color: rgba(99, 102, 241, 0.4);
+  color: #818cf8;
+}
+
+.sidebar-bell.bell-urgent {
+  border-color: rgba(239, 68, 68, 0.5);
+  color: #ef4444;
+}
 
 .sidebar-bell-badge {
-  position: absolute; top: -5px; right: -5px;
-  background: #6366f1; color: white;
-  font-size: 8px; font-weight: 700;
-  min-width: 14px; height: 14px; border-radius: 7px;
-  display: flex; align-items: center; justify-content: center; padding: 0 2px;
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  background: #6366f1;
+  color: white;
+  font-size: 8px;
+  font-weight: 700;
+  min-width: 14px;
+  height: 14px;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 2px;
   border: 1.5px solid var(--bg-surface, #0f1117);
 }
 
@@ -1021,79 +1054,252 @@ defineExpose({ searchInputRef, refreshConnected: loadConnected })
   background: var(--bg-elevated);
   border: 1px solid var(--border-default);
   border-radius: 14px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
   flex-shrink: 0;
   scrollbar-width: thin;
 }
 
 .bell-panel-head {
-  display: flex; align-items: center;
+  display: flex;
+  align-items: center;
   padding: 12px 14px 8px;
   border-bottom: 1px solid var(--border-subtle);
-  position: sticky; top: 0; background: var(--bg-elevated); z-index: 1;
+  position: sticky;
+  top: 0;
+  background: var(--bg-elevated);
+  z-index: 1;
 }
-.bell-panel-title { flex: 1; font-size: 13px; font-weight: 700; color: var(--text-primary); }
+
+.bell-panel-title {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
 .bell-btn-text {
-  font-size: 10px; color: #818cf8;
-  background: none; border: none; cursor: pointer;
-  padding: 2px 6px; border-radius: 5px;
+  font-size: 10px;
+  color: #818cf8;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 5px;
 }
-.bell-btn-text:hover { background: rgba(99,102,241,0.1); }
+
+.bell-btn-text:hover {
+  background: rgba(99, 102, 241, 0.1);
+}
+
 .bell-btn-close {
-  background: none; border: none;
-  color: rgba(255,255,255,0.3); cursor: pointer; font-size: 13px;
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.3);
+  cursor: pointer;
+  font-size: 13px;
 }
 
 .bell-section-label {
-  font-size: 9px; font-weight: 700; letter-spacing: 0.8px;
-  color: rgba(255,255,255,0.25); padding: 8px 14px 3px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  color: rgba(255, 255, 255, 0.25);
+  padding: 8px 14px 3px;
 }
 
 .bell-live-card {
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-left: 3px solid transparent;
-  border-radius: 9px; padding: 9px 11px;
-  margin: 4px 10px; cursor: pointer;
+  border-radius: 9px;
+  padding: 9px 11px;
+  margin: 4px 10px;
+  cursor: pointer;
   transition: background 0.15s;
 }
-.bell-live-card:hover { background: rgba(255,255,255,0.07); }
-.bell-live-top { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
-.bell-live-icon  { font-size: 14px; }
-.bell-live-label { font-size: 12px; font-weight: 600; color: var(--text-primary); flex: 1; }
-.bell-live-count {
-  color: white; font-size: 9px; font-weight: 700;
-  padding: 1px 6px; border-radius: 8px;
+
+.bell-live-card:hover {
+  background: rgba(255, 255, 255, 0.07);
 }
 
-.bell-live-summary { font-size: 11px; color: var(--text-secondary); line-height: 1.4; margin-bottom: 5px; }
+.bell-live-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.bell-live-icon {
+  font-size: 14px;
+}
+
+.bell-live-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  flex: 1;
+}
+
+.bell-live-count {
+  color: white;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 8px;
+}
+
+.bell-live-summary {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  margin-bottom: 5px;
+}
+
 .bell-live-action {
-  font-size: 10px; font-weight: 600; color: #818cf8;
-  background: rgba(99,102,241,0.1); border: 1px solid rgba(99,102,241,0.2);
-  border-radius: 5px; padding: 2px 8px; cursor: pointer;
+  font-size: 10px;
+  font-weight: 600;
+  color: #818cf8;
+  background: rgba(99, 102, 241, 0.1);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-radius: 5px;
+  padding: 2px 8px;
+  cursor: pointer;
 }
 
 .bell-history-row {
-  display: flex; align-items: flex-start; gap: 9px;
-  padding: 8px 14px; cursor: pointer;
-  border-top: 1px solid rgba(255,255,255,0.04);
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 8px 14px;
+  cursor: pointer;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
   transition: background 0.12s;
 }
-.bell-history-row:hover  { background: rgba(255,255,255,0.04); }
-.bell-history-row.bell-unread { background: rgba(99,102,241,0.06); }
-.bell-history-icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
-.bell-history-body { flex: 1; min-width: 0; }
-.bell-history-text { font-size: 11.5px; color: var(--text-primary); line-height: 1.3; margin-bottom: 2px; }
-.bell-history-meta { font-size: 10px; color: var(--text-muted); }
+
+.bell-history-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.bell-history-row.bell-unread {
+  background: rgba(99, 102, 241, 0.06);
+}
+
+.bell-history-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.bell-history-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.bell-history-text {
+  font-size: 11.5px;
+  color: var(--text-primary);
+  line-height: 1.3;
+  margin-bottom: 2px;
+}
+
+.bell-history-meta {
+  font-size: 10px;
+  color: var(--text-muted);
+}
 
 .bell-empty {
-  padding: 28px 14px; text-align: center;
-  font-size: 12px; color: var(--text-muted);
+  padding: 28px 14px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 /* Bell panel transition */
-.bell-panel-enter-active { transition: all 0.2s cubic-bezier(0.34,1.56,0.64,1); }
-.bell-panel-leave-active { transition: all 0.15s ease; }
-.bell-panel-enter-from   { opacity: 0; transform: translateY(-6px) scale(0.97); }
-.bell-panel-leave-to     { opacity: 0; transform: translateY(-4px); }
+.bell-panel-enter-active {
+  transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.bell-panel-leave-active {
+  transition: all 0.15s ease;
+}
+
+.bell-panel-enter-from {
+  opacity: 0;
+  transform: translateY(-6px) scale(0.97);
+}
+
+.bell-panel-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.app-health-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background 0.3s;
+}
+
+.app-health-dot.healthy {
+  background: #10b981;
+  box-shadow: 0 0 4px rgba(16, 185, 129, 0.5);
+}
+
+.app-health-dot.error {
+  background: #ef4444;
+  box-shadow: 0 0 4px rgba(239, 68, 68, 0.5);
+  animation: health-pulse 2s infinite;
+}
+
+.app-health-dot.unknown {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+@keyframes health-pulse {
+
+  0%,
+  100% {
+    opacity: 1
+  }
+
+  50% {
+    opacity: 0.4
+  }
+}
+
+.reconnect-banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  margin: 4px 0 2px;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-left: 3px solid #ef4444;
+  border-radius: 8px;
+  font-size: 11px;
+  color: #f87171;
+}
+
+.reconnect-banner span {
+  flex: 1;
+}
+
+.reconnect-banner button {
+  background: none;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 5px;
+  color: #f87171;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: inherit;
+}
+
+.reconnect-banner button:hover {
+  background: rgba(239, 68, 68, 0.12);
+}
 </style>

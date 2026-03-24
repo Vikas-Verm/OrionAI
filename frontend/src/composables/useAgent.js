@@ -1,9 +1,3 @@
-/**
- * useAgent.js
- *
- * Vue composable — frontend orchestration for the Super Agent.
- */
-
 import { ref, nextTick } from "vue";
 import { store } from "../stores/app";
 import { agentAPI, streamAgentRun } from "../services/api";
@@ -12,8 +6,7 @@ export function useAgent() {
   const agentRunning = ref(false);
   const pendingParams = ref(null);
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
-
+  // ── Step missing param check ───────────────────────────
   function getMissingParams(steps) {
     return steps
       .filter((s) => (s.tool === "send_email" || s.tool === "send_whatsapp") && !s.params?.to)
@@ -24,12 +17,14 @@ export function useAgent() {
       }));
   }
 
+  // ── Push user message to chat ─────────────────────────
   async function pushUserMsg(message, scrollToBottom) {
     store.messages.push({ role: "user", content: message });
     await nextTick();
     scrollToBottom?.();
   }
 
+  // ── Create agent bubble in chat ───────────────────────
   function createAgentBubble(plan) {
     const idx = store.messages.length;
     store.messages.push({
@@ -50,6 +45,7 @@ export function useAgent() {
     return idx;
   }
 
+  // ── Reactive splice helpers ───────────────────────────
   function patchMsg(idx, patch) {
     const msg = store.messages[idx];
     if (!msg) return;
@@ -63,9 +59,9 @@ export function useAgent() {
     store.messages.splice(idx, 1, { ...msg, steps });
   }
 
-  // ── SSE execution ─────────────────────────────────────────────────────────
-
-  async function executePlan(plan, scrollToBottom, userMessage) {
+  // ── Execute plan via SSE ──────────────────────────────
+  // confirmFn: (preview) => Promise<boolean> — passed from App.vue via confirmRef
+  async function executePlan(plan, scrollToBottom, userMessage, confirmFn = null) {
     agentRunning.value = true;
     const bubbleIdx = createAgentBubble(plan);
     await nextTick();
@@ -95,23 +91,29 @@ export function useAgent() {
                 const lines = buffer.split("\n");
                 buffer = lines.pop();
 
-                for (const line of lines) {
-                  if (!line.startsWith("data: ")) continue;
-                  const raw = line.slice(6).trim();
-                  if (raw === "[DONE]") {
-                    finish();
-                    return;
-                  }
-                  try {
-                    handleEvent(JSON.parse(raw), bubbleIdx, scrollToBottom);
-                  } catch {
-                    /* skip malformed */
-                  }
-                }
-                read();
+                // Process lines sequentially — await needed for confirm_needed
+                processLines(lines).then(() => read());
               })
               .catch(() => finish());
           }
+
+          // ── Process lines — async so confirm_needed can await modal ──
+          async function processLines(lines) {
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              const raw = line.slice(6).trim();
+              if (raw === "[DONE]") {
+                finish();
+                return;
+              }
+              try {
+                await handleEvent(JSON.parse(raw), bubbleIdx, scrollToBottom, confirmFn);
+              } catch {
+                /* skip malformed */
+              }
+            }
+          }
+
           read();
         })
         .catch((err) => {
@@ -125,21 +127,14 @@ export function useAgent() {
 
       function finish() {
         agentRunning.value = false;
-
-        // ── Update chat title in sidebar so agent conversations appear ──────
-        // The backend already saved the messages; just refresh the chat list
-        if (store.currentSessionId && typeof store.loadChats === "function") {
-          store.loadChats();
-        }
-
         resolve();
       }
     });
   }
 
-  // ── SSE event handler ─────────────────────────────────────────────────────
-
-  function handleEvent(event, bubbleIdx, scrollToBottom) {
+  // ── Handle individual SSE events ──────────────────────
+  // Now async — confirm_needed awaits the modal response
+  async function handleEvent(event, bubbleIdx, scrollToBottom, confirmFn) {
     switch (event.type) {
       case "step_start":
         patchStep(bubbleIdx, event.tool, {
@@ -155,34 +150,34 @@ export function useAgent() {
           summary: event.summary,
           richSummary: event.richSummary || null,
 
-          // Jira
+          // ── Jira ──────────────────────────────────────
           richTickets: event.richTickets || null,
           byAssignee: event.byAssignee || null,
           jiraDomain: event.jiraDomain || null,
           sprintName: event.sprintName || null,
           notifications: event.notifications || null,
 
-          // Gmail
+          // ── Gmail ─────────────────────────────────────
           richEmails: event.richEmails || null,
           emailQuery: event.emailQuery || null,
 
-          // Calendar
+          // ── Calendar ──────────────────────────────────
           richEvents: event.richEvents || null,
           calendarByDay: event.calendarByDay || null,
 
-          // Telegram
+          // ── Telegram ──────────────────────────────────
           richTelegramMessages: event.richTelegramMessages || null,
-          telegramUnreadChats: event.telegramUnreadChats || null,
-          telegramChats: event.telegramChats || null,
           telegramChatName: event.telegramChatName || null,
           telegramChatId: event.telegramChatId || null,
           telegramChatUsername: event.telegramChatUsername || null,
+          telegramChats: event.telegramChats || null,
+          telegramUnreadChats: event.telegramUnreadChats || null,
           telegramSearchResults: event.telegramSearchResults || null,
           telegramQuery: event.telegramQuery || null,
           telegramSent: event.telegramSent || null,
           telegramContact: event.telegramContact || null,
 
-          // Slack
+          // ── Slack ─────────────────────────────────────
           richSlackMessages: event.richSlackMessages || null,
           richSlackChannels: event.richSlackChannels || null,
           richSlackUnread: event.richSlackUnread || null,
@@ -192,17 +187,85 @@ export function useAgent() {
           slackMessage: event.slackMessage || null,
           totalUnread: event.totalUnread || null,
 
+          // ── WhatsApp ──────────────────────────────────
+          richWhatsAppMessages: event.richWhatsAppMessages || null,
+          richWhatsAppUnread: event.richWhatsAppUnread || null,
+          richWhatsAppChats: event.richWhatsAppChats || null,
+          whatsappChatName: event.whatsappChatName || null,
+          whatsappChatId: event.whatsappChatId || null,
+          whatsappSent: event.whatsappSent || null,
+          whatsappTo: event.whatsappTo || null,
+          whatsappMessage: event.whatsappMessage || null,
+
           icon: event.icon,
           label: event.label,
         });
         break;
 
       case "step_error":
-        patchStep(bubbleIdx, event.tool, {
-          status: "error",
-          error: event.error,
-        });
+        patchStep(bubbleIdx, event.tool, { status: "error", error: event.error });
         break;
+
+      // ── CONFIRMATION NEEDED ────────────────────────────────
+      // Backend sends this before executing a destructive action.
+      // We pause the stream, show the modal, and send the user's
+      // decision back to the backend via a separate POST request.
+      case "confirm_needed": {
+        // Show a "waiting for confirmation" state on the step
+        patchStep(bubbleIdx, event.tool, {
+          status: "confirming",
+          icon: event.icon || "⚠️",
+          label: event.label || event.tool,
+          summary: "Waiting for your confirmation…",
+        });
+
+        // If no confirmFn provided (e.g. testing), auto-approve
+        if (!confirmFn) {
+          console.warn("confirm_needed received but no confirmFn provided — auto-approving");
+          break;
+        }
+
+        // Show the modal and wait for user to click Yes or Cancel
+        const approved = await confirmFn(event.preview);
+
+        if (approved) {
+          // User approved — update step back to running
+          patchStep(bubbleIdx, event.tool, {
+            status: "running",
+            summary: null,
+          });
+          // Send approval to backend
+          try {
+            const { default: api } = await import("../services/api");
+            await api.post("/api/agent/confirm", {
+              sessionId: store.currentSessionId,
+              tool: event.tool,
+              approved: true,
+            });
+          } catch (err) {
+            console.error("Failed to send confirmation:", err.message);
+          }
+        } else {
+          // User cancelled — mark step as skipped
+          patchStep(bubbleIdx, event.tool, {
+            status: "skipped",
+            summary: "Cancelled by you",
+            icon: "⛔",
+          });
+          // Send cancellation to backend
+          try {
+            const { default: api } = await import("../services/api");
+            await api.post("/api/agent/confirm", {
+              sessionId: store.currentSessionId,
+              tool: event.tool,
+              approved: false,
+            });
+          } catch (err) {
+            console.error("Failed to send cancellation:", err.message);
+          }
+        }
+        break;
+      }
 
       case "complete":
       case "error": {
@@ -218,9 +281,9 @@ export function useAgent() {
     }
   }
 
-  // ── Public API ────────────────────────────────────────────────────────────
-
-  async function handleAgentMessage(message, scrollToBottom) {
+  // ── Public: called from App.vue onSend ────────────────
+  // confirmFn is passed in from App.vue: () => confirmRef.value.show(preview)
+  async function handleAgentMessage(message, scrollToBottom, confirmFn = null) {
     await pushUserMsg(message, scrollToBottom);
 
     let plan;
@@ -240,11 +303,12 @@ export function useAgent() {
       return "needs_params";
     }
 
-    await executePlan(plan, scrollToBottom, message);
+    await executePlan(plan, scrollToBottom, message, confirmFn);
     return true;
   }
 
-  async function provideMissingParams(values, scrollToBottom) {
+  // ── Provide missing params then execute ───────────────
+  async function provideMissingParams(values, scrollToBottom, confirmFn = null) {
     if (!pendingParams.value) return;
     const { plan, userMessage } = pendingParams.value;
 
@@ -254,13 +318,8 @@ export function useAgent() {
     }
 
     pendingParams.value = null;
-    await executePlan(plan, scrollToBottom, userMessage);
+    await executePlan(plan, scrollToBottom, userMessage, confirmFn);
   }
 
-  return {
-    agentRunning,
-    pendingParams,
-    handleAgentMessage,
-    provideMissingParams,
-  };
+  return { agentRunning, pendingParams, handleAgentMessage, provideMissingParams };
 }

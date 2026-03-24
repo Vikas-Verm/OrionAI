@@ -37,4 +37,6 @@ const conversationSchema = new mongoose.Schema({
 // Index for faster queries
 conversationSchema.index({ userId: 1, updatedAt: -1 });
 
-module.exports = mongoose.model("Conversation", conversationSchema);
+module.exports =
+  mongoose.models.Conversation ||
+  mongoose.model("Conversation", conversationSchema);
