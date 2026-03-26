@@ -10,6 +10,14 @@ const messageSchema = new mongoose.Schema({
   isAgent: { type: Boolean, default: false },
   agentDone: { type: Boolean, default: false },
   steps: { type: mongoose.Schema.Types.Mixed, default: null },
+  feedback: {
+    rating: {
+      type: String,
+      enum: ["up", "down"],
+      default: null,
+    },
+    updatedAt: { type: Date, default: null },
+  },
   createdAt: { type: Date, default: Date.now },
 });
 

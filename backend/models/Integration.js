@@ -17,6 +17,8 @@ const integrationSchema = new mongoose.Schema({
       "webhook",
       "telegram",
       "whatsapp",
+      "database",
+      "razorpay",
     ],
     required: true,
   },
@@ -95,6 +97,28 @@ const integrationSchema = new mongoose.Schema({
     method: { type: String, default: "POST" },
     headers: { type: Map, of: String, default: {} },
     secret: { type: String, default: "" },
+  },
+
+  // ── Database Integration ──────────────────────────────────────────────────
+  database: {
+    vendor: {
+      type: String,
+      enum: ["mongodb", "postgres", "mysql", "sqlite"],
+      default: "postgres",
+    },
+    connectionString: { type: String, default: "" },
+    filePath: { type: String, default: "" },
+    ssl: { type: Boolean, default: false },
+    defaultSchema: { type: String, default: "public" },
+    readOnly: { type: Boolean, default: true },
+  },
+
+  // ── Razorpay ───────────────────────────────────────────────────────────────
+  razorpay: {
+    keyId: { type: String, default: "" },
+    keySecret: { type: String, default: "" },
+    accountNumber: { type: String, default: "" },
+    webhookSecret: { type: String, default: "" },
   },
 
   lastTestedAt: { type: Date },

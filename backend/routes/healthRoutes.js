@@ -3,7 +3,6 @@
 const express = require("express");
 const router = express.Router();
 const {
-  getAllHealthStatuses,
   checkUserIntegrations,
 } = require("../services/integrationHealthService");
 
@@ -11,7 +10,10 @@ const {
 router.get("/integrations", async (req, res) => {
   const userId = req.user?.username;
   try {
-    const statuses = await getAllHealthStatuses(userId);
+    const statuses = await checkUserIntegrations(userId);
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
     res.json({ statuses });
   } catch (err) {
     res.status(500).json({ error: err.message });

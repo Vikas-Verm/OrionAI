@@ -36,8 +36,15 @@ const {
 } = require("./services/websocketServer");
 const googleAuthRoutes = require("./routes/googleAuthRoutes");
 const healthRoutes = require("./routes/healthRoutes");
+const briefingRoutes = require("./routes/briefingRoutes");
+const {
+  initErrorMonitoring,
+  attachErrorMonitoringContext,
+  attachErrorMonitoringHandler,
+} = require("./services/errorMonitoring");
 
 const app = express();
+initErrorMonitoring();
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
 // Allow WebSocket upgrade requests from frontend
@@ -49,6 +56,7 @@ app.use(
 );
 
 app.use(express.json());
+attachErrorMonitoringContext(app);
 
 // ── Public ────────────────────────────────────────────────────────────────────
 app.use("/auth", authRoutes);
@@ -85,13 +93,13 @@ app.post("/api/webhooks/slack", handleSlackWebhook);
 // ── Notifications REST (initial badge load + polling fallback) ────────────────
 // WebSocket handles real-time; this handles the first page load
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/briefing", authenticate, briefingRoutes);
 app.use("/api/whatsapp", whatsappRoutes);
 app.use("/api/automations", automationRoutes);
 app.use("/auth/google", googleAuthRoutes);
 app.use("/api/health", authenticate, healthRoutes);
 app.get("/debug/gmail", async (req, res) => {
   const userId = req.user?.username;
-  const mongoose = require("mongoose");
   const Integration = require("./models/Integration");
 
   const integration = await Integration.findOne({ userId, type: "gmail" });
@@ -106,9 +114,10 @@ app.get("/debug/gmail", async (req, res) => {
     hasAccessToken: !!integration.gmail?.accessToken,
     userEmail: integration.gmail?.userEmail || "NOT STORED ← THIS IS THE BUG",
     historyId: integration.gmail?.historyId || "not set",
-    // Check what fields exist on the gmail sub-object
     gmailFields: Object.keys(integration.gmail || {}),
   });
 });
+
+attachErrorMonitoringHandler(app);
 
 module.exports = app;

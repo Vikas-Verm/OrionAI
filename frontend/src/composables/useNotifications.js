@@ -44,7 +44,10 @@ export function useNotifications() {
   // ── Fetch unread counts from backend ─────────────────────────────────────
   async function fetchUnread() {
     try {
-      const { data } = await api.get("/api/notifications/unread");
+      const { data } = await api.get("/api/notifications/unread", {
+        params: { _: Date.now() },
+        headers: { "Cache-Control": "no-cache" },
+      });
       const apps = data.apps || {};
       console.log("📬 Unread data:", JSON.stringify(apps));
       // Check each app for NEW messages since last poll

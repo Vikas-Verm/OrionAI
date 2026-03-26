@@ -23,6 +23,13 @@ export const sessionsAPI = {
   list: (search) => api.get("/sessions", { params: { search } }),
   create: (mode) => api.post("/sessions/new", { mode }),
   messages: (id) => api.get(`/sessions/${id}/messages`),
+  export: (sessionId, format = "json") =>
+    api.get(`/sessions/${sessionId}/export`, {
+      params: { format },
+      responseType: format === "json" ? "json" : "text",
+    }),
+  feedback: (sessionId, messageIndex, rating) =>
+    api.post(`/sessions/${sessionId}/messages/${messageIndex}/feedback`, { rating }),
   delete: (id) => api.delete(`/sessions/${id}`),
 };
 

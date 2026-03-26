@@ -48,8 +48,7 @@ export const inputPlaceholder = computed(() => {
   if (store.webMode) return "Search the web...";
   if (store.mode === "rag" && !store.documentIngested) return "Ingest a document first...";
   if (store.mode === "db") return "Ask about your business data...";
-  if (store.mode === "agent")
-    return "e.g. Send invoice INV-001 to john@company.com via email and WhatsApp...";
+  if (store.mode === "agent") return "What would you like me to do?";
   return "Ask a question...";
 });
 

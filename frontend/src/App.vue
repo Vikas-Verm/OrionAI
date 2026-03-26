@@ -4,9 +4,9 @@
     <div v-else class="app">
       <OnboardingFlow ref="onboardingRef" @done="() => { }" @openIntegrations="onOpenIntegrations"
         @runCommand="onOnboardingCommand" />
-      <Sidebar ref="sidebarRef" :activeView="activeModule || (showingIntegrations ? 'settings' : 'agent')"
+      <Sidebar ref="sidebarRef" :activeView="activeModule || (showingIntegrations ? 'settings' : (store.mode === 'db' ? 'database' : 'agent'))"
         :showingIntegrations="showingIntegrations"
-        @newChat="() => { activeModule = null; showingIntegrations = false; startNewChat() }"
+        @newChat="() => { activeModule = null; showingIntegrations = false; setMode('chat'); store.webMode = false; startNewChat() }"
         @switchSession="switchSession" @deleteSession="deleteSession" @logout="logout"
         @openIntegrations="onOpenIntegrations" @openIntegration="onOpenIntegration" />
        
@@ -14,7 +14,7 @@
       <div class="main">
 
         <!-- ── Integration settings (inside main, sidebar stays visible) ── -->
-        <IntegrationsPage v-if="showingIntegrations" @close="showingIntegrations = false; activeModule = null"
+        <IntegrationsPage v-if="showingIntegrations" :key="`integrations-${store.user?.username || 'anon'}`" @close="showingIntegrations = false; activeModule = null"
           @connected="sidebarRef?.refreshConnected?.()" @openModule="onOpenModuleFromSettings" />
 
         <!-- ── Module pages (inside main, sidebar stays visible) ── -->
@@ -25,6 +25,18 @@
         <CalendarPage v-else-if="activeModule === 'calendar' || activeModule === 'google_calendar'"
           @close="closeModule" />
         <WhatsAppPage v-else-if="activeModule === 'whatsapp'" @close="closeModule" />
+        <DatabasePage
+          v-else-if="activeModule === 'database'"
+          @close="closeModule"
+          @open-integrations="onOpenIntegrations"
+          @open-data-mode="openDatabaseWorkspace"
+        />
+        <RazorpayPage
+          v-else-if="activeModule === 'razorpay'"
+          @close="closeModule"
+          @open-integrations="onOpenIntegrations"
+          @open-agent-prompt="openRazorpayWorkspace"
+        />
 
         <!-- ── Normal chat view ── -->
         <template v-else>
@@ -83,6 +95,8 @@ import SlackPage from './views/SlackPage.vue'
 import JiraPage from './views/JiraPage.vue'
 import CalendarPage from './views/CalendarPage.vue'
 import WhatsAppPage from './views/WhatsAppPage.vue'
+import DatabasePage from './views/DatabasePage.vue'
+import RazorpayPage from './views/RazorpayPage.vue'
 
 import AgentConfirmModal from './components/agent/AgentConfirmModal.vue'
 //Notifications
@@ -102,6 +116,7 @@ const activeModule = ref(null)   // null | 'telegram' | 'gmail' | 'slack' | 'jir
 const messageListRef = ref(null)
 const inputAreaRef = ref(null)
 const onboardingRef = ref(null)
+const confirmRef = ref(null)
 
 // ── Init ──────────────────────────────────────────────────
 onMounted(async () => {
@@ -159,6 +174,7 @@ async function onLoginSuccess() {
 }
 
 function logout() {
+  stop()
   clearAuth()
   delete api.defaults.headers.common['Authorization']
 }
@@ -175,13 +191,31 @@ function onOpenIntegration(id) {
 }
 
 function onOpenModuleFromSettings(id) {
-  showingIntegrations.value = false
-  activeModule.value = id
+  onOpenIntegration(id)
 }
 
 function closeModule() {
   activeModule.value = null
   showingIntegrations.value = true   // go back to integrations settings
+}
+
+function openDatabaseWorkspace() {
+  activeModule.value = null
+  showingIntegrations.value = false
+  setMode('db')
+  store.webMode = false
+  nextTick(() => inputAreaRef.value?.focusInput?.())
+}
+
+function openRazorpayWorkspace(prompt = '') {
+  activeModule.value = null
+  showingIntegrations.value = false
+  setMode('agent')
+  store.webMode = false
+  nextTick(() => {
+    if (prompt) inputAreaRef.value?.setText?.(prompt, 'agent')
+    else inputAreaRef.value?.focusInput?.()
+  })
 }
 
 // ── Session ───────────────────────────────────────────────
@@ -198,7 +232,8 @@ async function onSend(message) {
   if (store.mode === 'agent') {
     const result = await handleAgentMessage(
       message,
-      () => messageListRef.value?.scrollToBottom()
+      () => messageListRef.value?.scrollToBottom(),
+      (preview) => confirmRef.value?.show(preview)
     )
     if (result === true || result === 'needs_params') return
     await sendMessage(
@@ -217,7 +252,11 @@ async function onSend(message) {
 }
 
 async function onAgentParamsSubmit(values) {
-  await provideMissingParams(values, () => messageListRef.value?.scrollToBottom())
+  await provideMissingParams(
+    values,
+    () => messageListRef.value?.scrollToBottom(),
+    (preview) => confirmRef.value?.show(preview)
+  )
 }
 
 async function onRegenerate() {
@@ -228,7 +267,17 @@ async function onRegenerate() {
 }
 
 function usePrompt(prompt) {
-  setMode(prompt.mode)
+  const mode = prompt.mode || 'chat'
+  const text = prompt.prompt || prompt.text || ''
+
+  setMode(mode)
+
+  if (text) {
+    if (prompt.sendNow) inputAreaRef.value?.setTextAndSend?.(text, mode)
+    else inputAreaRef.value?.setText?.(text, mode)
+    return
+  }
+
   inputAreaRef.value?.focusInput()
 }
 

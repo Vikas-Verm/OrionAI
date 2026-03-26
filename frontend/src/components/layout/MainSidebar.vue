@@ -30,21 +30,6 @@
           </div>
         </div>
 
-        <!-- Live unreads -->
-        <div v-if="liveBellItems.length">
-          <div class="bell-section-label">LIVE</div>
-          <div v-for="item in liveBellItems" :key="item.app" class="bell-live-card"
-            :style="{ borderLeftColor: item.color }" @click="openAppFromBell(item.route)">
-            <div class="bell-live-top">
-              <span class="bell-live-icon">{{ item.icon }}</span>
-              <span class="bell-live-label">{{ item.label }}</span>
-              <span class="bell-live-count" :style="{ background: item.color }">{{ item.count }}</span>
-            </div>
-            <div class="bell-live-summary">{{ item.summary }}</div>
-            <button v-if="item.ai?.action" class="bell-live-action">{{ item.ai.action }} →</button>
-          </div>
-        </div>
-
         <!-- History -->
         <div v-if="bellNotifications.length">
           <div class="bell-section-label">RECENT</div>
@@ -58,7 +43,7 @@
           </div>
         </div>
 
-        <div v-if="!liveBellItems.length && !bellNotifications.length" class="bell-empty">
+        <div v-if="!bellNotifications.length" class="bell-empty">
           🔔 All caught up!
         </div>
       </div>
@@ -93,7 +78,7 @@
       <!-- Header -->
       <div class="int-header" @click="intOpen = !intOpen">
         <span class="int-label">Connected Apps</span>
-        <span v-if="totalUnread > 0" class="int-total-pill">{{ totalUnread }}</span>
+        <span v-if="totalUnread > 0" class="int-total-pill">{{ formatCount(totalUnread) }}</span>
         <svg class="int-chevron" :class="{ open: intOpen }" width="12" height="12" viewBox="0 0 24 24" fill="none"
           stroke="currentColor" stroke-width="2.5">
           <polyline points="6 9 12 15 18 9" />
@@ -102,9 +87,9 @@
 
       <!-- ── COLLAPSED: all apps as icon grid, unread badge on top ── -->
       <div v-if="!intOpen" class="int-collapsed">
-        <span v-if="unreadApps.length === 0" class="int-no-msg">No new messages</span>
+        <span v-if="collapsedApps.length === 0" class="int-no-msg">No active notifications</span>
         <template v-else>
-          <div v-for="app in unreadApps" :key="app.id" class="int-badge"
+          <div v-for="app in collapsedApps" :key="app.id" class="int-badge"
             :class="{ 'int-badge-active': activeView === app.id, 'int-badge-unread': app.unread > 0 }" :style="{
               background: activeView === app.id ? app.color + '22' : 'rgba(255,255,255,0.05)',
               borderColor: app.unread > 0
@@ -113,11 +98,11 @@
                   ? app.color + '40'
                   : 'rgba(255,255,255,0.08)'
             }"
-            :title="`${app.label}${app.unread > 0 ? ': ' + app.unread + ' unread' : ''}${appSummary(app.id) ? '\n' + appSummary(app.id) : ''}`"
+            :title="`${app.label}${app.unread > 0 ? ': ' + formatCount(app.unread) + ' active' : ''}${appSummary(app.id) ? '\n' + appSummary(app.id) : ''}`"
             @click="openApp(app.id)">
             <component :is="app.icon" :size="16" />
             <span v-if="app.unread > 0" class="int-badge-pill" :style="{ background: app.color }">
-              {{ app.unread > 999 ? '999+' : app.unread }}
+              {{ formatCount(app.unread) }}
             </span>
           </div>
         </template>
@@ -132,11 +117,11 @@
           <div class="int-row-inner" @click="openApp(app.id)">
             <component :is="app.icon" :size="16" />
             <span class="int-row-name"
-              :style="{ color: activeView === app.id ? '#f1f5f9' : '#94a3b8', fontWeight: activeView === app.id ? 600 : 400 }">
+              :style="{ color: activeView === app.id ? 'var(--text-primary)' : 'var(--text-secondary)', fontWeight: activeView === app.id ? 600 : 400 }">
               {{ app.label }}
             </span>
             <span v-if="app.unread > 0" class="int-row-unread" :style="{ background: app.color }">
-              {{ app.unread > 999 ? '999+' : app.unread }}
+              {{ formatCount(app.unread) }}
             </span>
             <span class="app-health-dot" :class="getStatus(app.apiType)"
               :title="getErrorMessage(app.apiType) || 'Connected'"></span>
@@ -255,12 +240,16 @@ const themeOptions = [
   { value: 'system', icon: '💻', label: 'System' },
 ]
 
-const BELL_META = {
-  gmail: { label: 'Gmail', icon: '📧', color: '#EA4335', route: 'gmail' },
-  slack: { label: 'Slack', icon: '💬', color: '#E01E5A', route: 'slack' },
-  telegram: { label: 'Telegram', icon: '✈️', color: '#229ED9', route: 'telegram' },
-}
 const initials = computed(() => (store.user?.username || '?').slice(0, 2).toUpperCase())
+
+function formatCount(value) {
+  const count = Number(value || 0)
+  if (count < 1000) return String(count)
+  return new Intl.NumberFormat('en-IN', {
+    notation: 'compact',
+    maximumFractionDigits: count >= 10000 ? 0 : 1,
+  }).format(count)
+}
 
 // ── Inline SVG icon components ────────────────────────────────────────────
 function ic(fn) {
@@ -291,6 +280,15 @@ const CalendarIcon = ic(s => h('svg', { width: s, height: s, viewBox: '0 0 24 24
 const NotionIcon = ic(s => h('svg', { width: s, height: s, viewBox: '0 0 24 24' }, [
   h('path', { fill: 'currentColor', d: 'M4.459 4.208c.746.606 1.026.56 2.428.466l13.215-.793c.28 0 .047-.28-.046-.326L17.86 1.968c-.42-.326-.981-.7-2.055-.607L3.01 2.295c-.466.046-.56.28-.374.466zm.793 3.08v13.904c0 .747.373 1.027 1.214.98l14.523-.84c.841-.046.935-.56.935-1.167V6.354c0-.606-.233-.933-.748-.887l-15.177.887c-.56.047-.747.327-.747.934zm14.337.745c.093.42 0 .84-.42.888l-.7.14v10.264c-.608.327-1.168.514-1.635.514-.748 0-.935-.234-1.495-.933l-4.577-7.186v6.952L12.21 19s0 .84-1.168.84l-3.222.186c-.093-.186 0-.653.327-.746l.84-.233V9.854L7.822 9.76c-.094-.42.14-1.026.793-1.073l3.456-.233 4.764 7.279v-6.44l-1.215-.139c-.093-.514.28-.887.747-.933zM1.936 1.035l13.31-.98c1.634-.14 2.055-.047 3.082.7l4.249 2.986c.7.513.934.653.934 1.213v16.378c0 1.026-.373 1.634-1.68 1.726l-15.458.934c-.98.047-1.448-.093-1.962-.747l-3.129-4.06c-.56-.747-.793-1.306-.793-1.96V2.667c0-.839.374-1.54 1.447-1.632z' }),
 ]))
+const DatabaseIcon = ic(s => h('svg', { width: s, height: s, viewBox: '0 0 24 24', fill: 'none' }, [
+  h('ellipse', { cx: 12, cy: 5, rx: 8, ry: 3.5, fill: '#0ea5e9' }),
+  h('path', { d: 'M4 5v6c0 1.93 3.58 3.5 8 3.5s8-1.57 8-3.5V5', stroke: '#0ea5e9', 'stroke-width': 2 }),
+  h('path', { d: 'M4 11v6c0 1.93 3.58 3.5 8 3.5s8-1.57 8-3.5v-6', stroke: '#38bdf8', 'stroke-width': 2 }),
+]))
+const RazorpayIcon = ic(s => h('svg', { width: s, height: s, viewBox: '0 0 24 24' }, [
+  h('circle', { cx: 12, cy: 12, r: 12, fill: '#072654' }),
+  h('text', { x: 12, y: 16, 'text-anchor': 'middle', fill: 'white', 'font-size': 11, 'font-weight': 'bold' }, '₹'),
+]))
 
 const ALL_APPS = [
   { id: 'telegram', label: 'Telegram', color: '#229ED9', icon: TelegramIcon, apiType: 'telegram' },
@@ -300,15 +298,23 @@ const ALL_APPS = [
   { id: 'jira', label: 'Jira', color: '#0052CC', icon: JiraIcon, apiType: 'jira' },
   { id: 'google_calendar', label: 'Calendar', color: '#1a73e8', icon: CalendarIcon, apiType: 'google_calendar' },
   { id: 'notion', label: 'Notion', color: '#ffffff', icon: NotionIcon, apiType: 'notion' },
+  { id: 'database', label: 'Database', color: '#0ea5e9', icon: DatabaseIcon, apiType: 'database' },
+  { id: 'razorpay', label: 'Razorpay', color: '#072654', icon: RazorpayIcon, apiType: 'razorpay' },
 ]
 
 const unreadApps = computed(() =>
   connectedApps.value.filter(a => a.unread > 0)
 )
+const collapsedApps = computed(() =>
+  unreadApps.value
+)
 const connectedApps = computed(() =>
   ALL_APPS
     .filter(a => connectedMap[a.apiType])
-    .map(a => ({ ...a, unread: unreadByApp[a.id]?.count || 0 }))
+    .map(a => ({
+      ...a,
+      unread: unreadByApp[a.id]?.displayCount ?? unreadByApp[a.id]?.count ?? 0,
+    }))
 )
 
 const totalUnread = computed(() =>
@@ -335,7 +341,9 @@ async function loadConnected() {
   try {
     const res = await api.get('/api/integrations')
     Object.keys(connectedMap).forEach(k => delete connectedMap[k])
-    for (const int of res.data) connectedMap[int.type] = true
+    for (const int of res.data) {
+      if (int?.enabled !== false) connectedMap[int.type] = true
+    }
   } catch (e) {
     console.error('Sidebar: failed to load integrations', e)
   }
@@ -360,16 +368,6 @@ function onOutsideClick(e) {
   }
 }
 
-const liveBellItems = computed(() =>
-  Object.entries(unreadByApp)
-    .filter(([, v]) => v?.count > 0)
-    .map(([app, v]) => ({
-      app, count: v.count, summary: v.summary || `${v.count} unread`,
-      ai: v.ai || null, items: v.items || [],
-      ...(BELL_META[app] || { label: app, icon: '🔔', color: '#6366f1', route: app }),
-    }))
-)
-
 function openAppFromBell(route) {
   bellOpen.value = false
   markSeen(route)
@@ -387,12 +385,14 @@ function bellTimeAgo(date) {
 const { getStatus, getErrorMessage, startAutoCheck, stopAutoCheck } = useIntegrationHealth()
 onMounted(async () => {
   document.addEventListener('click', onOutsideClick)
+  window.addEventListener('orion:integrations-updated', loadConnected)
   await loadConnected()
   startPolling()
   startAutoCheck()
 })
 onUnmounted(() => {
   document.removeEventListener('click', onOutsideClick)
+  window.removeEventListener('orion:integrations-updated', loadConnected)
   stopPolling()
   stopAutoCheck()
 })
@@ -453,23 +453,25 @@ defineExpose({ searchInputRef, refreshConnected: loadConnected })
 
 .search-input {
   width: 100%;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: color-mix(in srgb, var(--bg-surface) 88%, transparent);
+  border: 1px solid var(--border-default);
   border-radius: 8px;
-  padding: 7px 10px;
+  padding: 8px 10px;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 13px;
   outline: none;
   box-sizing: border-box;
-  transition: border-color 0.15s;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bg-elevated) 40%, transparent);
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
 }
 
 .search-input::placeholder {
-  color: #64748b;
+  color: var(--text-muted);
 }
 
 .search-input:focus {
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .new-chat-wrap {

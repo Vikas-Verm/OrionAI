@@ -1,6 +1,7 @@
 const { google } = require("googleapis");
 const Integration = require("../../models/Integration");
 const Fuse = require("fuse.js");
+const { getOAuthConfig } = require("../googleOAuthConfig");
 
 // ── Helper: build authorized Google Calendar client ──────────────────────────
 async function getCalendarClient(userId) {
@@ -10,10 +11,11 @@ async function getCalendarClient(userId) {
       "Google Calendar is not connected. Connect it in Integrations first."
     );
 
+  const oauth = getOAuthConfig("google_calendar", int.googleCalendar || {});
   const oauth2 = new google.auth.OAuth2(
-    process.env.GCAL_CLIENT_ID,
-    process.env.GCAL_CLIENT_SECRET,
-    process.env.GCAL_REDIRECT_URI
+    oauth.clientId,
+    oauth.clientSecret,
+    oauth.redirectUri
   );
   oauth2.setCredentials({
     access_token: int.googleCalendar.accessToken,
@@ -62,6 +64,17 @@ function fmtEvent(e) {
   };
 }
 
+function isUpcomingTimedEvent(event, now = new Date()) {
+  if (!event?.start || !String(event.start).includes("T")) return false;
+  const endValue =
+    event.end && String(event.end).includes("T") ? event.end : event.start;
+  return new Date(endValue).getTime() > now.getTime();
+}
+
+function filterUpcomingTimedEvents(events = [], now = new Date()) {
+  return events.filter((event) => isUpcomingTimedEvent(event, now));
+}
+
 // ── TOOL 1: calendar_get_today ────────────────────────────────────────────────
 async function calendarGetToday(params, ctx) {
   const { calendar } = await getCalendarClient(ctx.userId);
@@ -81,13 +94,16 @@ async function calendarGetToday(params, ctx) {
   });
 
   const events = (res.data.items || []).map(fmtEvent);
-  const lines = events.length
-    ? events.map((e) => `• ${e.time} — ${e.title}${e.meet ? " 📹" : ""}`)
+  const visibleEvents = params?.upcomingOnly
+    ? filterUpcomingTimedEvents(events, now)
+    : events;
+  const lines = visibleEvents.length
+    ? visibleEvents.map((e) => `• ${e.time} — ${e.title}${e.meet ? " 📹" : ""}`)
     : ["No events today"];
 
   return {
-    events,
-    count: events.length,
+    events: visibleEvents,
+    count: visibleEvents.length,
     summary: `📅 Today (${now.toLocaleDateString("en-IN", {
       weekday: "long",
       day: "numeric",
@@ -462,4 +478,6 @@ module.exports = {
   calendarDelete,
   calendarGetInvites,
   calendarRespond,
+  filterUpcomingTimedEvents,
+  isUpcomingTimedEvent,
 };

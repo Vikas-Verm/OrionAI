@@ -1,18 +1,80 @@
 import { store, resetChat } from "../stores/app";
 import { sessionsAPI, filesAPI } from "../services/api";
 
+let creatingNewChatPromise = null;
+
 export function useSession() {
   async function loadSessions(search = "") {
     const res = await sessionsAPI.list(search);
     store.sessions = res.data;
   }
 
-  async function startNewChat() {
+  async function startNewChat(forceCreate = false) {
+    const currentSession = store.sessions.find(
+      (session) => session.sessionId === store.currentSessionId
+    );
+    const currentIsBlankDraft =
+      !!store.currentSessionId &&
+      currentSession?.title === "New Chat" &&
+      store.messages.length === 0 &&
+      store.attachments.length === 0;
+
+    if (!forceCreate && currentIsBlankDraft) {
+      resetChat();
+      return store.currentSessionId;
+    }
+
+    if (!forceCreate) {
+      const blankDrafts = store.sessions.filter(
+        (session) =>
+          session.title === "New Chat" &&
+          session.sessionId !== store.currentSessionId
+      );
+
+      for (const draft of blankDrafts) {
+        try {
+          const [sessionRes, filesRes] = await Promise.all([
+            sessionsAPI.messages(draft.sessionId),
+            filesAPI.list(draft.sessionId),
+          ]);
+
+          const draftMessages = sessionRes.data.messages || [];
+          const draftFiles = filesRes.data || [];
+
+          if (draftMessages.length === 0 && draftFiles.length === 0) {
+            store.currentSessionId = draft.sessionId;
+            store.messages = [];
+            store.mode = sessionRes.data.mode || draft.mode || "chat";
+            store.attachments = [];
+            store.chartData = null;
+            store.showCanvas = false;
+            store.canvasCode = "";
+            return draft.sessionId;
+          }
+        } catch {
+          // Ignore stale draft candidates and continue searching.
+        }
+      }
+    }
+
+    if (creatingNewChatPromise) {
+      return creatingNewChatPromise;
+    }
+
     resetChat();
-    const res = await sessionsAPI.create(store.mode);
-    store.currentSessionId = res.data.sessionId;
-    store.messages = [];
-    await loadSessions();
+    creatingNewChatPromise = (async () => {
+      const res = await sessionsAPI.create(store.mode);
+      store.currentSessionId = res.data.sessionId;
+      store.messages = [];
+      await loadSessions();
+      return res.data.sessionId;
+    })();
+
+    try {
+      return await creatingNewChatPromise;
+    } finally {
+      creatingNewChatPromise = null;
+    }
   }
 
   async function switchSession(sessionId) {
@@ -40,7 +102,10 @@ export function useSession() {
 
   async function deleteSession(sessionId) {
     await sessionsAPI.delete(sessionId);
-    if (sessionId === store.currentSessionId) await startNewChat();
+    if (sessionId === store.currentSessionId) {
+      store.currentSessionId = null;
+      await startNewChat(true);
+    }
     await loadSessions();
   }
 

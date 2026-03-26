@@ -10,15 +10,45 @@
 
 const Skill = require("../models/skill");
 const { chatCompleteNoSystem } = require("./llmService");
-const { getMemoryContext } = require("./memoryService");
+const { getMemoryContext } = require("../services/memoryService");
+
+const BUILTIN_TOOLS = [
+  {
+    name: "database_query",
+    description:
+      "Query the user's connected business database in a read-only way using natural language.",
+    paramsText:
+      '    - question (string, required): the business question to answer from the connected database',
+  },
+  {
+    name: "razorpay_get_payouts",
+    description:
+      "Fetch recent Razorpay payouts and their statuses for finance or payroll workflows.",
+    paramsText: [
+      '    - status (string, optional): filter by payout status such as processed or pending',
+      '    - limit (number, optional): how many payouts to fetch, default 10',
+    ].join("\n"),
+  },
+  {
+    name: "razorpay_create_payout",
+    description:
+      "Create a real Razorpay payout to an existing fund account. Use only when the user clearly wants to send money.",
+    paramsText: [
+      '    - fundAccountId (string, required): existing Razorpay fund account ID',
+      '    - amount (number, required): amount in INR rupees to send',
+      '    - narration (string, optional): payout narration',
+      '    - referenceId (string, optional): business reference',
+      '    - mode (string, optional): IMPS, NEFT, RTGS, or UPI',
+    ].join("\n"),
+  },
+];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Load all enabled tools from Skill DB
 // ─────────────────────────────────────────────────────────────────────────────
 async function loadToolsFromDB() {
   const skills = await Skill.find({ enabled: true });
-
-  return skills.map((s) => {
+  const dbTools = skills.map((s) => {
     const paramsText = (s.params || [])
       .map((p) => {
         let line = `    - ${p.name} (${p.type}${
@@ -33,6 +63,8 @@ async function loadToolsFromDB() {
 
     return { name: s.toolName, description: s.description, paramsText };
   });
+
+  return [...BUILTIN_TOOLS, ...dbTools];
 }
 
 function formatTools(tools) {
@@ -59,9 +91,13 @@ async function parseAgentIntent(userMessage, history = [], userId = null) {
     const now = new Date();
     const today = now.toISOString().split("T")[0]; // YYYY-MM-DD
     const dayName = now.toLocaleDateString("en-US", { weekday: "long" });
-    const memoryCtx = userId ? await getMemoryContext(userId).catch(() => "") : "";
+    const memoryCtx = userId
+      ? await getMemoryContext(userId).catch(() => "")
+      : "";
     const prompt = [
-      `You are an AI agent planner.${memoryCtx ? `\n${memoryCtx}\n` : ""} Analyze the user request and decide which tools to call.`,
+      `You are an AI agent planner.${
+        memoryCtx ? `\n${memoryCtx}\n` : ""
+      } Analyze the user request and decide which tools to call.`,
       ``,
       `Current date: ${today} (${dayName}, IST timezone UTC+05:30)`,
       ``,

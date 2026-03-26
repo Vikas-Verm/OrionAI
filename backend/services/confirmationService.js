@@ -17,6 +17,7 @@ const DESTRUCTIVE_TOOLS = new Set([
 
   // Mass actions
   "jira_notify_overdue",
+  "razorpay_create_payout",
 ]);
 
 const BATCH_THRESHOLD = 3;
@@ -36,6 +37,7 @@ function checkNeedsConfirmation(tool, params, previousResults = []) {
     "telegram_send_message",
     "jira_notify_overdue",
     "calendar_delete",
+    "razorpay_create_payout",
   ].includes(tool);
 
   // Batch actions (multiple recipients) always need confirmation
@@ -109,6 +111,18 @@ function buildPreview(tool, params, previousResults) {
         action: "Send overdue notifications to team",
         icon: "🔔",
         danger: false,
+      };
+
+    case "razorpay_create_payout":
+      return {
+        action: "Create Razorpay payout",
+        title: params.referenceId || params.contactName || "Business payout",
+        to: params.contactName || params.fundAccountId || params.accountNumber,
+        message: params.amount
+          ? `Amount: INR ${Number(params.amount).toLocaleString("en-IN")}`
+          : params.narration || "This will trigger a real payout.",
+        icon: "₹",
+        danger: true,
       };
 
     default:

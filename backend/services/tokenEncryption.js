@@ -132,6 +132,7 @@ const SENSITIVE_FIELDS = {
   whatsapp: ["sessionData"],
   jira: ["apiToken"],
   notion: ["apiToken"],
+  database: ["connectionString"],
   razorpay: ["keySecret"],
   github: ["accessToken", "clientSecret"],
 };

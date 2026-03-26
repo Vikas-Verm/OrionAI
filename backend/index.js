@@ -3,8 +3,10 @@ const http = require("http");
 const app = require("./app");
 const connectDB = require("./config/db");
 const { init: initWS } = require("./services/websocketServer");
+const { attachProcessHandlers } = require("./services/errorMonitoring");
 
 const PORT = process.env.PORT || 3000;
+attachProcessHandlers();
 
 connectDB().then(() => {
   // Create HTTP server from Express app

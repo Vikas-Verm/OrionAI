@@ -66,7 +66,7 @@
   
   <script setup>
   import { ref, computed } from 'vue'
-  import { useNotifications } from '../../composables/useNotifications'
+  import { useWebSocket } from '../../composables/useWebSocket'
   
   const props = defineProps({
     connectedApps: { type: Array, default: () => [] }, // from parent/sidebar
@@ -75,7 +75,7 @@
   
   const emit = defineEmits(['openApp'])
   
-  const { unreadByApp, totalUnread } = useNotifications()
+  const { unreadByApp, totalUnread } = useWebSocket()
   
   const expanded = ref(false)
   
@@ -105,12 +105,12 @@
   })
   
   function appUnread(appId) {
-    return unreadByApp.value[appId]?.count || 0
+    return unreadByApp[appId]?.displayCount ?? unreadByApp[appId]?.count ?? 0
   }
   
-  const anySummary  = computed(() => Object.values(unreadByApp.value).some(a => a?.summary))
+  const anySummary  = computed(() => Object.values(unreadByApp).some(a => a?.summary))
   const firstSummary = computed(() => {
-    const entry = Object.values(unreadByApp.value).find(a => a?.summary && a.count > 0)
+    const entry = Object.values(unreadByApp).find(a => a?.summary && (a.displayCount ?? a.count) > 0)
     return entry?.summary || ''
   })
   

@@ -300,6 +300,26 @@
         <span class="loading-label">Thinking…</span>
       </div>
 
+      <div v-if="showFeedback" class="feedback-row">
+        <span class="feedback-label">Was this helpful?</span>
+        <button
+          class="feedback-btn"
+          :class="{ active: feedbackRating === 'up' }"
+          :disabled="savingFeedback"
+          @click="submitFeedback('up')"
+        >
+          👍
+        </button>
+        <button
+          class="feedback-btn"
+          :class="{ active: feedbackRating === 'down' }"
+          :disabled="savingFeedback"
+          @click="submitFeedback('down')"
+        >
+          👎
+        </button>
+      </div>
+
     </div>
   </div>
 
@@ -317,21 +337,42 @@
         📊 {{ msg.recordCount }} records found
       </div>
       <div v-if="msg.webSearched" class="web-searched-badge">🌐 Web search used</div>
+      <div v-if="showFeedback" class="feedback-row">
+        <span class="feedback-label">Was this helpful?</span>
+        <button
+          class="feedback-btn"
+          :class="{ active: feedbackRating === 'up' }"
+          :disabled="savingFeedback"
+          @click="submitFeedback('up')"
+        >
+          👍
+        </button>
+        <button
+          class="feedback-btn"
+          :class="{ active: feedbackRating === 'down' }"
+          :disabled="savingFeedback"
+          @click="submitFeedback('down')"
+        >
+          👎
+        </button>
+      </div>
     </div>
   </div>
 
 </template>
 
 <script setup>
-import { computed, ref, reactive } from 'vue'
+import { computed, ref, reactive, watch } from 'vue'
 import { useChat } from '../../composables/useChat'
-import { agentAPI } from '../../services/api'
+import { agentAPI, sessionsAPI } from '../../services/api'
+import { store } from '../../stores/app'
 import TelegramRenderer from '../../components/agent/renderers/TelegramRenderer.vue'
 import CalendarRenderer from '../../components/agent/renderers/CalendarRenderer.vue'
 import SlackRenderer    from '../../components/agent/renderers/SlackRenderer.vue'
 
 const props = defineProps({
-  msg: { type: Object, required: true }
+  msg: { type: Object, required: true },
+  messageIndex: { type: Number, default: -1 },
 })
 
 const { renderMarkdown, hasRenderableCode, openPreviewFromMessage } = useChat()
@@ -477,6 +518,21 @@ const sendingId       = ref(null)
 const sentId          = ref(null)
 const suggestingId    = ref(null)
 const suggestionError = ref(null)
+const savingFeedback  = ref(false)
+const feedbackRating  = ref(props.msg.feedback?.rating || null)
+
+watch(
+  () => props.msg.feedback?.rating,
+  (value) => {
+    feedbackRating.value = value || null
+  }
+)
+
+const showFeedback = computed(() => {
+  if (props.msg.role !== 'assistant') return false
+  if (props.msg.isAgent) return props.msg.agentDone !== false
+  return !!props.msg.content
+})
 
 function emailUnreadCount(step) {
   return (step.richEmails || []).filter(e => e.unread).length
@@ -544,4 +600,64 @@ function avatarInitials(name) {
   const parts = name.split(/[@\s.]+/).filter(Boolean)
   return parts.length >= 2 ? (parts[0][0] + parts[1][0]).toUpperCase() : name.slice(0, 2).toUpperCase()
 }
+
+async function submitFeedback(rating) {
+  if (!store.currentSessionId || props.messageIndex < 0 || savingFeedback.value) return
+
+  const nextRating = feedbackRating.value === rating ? null : rating
+  savingFeedback.value = true
+
+  try {
+    await sessionsAPI.feedback(store.currentSessionId, props.messageIndex, nextRating)
+    feedbackRating.value = nextRating
+  } catch (err) {
+    console.error('Failed to save feedback:', err)
+  } finally {
+    savingFeedback.value = false
+  }
+}
 </script>
+
+<style scoped>
+.feedback-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.feedback-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.feedback-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-overlay);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.feedback-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(45, 212, 191, 0.28);
+  background: rgba(45, 212, 191, 0.08);
+}
+
+.feedback-btn.active {
+  border-color: rgba(45, 212, 191, 0.38);
+  background: rgba(45, 212, 191, 0.12);
+  color: #ccfbf1;
+}
+
+.feedback-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+</style>

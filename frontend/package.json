@@ -12,6 +12,7 @@
     "lint:eslint": "eslint . --fix --cache"
   },
   "dependencies": {
+    "@sentry/vue": "^10.45.0",
     "axios": "^1.13.5",
     "chart.js": "^4.5.1",
     "highlight.js": "^11.11.1",

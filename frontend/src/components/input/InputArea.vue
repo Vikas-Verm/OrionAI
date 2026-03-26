@@ -2,30 +2,6 @@
   <div class="input-area">
     <FileChips @remove="emit('removeFile', $event)" />
 
-    <!-- Mode toggle — moved here from sidebar -->
-    <div class="mode-bar">
-      <button
-        :class="['mode-pill', store.mode === 'chat' && !store.webMode ? 'active' : '']"
-        @click="setMode('chat'); store.webMode = false">
-        <span class="mode-pill-icon">💬</span> Chat
-      </button>
-      <button
-        :class="['mode-pill', store.webMode ? 'active web' : '']"
-        @click="toggleWebMode">
-        <span class="mode-pill-icon">🌐</span> Web
-      </button>
-      <button
-        :class="['mode-pill', store.mode === 'db' && !store.webMode ? 'active' : '']"
-        @click="setMode('db'); store.webMode = false">
-        <span class="mode-pill-icon">🗄️</span> Data
-      </button>
-      <button
-        :class="['mode-pill', store.mode === 'agent' && !store.webMode ? 'active agent' : '']"
-        @click="setMode('agent'); store.webMode = false">
-        <span class="mode-pill-icon">🤖</span> Agent
-      </button>
-    </div>
-
     <div class="input-box" :class="{ 'web-active-box': store.webMode }">
       <AttachMenu ref="attachMenuRef"
         @upload="emit('upload', $event)"
@@ -67,7 +43,7 @@
 
 <script setup>
 import { ref, nextTick } from 'vue'  // ← added nextTick
-import { store, inputPlaceholder, setMode, toggleWebMode } from '../../stores/app'
+import { store, inputPlaceholder, setMode } from '../../stores/app'
 import { useVoice } from '../../composables/useVoice'
 import FileChips from './FileChips.vue'
 import AttachMenu from './AttachMenu.vue'
@@ -100,28 +76,27 @@ function autoResize() {
 function closeMenus() { attachMenuRef.value?.closeMenu() }
 function focusInput()  { textareaRef.value?.focus() }
 
-// ── Called by OnboardingFlow when user picks a demo command ─────────────────
-// Switches to agent mode, fills input, and sends — all in one call
-function setTextAndSend(text) {
-  setMode('agent')               // ← switch to agent mode first
-  store.webMode = false
-  input.value = text             // ← fill the textarea
-  nextTick(() => {
-    autoResize()                 // ← resize textarea to fit text
-    onSend()                     // ← send it
-  })
-}
-
-// ── setText without sending — just pre-fills the input ─────────────────────
-function setText(text) {
-  setMode('agent')
+function primeComposer(text, mode = store.mode, sendNow = false) {
+  setMode(mode)
   store.webMode = false
   input.value = text
   nextTick(() => {
     autoResize()
-    textareaRef.value?.focus()
+    if (sendNow) onSend()
+    else textareaRef.value?.focus()
   })
 }
 
-defineExpose({ closeMenus, focusInput, setTextAndSend, setText })
+// ── Called by OnboardingFlow when user picks a demo command ─────────────────
+// Switches to agent mode, fills input, and sends — all in one call
+function setTextAndSend(text, mode = 'agent') {
+  primeComposer(text, mode, true)
+}
+
+// ── setText without sending — just pre-fills the input ─────────────────────
+function setText(text, mode = 'agent') {
+  primeComposer(text, mode, false)
+}
+
+defineExpose({ closeMenus, focusInput, setTextAndSend, setText, prefill: primeComposer })
 </script>

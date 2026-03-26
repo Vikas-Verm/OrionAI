@@ -4,6 +4,12 @@ const { WebSocketServer, WebSocket } = require("ws");
 const jwt = require("jsonwebtoken");
 const Integration = require("../models/Integration");
 const { chatCompleteNoSystem } = require("./llmService");
+const {
+  getGmailClient,
+  getGmailAttentionFromClient,
+  listRecentPriorityGmailMessages,
+  getCalendarUpcomingSignal,
+} = require("./workspaceSignalsService");
 
 const connections = new Map();
 const pollers = new Map();
@@ -92,9 +98,10 @@ function init(httpServer) {
 async function pollUser(userId, isFirstRun = false) {
   if (!connections.has(userId)) return;
 
-  const [gmailRes, telegramRes, slackRes, whatsappRes] =
+  const [gmailRes, calendarRes, telegramRes, slackRes, whatsappRes] =
     await Promise.allSettled([
       checkGmail(userId, isFirstRun),
+      checkCalendar(userId),
       checkTelegram(userId, isFirstRun),
       checkSlack(userId, isFirstRun),
       checkWhatsApp(userId),
@@ -102,6 +109,8 @@ async function pollUser(userId, isFirstRun = false) {
 
   const checks = {
     gmail: gmailRes.status === "fulfilled" ? gmailRes.value : null,
+    google_calendar:
+      calendarRes.status === "fulfilled" ? calendarRes.value : null,
     telegram: telegramRes.status === "fulfilled" ? telegramRes.value : null,
     slack: slackRes.status === "fulfilled" ? slackRes.value : null,
     whatsapp: whatsappRes.status === "fulfilled" ? whatsappRes.value : null,
@@ -120,7 +129,9 @@ async function pollUser(userId, isFirstRun = false) {
     const newCount = isNew ? result._newCount || 1 : 0;
 
     const ai =
-      (isNew || isFirstRun) && result.items?.length
+      result.allowAi === false
+        ? null
+        : (isNew || isFirstRun) && result.items?.length
         ? await aiProcess(app, result.items).catch(() => null)
         : null;
 
@@ -128,6 +139,7 @@ async function pollUser(userId, isFirstRun = false) {
       app,
       count: result.count,
       items: result.items?.slice(0, 3) || [],
+      summary: result.summary || null,
       ai,
       isNew,
       newCount,
@@ -169,48 +181,22 @@ async function pollUser(userId, isFirstRun = false) {
 // ─────────────────────────────────────────────────────────────────────────────
 async function checkGmail(userId, isFirstRun) {
   try {
-    const integration = await Integration.findOne({
-      userId,
-      type: "gmail",
-      enabled: true,
-    });
-    if (!integration?.gmail?.refreshToken) return null;
-
-    const { google } = require("googleapis");
-    const oauth2 = new google.auth.OAuth2(
-      integration.gmail.clientId || process.env.GOOGLE_CLIENT_ID,
-      integration.gmail.clientSecret || process.env.GOOGLE_CLIENT_SECRET,
-      process.env.GOOGLE_REDIRECT_URI
-    );
-    oauth2.setCredentials({
-      access_token: integration.gmail.accessToken,
-      refresh_token: integration.gmail.refreshToken,
-      expiry_date: integration.gmail.expiresAt
-        ? new Date(integration.gmail.expiresAt).getTime()
-        : undefined,
-    });
-
-    const gmail = google.gmail({ version: "v1", auth: oauth2 });
+    const client = await getGmailClient(userId);
+    if (!client) return null;
+    const { gmail, integration } = client;
 
     // ── Query 1: Recent inbox messages (read OR unread, last 20 min) ──────
-    // This catches calendar invites that Gmail auto-marks as read.
-    // 20 min = slightly more than 15s poll interval to avoid gaps.
-    const recentRes = await gmail.users.messages.list({
-      userId: "me",
-      maxResults: 15,
-      q: "in:inbox newer_than:20m -category:promotions -category:social -category:forums", // ← no unread filter
-    });
+    const [recentMessages, attention] = await Promise.all([
+      listRecentPriorityGmailMessages(gmail, 15),
+      getGmailAttentionFromClient(gmail, integration, { previewLimit: 3 }),
+    ]);
 
-    const recentMessages = recentRes.data.messages || [];
     const currentIds = new Set(recentMessages.map((m) => m.id));
     const prevIds = lastGmailMsgIds.get(userId) || new Set();
 
     // New = IDs we haven't seen in any previous poll
     const newIds = [...currentIds].filter((id) => !prevIds.has(id));
 
-    // Update stored IDs — merge with previous so we don't re-notify old ones
-    const mergedIds = new Set([...prevIds, ...currentIds]);
-    // Keep only IDs from last hour to prevent unbounded growth
     lastGmailMsgIds.set(userId, currentIds);
 
     if (!isFirstRun) {
@@ -218,18 +204,6 @@ async function checkGmail(userId, isFirstRun) {
         `[Gmail] ${userId} — recent (20min): ${recentMessages.length}, new: ${newIds.length}`
       );
     }
-
-    // ── Query 2: Unread count for badge display ───────────────────────────
-    let count = 0;
-    try {
-      const unreadRes = await gmail.users.messages.list({
-        userId: "me",
-        maxResults: 1,
-        q: "is:unread in:inbox category:primary",
-        fields: "resultSizeEstimate",
-      });
-      count = Math.min(unreadRes.data.resultSizeEstimate || 0, 999);
-    } catch {}
 
     // ── Fetch previews for new messages ───────────────────────────────────
     const toFetch = isFirstRun
@@ -283,9 +257,42 @@ async function checkGmail(userId, isFirstRun) {
       );
     }
 
-    return { count, items, _isNew: hasNew, _newCount: newIds.length };
+    return {
+      count: attention.count,
+      summary: attention.summary,
+      items,
+      _isNew: hasNew,
+      _newCount: newIds.length,
+    };
   } catch (err) {
+    if (err?.code === "GMAIL_RECONNECT_REQUIRED") {
+      console.warn(`[Gmail] reconnect required for ${userId}`);
+      return null;
+    }
     console.error(`[Gmail] error for ${userId}:`, err.message);
+    return null;
+  }
+}
+
+async function checkCalendar(userId) {
+  try {
+    const integration = await Integration.findOne({
+      userId,
+      type: "google_calendar",
+      enabled: true,
+    });
+    if (!integration?.googleCalendar?.accessToken) return null;
+
+    const signal = await getCalendarUpcomingSignal(userId);
+    return {
+      count: signal.count,
+      items: signal.items || [],
+      summary: signal.summary,
+      allowAi: false,
+      _isNew: false,
+      _newCount: 0,
+    };
+  } catch {
     return null;
   }
 }

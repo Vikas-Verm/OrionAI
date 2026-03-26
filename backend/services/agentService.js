@@ -49,8 +49,14 @@ const {
   toolTelegramReplyMessage,
   toolTelegramGetContactInfo,
 } = require("./tools/toolTelegram");
+const { toolDatabaseQuery } = require("./tools/toolDatabase");
+const {
+  toolRazorpayGetPayouts,
+  toolRazorpayCreatePayout,
+} = require("./tools/toolRazorpay");
 const Skill = require("../models/skill");
 const { checkNeedsConfirmation } = require("./confirmationService");
+const { waitForConfirmation } = require("./agentConfirmationStore");
 const { withRetry } = require("./retryHelper");
 // ─────────────────────────────────────────────────────────────────────────────
 // TOOL_REGISTRY — static entries for non-Jira tools (document, email etc.)
@@ -93,6 +99,9 @@ const STATIC_TOOL_REGISTRY = {
   whatsapp_get_messages: { icon: "💬", label: "Read WhatsApp" },
   whatsapp_get_unread: { icon: "🔔", label: "WhatsApp unread" },
   whatsapp_list_chats: { icon: "💬", label: "WhatsApp chats" },
+  database_query: { icon: "🗄️", label: "Query connected database" },
+  razorpay_get_payouts: { icon: "₹", label: "List Razorpay payouts" },
+  razorpay_create_payout: { icon: "₹", label: "Create Razorpay payout" },
 };
 
 // ── Load Jira + custom tools from DB and merge with static ───────────────────
@@ -869,7 +878,7 @@ async function toolDraftMessage(params) {
 // ─────────────────────────────────────────────────────────────────────────────
 // RUN AGENT
 // ─────────────────────────────────────────────────────────────────────────────
-async function runAgent(steps, db, onProgress, userId) {
+async function runAgent(steps, db, onProgress, userId, sessionId = "default") {
   // Load registry fresh from DB each run so new skills are picked up immediately
   const TOOL_REGISTRY = await loadToolRegistry();
   const ctx = { userId };
@@ -887,7 +896,7 @@ async function runAgent(steps, db, onProgress, userId) {
 
     if (needsConfirm) {
       await onProgress({ status: "confirm_needed", tool: step.tool, preview });
-      const confirmed = await waitForConfirmation(sessionId, step.tool);
+      const confirmed = await waitForConfirmation(sessionId, step.tool, preview);
       if (!confirmed) {
         results.push({
           tool: step.tool,
@@ -1308,6 +1317,26 @@ async function runAgent(steps, db, onProgress, userId) {
           result = await withRetry(
             () => toolWhatsApp({ action: "list_chats", ...params }, ctx),
             { label: "whatsapp_list_chats" }
+          );
+          break;
+
+        case "database_query":
+          result = await withRetry(() => toolDatabaseQuery(params, ctx), {
+            label: "database_query",
+          });
+          break;
+
+        case "razorpay_get_payouts":
+          result = await withRetry(
+            () => toolRazorpayGetPayouts(params, ctx),
+            { label: "razorpay_get_payouts" }
+          );
+          break;
+
+        case "razorpay_create_payout":
+          result = await withRetry(
+            () => toolRazorpayCreatePayout(params, ctx),
+            { label: "razorpay_create_payout" }
           );
           break;
 

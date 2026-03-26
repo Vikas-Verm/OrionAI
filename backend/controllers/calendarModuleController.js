@@ -5,6 +5,7 @@
  */
 const axios = require("axios");
 const Integration = require("../models/Integration");
+const { getOAuthConfig } = require("../services/googleOAuthConfig");
 
 async function getCalendarClient(userId) {
   const doc = await Integration.findOne({
@@ -17,17 +18,12 @@ async function getCalendarClient(userId) {
       "Google Calendar not connected. Go to Settings → Integrations → Google Calendar."
     );
   }
+  const oauth = getOAuthConfig("google_calendar", doc.googleCalendar || {});
   const cfg = {
     accessToken: doc.googleCalendar.accessToken || null,
     refreshToken: doc.googleCalendar.refreshToken || null,
-    clientId:
-      doc.googleCalendar.clientId ||
-      process.env.GMAIL_CLIENT_ID ||
-      process.env.GOOGLE_CLIENT_ID,
-    clientSecret:
-      doc.googleCalendar.clientSecret ||
-      process.env.GMAIL_CLIENT_SECRET ||
-      process.env.GOOGLE_CLIENT_SECRET,
+    clientId: oauth.clientId,
+    clientSecret: oauth.clientSecret,
   };
   const accessToken = await refreshAccessToken(cfg);
   return axios.create({

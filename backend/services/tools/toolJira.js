@@ -253,11 +253,29 @@ async function toolGetOverdueTickets(params, ctx) {
   );
 
   const tickets = (res.data.issues || []).map(formatTicket);
+  let myAccountId = null;
+  let myEmail = null;
+
+  try {
+    const meRes = await safeJira(() => client.get("/myself"));
+    myAccountId = meRes.data?.accountId || null;
+    myEmail = meRes.data?.emailAddress || null;
+  } catch (err) {
+    console.warn("Could not fetch current Jira user for overdue split:", err.message);
+  }
+
+  const myTickets = tickets.filter((ticket) => {
+    if (myAccountId && ticket.assigneeId === myAccountId) return true;
+    if (myEmail && ticket.assigneeEmail?.toLowerCase() === myEmail.toLowerCase()) return true;
+    return false;
+  });
 
   return {
     projectKey: key,
     count: tickets.length,
+    myCount: myTickets.length,
     tickets,
+    myTickets,
     summary: tickets.length
       ? `⚠️ ${tickets.length} overdue tickets`
       : `✅ No overdue tickets`,

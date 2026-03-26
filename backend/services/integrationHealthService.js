@@ -5,6 +5,9 @@
 "use strict";
 
 const Integration = require("../models/Integration");
+const { getOAuthConfig } = require("./googleOAuthConfig");
+const { testDatabaseConnection } = require("./connectedDatabaseService");
+const { testRazorpayConnection } = require("./tools/toolRazorpay");
 
 // Health status cache: userId:type → { status, checkedAt, error }
 const healthCache = new Map();
@@ -24,15 +27,42 @@ function resolveField(type) {
   return type === "google_calendar" ? "googleCalendar" : type;
 }
 
+function isInvalidGrantError(err) {
+  const haystack = [
+    err?.response?.data?.error,
+    err?.response?.data?.error_description,
+    err?.errors?.[0]?.message,
+    err?.message,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return haystack.includes("invalid_grant");
+}
+
+async function markGoogleReconnectRequired(integration, type) {
+  const field = resolveField(type);
+  await Integration.findByIdAndUpdate(integration._id, {
+    $set: {
+      enabled: false,
+      [`${field}.accessToken`]: "",
+      [`${field}.expiresAt`]: null,
+      lastTestOk: false,
+      updatedAt: new Date(),
+    },
+  }).catch(() => {});
+}
+
 // ── Refresh Google tokens (Gmail + Calendar) ──────────────────────────────
 async function refreshGoogleToken(integration, type) {
   const field = resolveField(type);
   try {
     const { google } = require("googleapis");
+    const oauth = getOAuthConfig(type, integration[field] || {});
     const oauth2 = new google.auth.OAuth2(
-      integration[field].clientId || process.env.GOOGLE_CLIENT_ID,
-      integration[field].clientSecret || process.env.GOOGLE_CLIENT_SECRET,
-      process.env.GOOGLE_REDIRECT_URI
+      oauth.clientId,
+      oauth.clientSecret,
+      oauth.redirectUri
     );
     oauth2.setCredentials({ refresh_token: integration[field].refreshToken });
 
@@ -50,6 +80,13 @@ async function refreshGoogleToken(integration, type) {
     console.log(`🔄 Refreshed ${type} token for ${integration.userId}`);
     return { healthy: true };
   } catch (err) {
+    if (isInvalidGrantError(err)) {
+      await markGoogleReconnectRequired(integration, type);
+      console.warn(
+        `Reconnect required for ${type}/${integration.userId}: invalid_grant`
+      );
+      return { healthy: false, error: "Reconnect needed" };
+    }
     console.error(
       `Token refresh failed for ${type}/${integration.userId}:`,
       err.message
@@ -80,10 +117,11 @@ async function checkIntegration(integration) {
 
         // Quick validation — fetch profile
         const { google } = require("googleapis");
+        const oauth = getOAuthConfig(type, data || {});
         const oauth2 = new google.auth.OAuth2(
-          data.clientId || process.env.GOOGLE_CLIENT_ID,
-          data.clientSecret || process.env.GOOGLE_CLIENT_SECRET,
-          process.env.GOOGLE_REDIRECT_URI
+          oauth.clientId,
+          oauth.clientSecret,
+          oauth.redirectUri
         );
         oauth2.setCredentials({
           access_token: data.accessToken,
@@ -145,6 +183,16 @@ async function checkIntegration(integration) {
         return { healthy: true };
       }
 
+      case "database": {
+        await testDatabaseConnection(integration.database || {});
+        return { healthy: true };
+      }
+
+      case "razorpay": {
+        await testRazorpayConnection(integration.razorpay || {});
+        return { healthy: true };
+      }
+
       default:
         return { healthy: true }; // Unknown types assumed healthy
     }
@@ -173,7 +221,6 @@ async function checkUserIntegrations(userId) {
       healthCache.set(cacheKey, { ...result, checkedAt: Date.now() });
       results[intg.type] = result;
     }
-    console.log(results, "kjdsaflsjdflkdjlfkslkdjsf");
     return results;
   } catch (err) {
     console.error("checkUserIntegrations error:", err.message);

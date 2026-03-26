@@ -1,15 +1,16 @@
 const { google } = require("googleapis");
 const Integration = require("../models/Integration");
+const { getOAuthConfig } = require("../services/googleOAuthConfig");
 
 // ─────────────────────────────────────────────────────────────────
 // Helper — build OAuth2 client from env vars
 // ─────────────────────────────────────────────────────────────────
 function makeOAuth2Client() {
+  const oauth = getOAuthConfig("google_calendar");
   return new google.auth.OAuth2(
-    process.env.GCAL_CLIENT_ID,
-    process.env.GCAL_CLIENT_SECRET,
-    process.env.GCAL_REDIRECT_URI ||
-      "http://localhost:3000/api/integrations/google-calendar/oauth/callback"
+    oauth.clientId,
+    oauth.clientSecret,
+    oauth.redirectUri
   );
 }
 
@@ -50,8 +51,7 @@ async function googleCalendarOAuthCallback(req, res) {
     const people = google.oauth2({ version: "v2", auth: oauth2 });
     const profile = await people.userinfo.get();
 
-    const clientId = process.env.GOOGLE_CLIENT_ID;
-    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const { clientId, clientSecret } = getOAuthConfig("google_calendar");
 
     // ── Save ALL credentials including clientId + clientSecret ──────
     await Integration.findOneAndUpdate(

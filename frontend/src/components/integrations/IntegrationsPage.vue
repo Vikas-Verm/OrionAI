@@ -1,5 +1,9 @@
 <template>
     <div class="integrations-page">
+        <form class="int-autofill-trap" autocomplete="on" @submit.prevent>
+            <input type="text" name="username" autocomplete="username" tabindex="-1" />
+            <input type="password" name="password" autocomplete="current-password" tabindex="-1" />
+        </form>
 
         <!-- Header -->
         <div class="int-header">
@@ -27,7 +31,19 @@
                 <circle cx="11" cy="11" r="8" />
                 <path d="m21 21-4.35-4.35" />
             </svg>
-            <input v-model="search" class="int-search" placeholder="Search integrations..." />
+            <input
+                v-model="search"
+                class="int-search"
+                type="search"
+                name="orion_integration_search"
+                placeholder="Search integrations..."
+                autocomplete="off"
+                autocapitalize="off"
+                autocorrect="off"
+                spellcheck="false"
+                data-lpignore="true"
+                data-form-type="other"
+            />
         </div>
 
         <!-- Grid -->
@@ -38,8 +54,11 @@
 
                 <!-- Card top -->
                 <div class="int-card-top">
-                    <div class="int-card-icon" :style="{ background: card.color }">
+                    <div class="int-card-icon" :class="`int-card-icon--${card.type}`" :style="{ background: card.color }">
                         <img v-if="card.img" :src="card.img" :alt="card.name" class="int-logo" />
+                        <svg v-else-if="card.type === 'razorpay'" class="int-brand-icon int-brand-icon--razorpay" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+                            <path fill="currentColor" d="M13.87 3H8.615a.75.75 0 0 0-.75.75v.002c0 .065.008.13.026.193l1.217 4.75H6.01a.75.75 0 0 0-.65 1.125l2.596 4.5-.702 5.436a.75.75 0 0 0 1.176.696l8.458-6.075a.75.75 0 0 0-.227-1.334l-4.03-.97 2.194-2.46a.75.75 0 0 0-.502-1.246h-2.42l2.26-4.248A.75.75 0 0 0 13.87 3Z"/>
+                        </svg>
                         <span v-else class="int-emoji">{{ card.emoji }}</span>
                     </div>
                     <div class="int-card-info">
@@ -127,8 +146,23 @@
                                     <a href="https://www.notion.so/my-integrations" target="_blank"
                                         class="int-help-link">Get token ↗</a>
                                 </label>
-                                <input v-model="forms.notion.apiToken" class="int-input" placeholder="secret_..."
-                                    type="password" />
+                                <div class="int-secret-wrap">
+                                    <input v-model="forms.notion.apiToken" class="int-input int-input--secret" placeholder="secret_..."
+                                        :type="secretInputType('notion', 'apiToken')" />
+                                    <button class="int-secret-toggle" type="button" :aria-label="secretToggleLabel('notion', 'apiToken')"
+                                        @click.stop="toggleSecretVisibility('notion', 'apiToken')">
+                                        <svg v-if="isSecretVisible('notion', 'apiToken')" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M17.94 17.94A10.94 10.94 0 0 1 12 20C7 20 2.73 16.89 1 12c.73-2.06 1.94-3.87 3.46-5.29" />
+                                            <path d="M10.58 10.58A2 2 0 0 0 12 14a2 2 0 0 0 1.42-.58" />
+                                            <path d="M1 1l22 22" />
+                                            <path d="M9.88 4.24A10.94 10.94 0 0 1 12 4c5 0 9.27 3.11 11 8a11.08 11.08 0 0 1-4.17 5.94" />
+                                        </svg>
+                                        <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12Z" />
+                                            <circle cx="12" cy="12" r="3" />
+                                        </svg>
+                                    </button>
+                                </div>
                             </div>
                             <div class="int-field-group">
                                 <label class="int-label">Database ID <span
@@ -167,8 +201,23 @@
                                         <a href="https://id.atlassian.com/manage-profile/security/api-tokens"
                                             target="_blank" class="int-help-link">Get token ↗</a>
                                     </label>
-                                    <input v-model="forms.jira.apiToken" class="int-input" placeholder="API token"
-                                        type="password" />
+                                    <div class="int-secret-wrap">
+                                        <input v-model="forms.jira.apiToken" class="int-input int-input--secret" placeholder="API token"
+                                            :type="secretInputType('jira', 'apiToken')" />
+                                        <button class="int-secret-toggle" type="button" :aria-label="secretToggleLabel('jira', 'apiToken')"
+                                            @click.stop="toggleSecretVisibility('jira', 'apiToken')">
+                                            <svg v-if="isSecretVisible('jira', 'apiToken')" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <path d="M17.94 17.94A10.94 10.94 0 0 1 12 20C7 20 2.73 16.89 1 12c.73-2.06 1.94-3.87 3.46-5.29" />
+                                                <path d="M10.58 10.58A2 2 0 0 0 12 14a2 2 0 0 0 1.42-.58" />
+                                                <path d="M1 1l22 22" />
+                                                <path d="M9.88 4.24A10.94 10.94 0 0 1 12 4c5 0 9.27 3.11 11 8a11.08 11.08 0 0 1-4.17 5.94" />
+                                            </svg>
+                                            <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12Z" />
+                                                <circle cx="12" cy="12" r="3" />
+                                            </svg>
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                             <div class="int-field-group">
@@ -196,9 +245,163 @@
                                 <div class="int-field-group">
                                     <label class="int-label">Secret <span
                                             class="int-label-opt">(optional)</span></label>
-                                    <input v-model="forms.webhook.secret" class="int-input" placeholder="Signing secret"
-                                        type="password" />
+                                    <div class="int-secret-wrap">
+                                        <input v-model="forms.webhook.secret" class="int-input int-input--secret" placeholder="Signing secret"
+                                            :type="secretInputType('webhook', 'secret')" />
+                                        <button class="int-secret-toggle" type="button" :aria-label="secretToggleLabel('webhook', 'secret')"
+                                            @click.stop="toggleSecretVisibility('webhook', 'secret')">
+                                            <svg v-if="isSecretVisible('webhook', 'secret')" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <path d="M17.94 17.94A10.94 10.94 0 0 1 12 20C7 20 2.73 16.89 1 12c.73-2.06 1.94-3.87 3.46-5.29" />
+                                                <path d="M10.58 10.58A2 2 0 0 0 12 14a2 2 0 0 0 1.42-.58" />
+                                                <path d="M1 1l22 22" />
+                                                <path d="M9.88 4.24A10.94 10.94 0 0 1 12 4c5 0 9.27 3.11 11 8a11.08 11.08 0 0 1-4.17 5.94" />
+                                            </svg>
+                                            <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12Z" />
+                                                <circle cx="12" cy="12" r="3" />
+                                            </svg>
+                                        </button>
+                                    </div>
                                 </div>
+                            </div>
+                        </template>
+
+                        <!-- DATABASE -->
+                        <template v-else-if="card.type === 'database'">
+                            <div class="int-field-group">
+                                <label class="int-label">Database Type</label>
+                                <select v-model="forms.database.vendor" class="int-input">
+                                    <option value="postgres">PostgreSQL</option>
+                                    <option value="mysql">MySQL</option>
+                                    <option value="mongodb">MongoDB</option>
+                                    <option value="sqlite">SQLite</option>
+                                </select>
+                            </div>
+
+                            <div v-if="forms.database.vendor !== 'sqlite'" class="int-field-group">
+                                <label class="int-label">Connection String</label>
+                                <div class="int-secret-wrap">
+                                    <input
+                                        v-model="forms.database.connectionString"
+                                        class="int-input int-input--secret"
+                                        :placeholder="forms.database.vendor === 'mongodb'
+                                          ? 'mongodb+srv://user:pass@cluster/db'
+                                          : forms.database.vendor === 'mysql'
+                                            ? 'mysql://user:pass@host:3306/db'
+                                            : 'postgresql://user:pass@host:5432/db'"
+                                        :type="secretInputType('database', 'connectionString')"
+                                    />
+                                    <button class="int-secret-toggle" type="button" :aria-label="secretToggleLabel('database', 'connectionString')"
+                                        @click.stop="toggleSecretVisibility('database', 'connectionString')">
+                                        <svg v-if="isSecretVisible('database', 'connectionString')" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M17.94 17.94A10.94 10.94 0 0 1 12 20C7 20 2.73 16.89 1 12c.73-2.06 1.94-3.87 3.46-5.29" />
+                                            <path d="M10.58 10.58A2 2 0 0 0 12 14a2 2 0 0 0 1.42-.58" />
+                                            <path d="M1 1l22 22" />
+                                            <path d="M9.88 4.24A10.94 10.94 0 0 1 12 4c5 0 9.27 3.11 11 8a11.08 11.08 0 0 1-4.17 5.94" />
+                                        </svg>
+                                        <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12Z" />
+                                            <circle cx="12" cy="12" r="3" />
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div v-else class="int-field-group">
+                                <label class="int-label">SQLite File Path</label>
+                                <input
+                                    v-model="forms.database.filePath"
+                                    class="int-input"
+                                    placeholder="/absolute/path/to/database.sqlite"
+                                />
+                            </div>
+
+                            <div class="int-field-row" v-if="forms.database.vendor !== 'sqlite'">
+                                <div class="int-field-group">
+                                    <label class="int-label">Default Schema <span class="int-label-opt">(optional)</span></label>
+                                    <input v-model="forms.database.defaultSchema" class="int-input" placeholder="public" />
+                                </div>
+                                <div class="int-field-group">
+                                    <label class="int-label">SSL</label>
+                                    <select v-model="forms.database.ssl" class="int-input">
+                                        <option :value="false">Disabled</option>
+                                        <option :value="true">Enabled</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="int-setup-steps">
+                                <div class="int-steps-title">How OrionAI uses it:</div>
+                                <ol class="int-steps-list">
+                                    <li>Queries stay read-only for safer business exploration.</li>
+                                    <li>The same connection powers both Data mode and Agent mode.</li>
+                                    <li>Use a reporting replica or read-only user in production.</li>
+                                </ol>
+                            </div>
+                        </template>
+
+                        <!-- RAZORPAY -->
+                        <template v-else-if="card.type === 'razorpay'">
+                            <div class="int-field-row">
+                                <div class="int-field-group">
+                                    <label class="int-label">Key ID</label>
+                                    <input v-model="forms.razorpay.keyId" class="int-input" placeholder="rzp_live_..." />
+                                </div>
+                                <div class="int-field-group">
+                                    <label class="int-label">
+                                        Key Secret
+                                        <a href="https://razorpay.com/docs/" target="_blank" class="int-help-link">Docs ↗</a>
+                                    </label>
+                                    <div class="int-secret-wrap">
+                                        <input v-model="forms.razorpay.keySecret" class="int-input int-input--secret" placeholder="Razorpay secret" :type="secretInputType('razorpay', 'keySecret')" />
+                                        <button class="int-secret-toggle" type="button" :aria-label="secretToggleLabel('razorpay', 'keySecret')"
+                                            @click.stop="toggleSecretVisibility('razorpay', 'keySecret')">
+                                            <svg v-if="isSecretVisible('razorpay', 'keySecret')" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <path d="M17.94 17.94A10.94 10.94 0 0 1 12 20C7 20 2.73 16.89 1 12c.73-2.06 1.94-3.87 3.46-5.29" />
+                                                <path d="M10.58 10.58A2 2 0 0 0 12 14a2 2 0 0 0 1.42-.58" />
+                                                <path d="M1 1l22 22" />
+                                                <path d="M9.88 4.24A10.94 10.94 0 0 1 12 4c5 0 9.27 3.11 11 8a11.08 11.08 0 0 1-4.17 5.94" />
+                                            </svg>
+                                            <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12Z" />
+                                                <circle cx="12" cy="12" r="3" />
+                                            </svg>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="int-field-row">
+                                <div class="int-field-group">
+                                    <label class="int-label">Default Source Account Number</label>
+                                    <input v-model="forms.razorpay.accountNumber" class="int-input" placeholder="2323230089" />
+                                </div>
+                                <div class="int-field-group">
+                                    <label class="int-label">Webhook Secret <span class="int-label-opt">(optional)</span></label>
+                                    <div class="int-secret-wrap">
+                                        <input v-model="forms.razorpay.webhookSecret" class="int-input int-input--secret" placeholder="Webhook secret" :type="secretInputType('razorpay', 'webhookSecret')" />
+                                        <button class="int-secret-toggle" type="button" :aria-label="secretToggleLabel('razorpay', 'webhookSecret')"
+                                            @click.stop="toggleSecretVisibility('razorpay', 'webhookSecret')">
+                                            <svg v-if="isSecretVisible('razorpay', 'webhookSecret')" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <path d="M17.94 17.94A10.94 10.94 0 0 1 12 20C7 20 2.73 16.89 1 12c.73-2.06 1.94-3.87 3.46-5.29" />
+                                                <path d="M10.58 10.58A2 2 0 0 0 12 14a2 2 0 0 0 1.42-.58" />
+                                                <path d="M1 1l22 22" />
+                                                <path d="M9.88 4.24A10.94 10.94 0 0 1 12 4c5 0 9.27 3.11 11 8a11.08 11.08 0 0 1-4.17 5.94" />
+                                            </svg>
+                                            <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12Z" />
+                                                <circle cx="12" cy="12" r="3" />
+                                            </svg>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="int-setup-steps">
+                                <div class="int-steps-title">Use cases:</div>
+                                <ol class="int-steps-list">
+                                    <li>Ask OrionAI for recent payouts and status checks.</li>
+                                    <li>Create Razorpay payouts in Agent mode with confirmation before money moves.</li>
+                                    <li>Keep the connected key scoped to the business account you want OrionAI to operate on.</li>
+                                </ol>
                             </div>
                         </template>
 
@@ -390,17 +593,23 @@
                         <!-- Action buttons: only for manual-token integrations -->
                         <div v-if="!['gmail', 'google_calendar', 'telegram', 'slack', 'whatsapp'].includes(card.type)" class="int-actions">
                             <button class="int-btn int-btn-test" :disabled="testing === card.type"
-                                @click="testConnection(card.type)">
+                                @click.stop="testConnection(card.type)">
                                 <span v-if="testing === card.type" class="int-spinner"></span>
                                 <span v-else>⚡ Test</span>
                             </button>
                             <button class="int-btn int-btn-save" :disabled="saving === card.type"
-                                @click="saveIntegration(card.type)">
+                                @click.stop="saveIntegration(card.type)">
                                 <span v-if="saving === card.type" class="int-spinner"></span>
                                 <span v-else>Save</span>
                             </button>
+                            <button
+                                v-if="getStatus(card.type) === 'connected' && ['database', 'razorpay'].includes(card.type)"
+                                class="int-btn int-btn-test"
+                                @click.stop="emit('openModule', card.type)">
+                                Open ↗
+                            </button>
                             <button v-if="getStatus(card.type) === 'connected'" class="int-btn int-btn-remove"
-                                :disabled="removing === card.type" @click="removeIntegration(card.type)">
+                                :disabled="removing === card.type" @click.stop="removeIntegration(card.type)">
                                 <span v-if="removing === card.type" class="int-spinner int-spinner-danger"></span>
                                 <span v-else>Remove</span>
                             </button>
@@ -423,10 +632,10 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, reactive } from 'vue'
+import { ref, computed, onMounted, reactive, nextTick, watch } from 'vue'
 import { onUnmounted } from 'vue'
 import api from '../../services/api'
-// import { store } from '../../stores/app'
+import { store } from '../../stores/app'
 const emit = defineEmits(['close', 'connected', 'openModule'])
 
 const search       = ref('')
@@ -438,6 +647,7 @@ const testResults  = reactive({})
 const connected    = reactive({})
 
 const oauthEmails = reactive({ gmail: null, google_calendar: null })
+const secretVisibility = reactive({})
 
 const cards = [
   {
@@ -467,6 +677,20 @@ const cards = [
     desc:  'Send from your real Gmail account',
     color: '#FFFFFF',
     img: 'https://ssl.gstatic.com/ui/v1/icons/mail/rfr/gmail.ico',
+  },
+  {
+    type:  'database',
+    name:  'Database',
+    desc:  'Connect PostgreSQL, MySQL, MongoDB or SQLite',
+    color: '#0ea5e9',
+    emoji: '🗄️',
+  },
+  {
+    type:  'razorpay',
+    name:  'Razorpay',
+    desc:  'Query payouts and trigger payment workflows',
+    color: '#072654',
+    emoji: '₹',
   },
   {
     type:  'webhook',
@@ -501,12 +725,16 @@ const cards = [
 const INITIAL_FORMS = {
     notion:  { apiToken: '', databaseId: '' },
     jira:    { domain: '', email: '', apiToken: '', projectKey: '' },
+    database:{ vendor: 'postgres', connectionString: '', filePath: '', ssl: false, defaultSchema: 'public', readOnly: true },
+    razorpay:{ keyId: '', keySecret: '', accountNumber: '', webhookSecret: '' },
     webhook: { url: '', method: 'POST', secret: '' },
 }
 
 const forms = reactive({
     notion:  { ...INITIAL_FORMS.notion },
     jira:    { ...INITIAL_FORMS.jira },
+    database:{ ...INITIAL_FORMS.database },
+    razorpay:{ ...INITIAL_FORMS.razorpay },
     webhook: { ...INITIAL_FORMS.webhook },
 })
 
@@ -519,10 +747,33 @@ const connectedCount = computed(() => Object.keys(connected).length)
 
 function getStatus(type) { return connected[type] ? 'connected' : 'disconnected' }
 
-function toggleExpand(type) {
+function secretKey(section, field) {
+    return `${section}.${field}`
+}
+
+function isSecretVisible(section, field) {
+    return Boolean(secretVisibility[secretKey(section, field)])
+}
+
+function toggleSecretVisibility(section, field) {
+    const key = secretKey(section, field)
+    secretVisibility[key] = !secretVisibility[key]
+}
+
+function secretInputType(section, field) {
+    return isSecretVisible(section, field) ? 'text' : 'password'
+}
+
+function secretToggleLabel(section, field) {
+    return `${isSecretVisible(section, field) ? 'Hide' : 'Show'} ${field}`
+}
+
+async function toggleExpand(type) {
     if (cards.find(c => c.type === type)?.comingSoon) return
     expandedType.value = expandedType.value === type ? null : type
     testResults[type]  = null
+    await nextTick()
+    applyAutofillGuards()
 }
 
 function extractEmail(int) {
@@ -532,19 +783,68 @@ function extractEmail(int) {
     return null
 }
 
+function resetForms() {
+    Object.entries(INITIAL_FORMS).forEach(([type, defaults]) => {
+        if (forms[type]) Object.assign(forms[type], JSON.parse(JSON.stringify(defaults)))
+    })
+}
+
+function applyAutofillGuards() {
+    const fields = document.querySelectorAll('.integrations-page input, .integrations-page select')
+    fields.forEach((node) => {
+        if (!(node instanceof HTMLElement)) return
+        node.setAttribute('autocomplete', 'off')
+        node.setAttribute('autocapitalize', 'off')
+        node.setAttribute('autocorrect', 'off')
+        node.setAttribute('spellcheck', 'false')
+        node.setAttribute('data-lpignore', 'true')
+        node.setAttribute('data-form-type', 'other')
+    })
+
+    const secretFields = document.querySelectorAll('.integrations-page input[type="password"]')
+    secretFields.forEach((node) => {
+        if (!(node instanceof HTMLElement)) return
+        node.setAttribute('autocomplete', 'new-password')
+        node.setAttribute('data-form-type', 'other')
+    })
+}
+
+function notifyIntegrationsUpdated() {
+    window.dispatchEvent(new CustomEvent('orion:integrations-updated'))
+    emit('connected')
+}
+
 async function loadIntegrations() {
+    search.value = ''
+    expandedType.value = null
+    Object.keys(testResults).forEach((key) => delete testResults[key])
+    resetForms()
     const res = await api.get('/api/integrations')
+    Object.keys(connected).forEach((key) => delete connected[key])
+    oauthEmails.gmail = null
+    oauthEmails.google_calendar = null
     for (const int of res.data) {
         connected[int.type] = int
         const email = extractEmail(int)
         if (email) oauthEmails[int.type] = email
         if (forms[int.type] && int[int.type]) Object.assign(forms[int.type], int[int.type])
     }
+    await nextTick()
+    applyAutofillGuards()
 }
 
 onMounted(async () => {
     try { await loadIntegrations() } catch (e) { console.error('Failed to load integrations:', e) }
+    setTimeout(applyAutofillGuards, 100)
 })
+
+watch(
+    () => store.user?.username,
+    async () => {
+        try { await loadIntegrations() } catch (e) { console.error('Failed to reload integrations:', e) }
+        setTimeout(applyAutofillGuards, 100)
+    }
+)
 
 async function saveIntegration(type) {
     saving.value      = type
@@ -557,6 +857,7 @@ async function saveIntegration(type) {
         })
         connected[type]   = res.data.integration
         testResults[type] = { ok: true, message: 'Saved successfully!' }
+        notifyIntegrationsUpdated()
     } catch (err) {
         testResults[type] = { ok: false, error: err.response?.data?.error || 'Save failed' }
     } finally { saving.value = null }
@@ -586,7 +887,7 @@ function openOAuthPopup(url, windowName, successType) {
             popup?.close()
             clearInterval(poll)
             await loadIntegrations()
-            emit('connected')
+            notifyIntegrationsUpdated()
             resolve(true)
         }
         window.addEventListener('message', handler)
@@ -595,7 +896,7 @@ function openOAuthPopup(url, windowName, successType) {
                 clearInterval(poll)
                 window.removeEventListener('message', handler)
                 // reload anyway in case the redirect set the token
-                loadIntegrations().then(() => emit('connected'))
+                loadIntegrations().then(() => notifyIntegrationsUpdated())
                 resolve(false)
             }
         }, 1000)
@@ -662,7 +963,7 @@ async function startWhatsAppConnect() {
                     whatsappConnecting.value = false
                     whatsappQR.value         = null
                     await loadIntegrations()
-                    emit('connected')
+                    notifyIntegrationsUpdated()
                 } else if (data.qrImage) {
                     whatsappQR.value = data.qrImage
                 }
@@ -691,6 +992,7 @@ async function removeIntegration(type) {
         oauthEmails[type] = null
         if (INITIAL_FORMS[type]) Object.assign(forms[type], INITIAL_FORMS[type])
         expandedType.value = null
+        notifyIntegrationsUpdated()
     } catch (e) {
         console.log(e)
         testResults[type] = { ok: false, error: 'Remove failed — please try again.' }
@@ -707,6 +1009,15 @@ async function removeIntegration(type) {
     z-index: 100;
     overflow-y: auto;
     padding: 32px 40px 60px;
+}
+
+.int-autofill-trap {
+    position: absolute;
+    pointer-events: none;
+    opacity: 0;
+    width: 0;
+    height: 0;
+    overflow: hidden;
 }
 
 .int-header {
@@ -753,8 +1064,30 @@ async function removeIntegration(type) {
 }
 .int-card.expanded { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), var(--shadow-md); }
 .int-card-top { display: flex; align-items: center; gap: 14px; padding: 18px 20px; }
-.int-card-icon { width: 48px; height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; padding: 10px; box-sizing: border-box; }
+.int-card-icon {
+    width: 48px; height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0; padding: 10px; box-sizing: border-box; overflow: hidden;
+    border: 1px solid transparent; box-shadow: inset 0 1px 0 rgba(255,255,255,0.12);
+}
+.int-card-icon--gmail {
+    background: linear-gradient(180deg, #ffffff, #f7f8fc) !important;
+    border-color: rgba(15,23,42,0.08);
+}
+.int-card-icon--razorpay {
+    background: linear-gradient(180deg, #1f4fd1, #12307f) !important;
+    border-color: rgba(31,79,209,0.28);
+}
 .int-logo { width: 26px; height: 26px; object-fit: contain; border-radius: 4px; }
+.int-card-icon--gmail .int-logo { width: 29px; height: 29px; }
+.int-brand-icon {
+    display: block;
+    color: #fff;
+}
+.int-brand-icon--razorpay {
+    width: 22px;
+    height: 22px;
+    filter: drop-shadow(0 1px 2px rgba(3, 7, 18, 0.22));
+}
 .int-emoji { font-size: 22px; }
 .int-card-info { flex: 1; min-width: 0; }
 .int-card-name { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 2px; }
@@ -788,6 +1121,34 @@ async function removeIntegration(type) {
 }
 .int-input:focus { border-color: var(--accent); }
 select.int-input { cursor: pointer; }
+.int-secret-wrap {
+    position: relative;
+}
+.int-input--secret {
+    padding-right: 42px;
+}
+.int-secret-toggle {
+    position: absolute;
+    top: 50%;
+    right: 8px;
+    transform: translateY(-50%);
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-muted);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.int-secret-toggle:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-default);
+    color: var(--text-primary);
+}
 
 .int-setup-steps {
     background: var(--bg-elevated); border: 1px solid var(--border-subtle);
@@ -843,17 +1204,30 @@ select.int-input { cursor: pointer; }
     background: rgba(34,197,94,0.06); border: 1px solid rgba(34,197,94,0.2);
     border-radius: 10px; margin-bottom: 12px;
 }
-.int-oauth-connected-row { display: flex; align-items: center; gap: 10px; }
-.int-oauth-connected-icon { font-size: 18px; flex-shrink: 0; }
-.int-oauth-connected-info { flex: 1; }
-.int-oauth-connected-title { font-size: 11px; color: var(--text-muted); margin-bottom: 2px; }
-.int-oauth-connected-email { font-size: 13px; font-weight: 600; color: #4ade80; }
-.int-oauth-reconnect-btn {
-    font-size: 11.5px; padding: 4px 10px; border-radius: 6px;
-    border: 1px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.06);
-    color: var(--text-muted); cursor: pointer; transition: all 0.15s;
+.int-oauth-connected-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    flex-wrap: wrap;
 }
-.int-oauth-reconnect-btn:hover { background: rgba(255,255,255,0.1); color: var(--text-primary); }
+.int-oauth-connected-icon { font-size: 18px; flex-shrink: 0; }
+.int-oauth-connected-info { flex: 1 1 180px; min-width: 0; }
+.int-oauth-connected-title { font-size: 11px; color: var(--text-muted); margin-bottom: 2px; }
+.int-oauth-connected-email {
+    font-size: 13px;
+    font-weight: 600;
+    color: #4ade80;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+.int-oauth-reconnect-btn {
+    margin-left: auto;
+    flex-shrink: 0;
+    font-size: 11.5px; padding: 6px 10px; border-radius: 8px;
+    border: 1px solid var(--border-default); background: var(--bg-surface);
+    color: var(--text-secondary); cursor: pointer; transition: all 0.15s;
+}
+.int-oauth-reconnect-btn:hover { background: var(--bg-hover); border-color: var(--border-strong); color: var(--text-primary); }
 .int-oauth-icon-img { width: 36px; height: 36px; object-fit: contain; flex-shrink: 0; }
 
 /* Google OAuth button */
@@ -885,4 +1259,10 @@ select.int-input { cursor: pointer; }
 
 [data-theme="light"] .int-input { background: white; }
 [data-theme="light"] .int-setup-steps { background: #f8f8fc; }
+[data-theme="light"] .int-card-icon--gmail .int-logo {
+    filter: saturate(1.03) contrast(1.03);
+}
+[data-theme="light"] .int-secret-toggle:hover {
+    background: #f6f7ff;
+}
 </style>

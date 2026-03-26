@@ -9,6 +9,14 @@ const {
   DB_FORMAT_PROMPT,
 } = require("../prompts/dbPrompts");
 const {
+  getDatabaseIntegration,
+  queryConnectedDatabase,
+  previewConnectedDatabase,
+  mutateConnectedDatabase,
+  runRawConnectedDatabaseQuery,
+  getDatabaseDisplayName,
+} = require("../services/connectedDatabaseService");
+const {
   loadConversation,
   saveConversation,
   updateSessionTitle,
@@ -18,12 +26,54 @@ const {
 async function handleDbChat(req, res) {
   const { message, sessionId = "default" } = req.body;
   const userId = req.user.username;
+  const startedAt = Date.now();
 
   // Load conversation history
   const conversationHistory = await loadConversation(sessionId);
   conversationHistory.push({ role: "user", content: message });
 
   try {
+    const databaseIntegration = await getDatabaseIntegration(userId);
+
+    if (databaseIntegration) {
+      const result = await queryConnectedDatabase(userId, message);
+      const reply = result.reply;
+
+      conversationHistory.push({ role: "assistant", content: reply });
+      await saveConversation(sessionId, conversationHistory);
+
+      const userMessageCount = conversationHistory.filter(
+        (m) => m.role === "user"
+      ).length;
+      if (userMessageCount === 1) {
+        const title = `🗄️ ${message.substring(0, 35)}${
+          message.length > 35 ? "..." : ""
+        }`;
+        await updateSessionTitle(sessionId, title);
+      }
+
+      await appendActivityLog(sessionId, {
+        message,
+        collection: getDatabaseDisplayName(databaseIntegration),
+        queryType: result.vendor,
+        explanation: result.executedQuery,
+        recordCount: result.rowCount,
+      });
+
+      return res.json({
+        reply,
+        rows: result.rows || [],
+        recordCount: result.rowCount,
+        executionMs: Date.now() - startedAt,
+        generatedQuery: result.executedQuery,
+        queryPlan: {
+          vendor: result.vendor,
+          executedQuery: result.executedQuery,
+          explanation: result.queryPlan?.explanation || "",
+        },
+      });
+    }
+
     // Step 1 — Generate query
     const queryResponse = await chatComplete(
       [
@@ -124,4 +174,81 @@ async function handleDbChat(req, res) {
   }
 }
 
-module.exports = { handleDbChat };
+async function handleRawDbQuery(req, res) {
+  const userId = req.user.username;
+  const startedAt = Date.now();
+  const { collection = "", query = "" } = req.body || {};
+
+  try {
+    const result = await runRawConnectedDatabaseQuery(userId, {
+      collection,
+      query,
+    });
+
+    res.json({
+      ok: true,
+      rows: result.rows || [],
+      recordCount: result.rowCount,
+      executionMs: Date.now() - startedAt,
+      executedQuery: result.executedQuery,
+      vendor: result.vendor,
+    });
+  } catch (error) {
+    console.error("Raw DB query error:", error.message);
+    res.status(400).json({ error: error.message || "Raw query failed" });
+  }
+}
+
+async function handleDbPreview(req, res) {
+  const userId = req.user.username;
+  const startedAt = Date.now();
+  const { target = "", page = 1, pageSize = 20, searchTerm = "" } =
+    req.body || {};
+
+  try {
+    const result = await previewConnectedDatabase(userId, {
+      target,
+      page,
+      pageSize,
+      searchTerm,
+    });
+
+    res.json({
+      ok: true,
+      rows: result.rows || [],
+      totalCount: result.totalCount || 0,
+      hasNext: result.hasNext === true,
+      page: result.page || 1,
+      pageSize: result.pageSize || 20,
+      executionMs: Date.now() - startedAt,
+      executedQuery: result.executedQuery,
+      vendor: result.vendor,
+      canWrite: result.canWrite,
+      permissions: result.permissions || {},
+      table: result.table || null,
+    });
+  } catch (error) {
+    console.error("DB preview error:", error.message);
+    res.status(400).json({ error: error.message || "Preview failed" });
+  }
+}
+
+async function handleDbMutation(req, res) {
+  const userId = req.user.username;
+
+  try {
+    const result = await mutateConnectedDatabase(userId, req.body || {});
+    res.json({
+      ok: true,
+      action: result.action,
+      affectedRows: result.affectedRows || 0,
+      executedQuery: result.executedQuery || "",
+      vendor: result.vendor,
+    });
+  } catch (error) {
+    console.error("DB mutation error:", error.message);
+    res.status(400).json({ error: error.message || "Mutation failed" });
+  }
+}
+
+module.exports = { handleDbChat, handleRawDbQuery, handleDbPreview, handleDbMutation };

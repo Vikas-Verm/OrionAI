@@ -2,7 +2,7 @@
     <div class="main-header">
       <h2>
         {{ store.mode === 'rag' ? '📄 Document Chat'
-         : store.mode === 'db'  ? '🗄️ Data Intelligence'
+         : store.mode === 'db'  ? '🗄️ Data Intelligence' :store.mode === 'agent'  ? '🤖 Agent'
          : '&nbsp;' }}
       </h2>
       <div style="display:flex; gap:8px; align-items:center">

@@ -1,5 +1,6 @@
 const { google } = require("googleapis");
 const Integration = require("../models/Integration");
+const { clearCachedAccessToken } = require("./gmailModuleController");
 
 // ─────────────────────────────────────────────────────────────────
 // Helper — build OAuth2 client, with DB fallback if env vars missing
@@ -140,6 +141,8 @@ async function gmailOAuthCallback(req, res) {
       },
       { upsert: true, new: true }
     );
+
+    clearCachedAccessToken(userId);
 
     res.send(`<script>
       if (window.opener) {

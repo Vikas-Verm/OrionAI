@@ -6,6 +6,8 @@ const {
   saveIntegration,
   deleteIntegration,
   testIntegration,
+  getDatabaseSchemaPreview,
+  getRazorpayOverview,
 } = require("../controllers/integrationController");
 const {
   gmailOAuthStart,
@@ -27,6 +29,8 @@ router.get("/google-calendar/oauth/callback", googleCalendarOAuthCallback);
 
 router.get("/slack/oauth/start", slackOAuthStart);
 router.get("/slack/oauth/callback", slackOAuthCallback);
+router.get("/database/schema", getDatabaseSchemaPreview);
+router.get("/razorpay/overview", getRazorpayOverview);
 router.get("/", getIntegrations);
 router.post("/:type", saveIntegration);
 router.delete("/:type", deleteIntegration);

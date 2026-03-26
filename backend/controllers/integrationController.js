@@ -1,5 +1,14 @@
 const axios = require("axios");
 const Integration = require("../models/Integration");
+const {
+  testDatabaseConnection,
+  getDatabaseIntegration,
+  loadDatabaseSchema,
+  getSchemaTableCounts,
+  requireDatabaseConfig,
+} = require("../services/connectedDatabaseService");
+const { testRazorpayConnection } = require("../services/tools/toolRazorpay");
+const { toolRazorpayGetPayouts } = require("../services/tools/toolRazorpay");
 
 // ── GET /api/integrations ─────────────────────────────────
 async function getIntegrations(req, res) {
@@ -108,6 +117,14 @@ async function testIntegration(req, res) {
       });
       ok = true;
       message = "Webhook responded successfully!";
+    } else if (type === "database") {
+      const result = await testDatabaseConnection(integration.database || {});
+      ok = true;
+      message = result.message;
+    } else if (type === "razorpay") {
+      const result = await testRazorpayConnection(integration.razorpay || {});
+      ok = true;
+      message = result.message;
     } else {
       message = `Test not implemented yet for ${type}`;
       ok = true;
@@ -131,9 +148,83 @@ async function testIntegration(req, res) {
   }
 }
 
+async function getDatabaseSchemaPreview(req, res) {
+  const userId = req.user?.username;
+
+  try {
+    const integration = await getDatabaseIntegration(userId);
+    if (!integration) {
+      return res.status(404).json({ error: "Database integration not found" });
+    }
+
+    const schema = await loadDatabaseSchema(
+      requireDatabaseConfig(integration.database || {}),
+      { force: true }
+    );
+    const config = requireDatabaseConfig(integration.database || {});
+    const tableCounts = await getSchemaTableCounts(config, schema).catch(
+      () => ({})
+    );
+
+    res.json({
+      ok: true,
+      vendor: integration.database?.vendor || null,
+      name: integration.name || "Database",
+      connection: {
+        vendor:
+          integration.database?.vendor === "postgres"
+            ? "PostgreSQL"
+            : integration.database?.vendor === "mysql"
+              ? "MySQL"
+              : integration.database?.vendor === "mongodb"
+                ? "MongoDB"
+                : integration.database?.vendor === "sqlite"
+                  ? "SQLite"
+                  : "Database",
+        alias: integration.name || "Database",
+        status: "ok",
+        canWrite: integration.database?.readOnly === false,
+      },
+      tables: (schema.tables || []).map((table) => ({
+        ...table,
+        count:
+          tableCounts[table.name] ??
+          table.estimatedRows ??
+          null,
+        fieldNames:
+          Array.isArray(table.fields) && table.fields.length
+            ? table.fields.map((field) => field.name)
+            : undefined,
+      })),
+    });
+  } catch (err) {
+    console.error("Database schema preview error:", err.message);
+    res.status(400).json({ ok: false, error: err.message });
+  }
+}
+
+async function getRazorpayOverview(req, res) {
+  const userId = req.user?.username;
+
+  try {
+    const result = await toolRazorpayGetPayouts({ limit: 8 }, { userId });
+    res.json({
+      ok: true,
+      count: result.count || 0,
+      payouts: result.payouts || [],
+      summary: result.summary || null,
+    });
+  } catch (err) {
+    console.error("Razorpay overview error:", err.message);
+    res.status(400).json({ ok: false, error: err.message });
+  }
+}
+
 module.exports = {
   getIntegrations,
   saveIntegration,
   deleteIntegration,
   testIntegration,
+  getDatabaseSchemaPreview,
+  getRazorpayOverview,
 };

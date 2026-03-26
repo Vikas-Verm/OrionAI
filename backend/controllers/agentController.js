@@ -6,6 +6,35 @@ const { orchestrate } = require("../services/multiAgentOrchestrator");
 const Integration = require("../models/Integration");
 const { google } = require("googleapis");
 const { normalizeStepParams } = require("../services/agentParamNormalizer");
+const {
+  resolveConfirmation,
+  getPendingConfirmation,
+} = require("../services/agentConfirmationStore");
+const { captureException } = require("../services/errorMonitoring");
+
+function buildSessionTitle(text = "") {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return "New Chat";
+  return trimmed.substring(0, 40) + (trimmed.length > 40 ? "..." : "");
+}
+
+async function resolveInitialAgentTitle(sessionId, userId, userMessage) {
+  if (!sessionId || !userId || !String(userMessage || "").trim()) return null;
+  const existing = await Conversation.findOne(
+    { sessionId, userId },
+    { title: 1, messages: 1 }
+  );
+
+  const userMessageCount =
+    existing?.messages?.filter((m) => m.role === "user").length || 0;
+  const title = existing?.title || "New Chat";
+
+  if (title === "New Chat" && userMessageCount === 0) {
+    return buildSessionTitle(userMessage);
+  }
+
+  return null;
+}
 
 let chatCompleteNoSystem;
 try {
@@ -173,6 +202,15 @@ function stepSummary(tool, result) {
     case "whatsapp_list_chats":
       return `${result.total || 0} WhatsApp chats`;
 
+    case "database_query":
+      return result.summary || `Database query returned ${result.count || 0} row(s)`;
+
+    case "razorpay_get_payouts":
+      return result.summary || `Found ${result.count || 0} Razorpay payouts`;
+
+    case "razorpay_create_payout":
+      return result.summary || "Razorpay payout created";
+
     default:
       return "Done";
   }
@@ -243,6 +281,11 @@ async function runPlan(req, res) {
   };
 
   try {
+    const initialAgentTitle = await resolveInitialAgentTitle(
+      sessionId,
+      userId,
+      req.body.userMessage || ""
+    ).catch(() => null);
     const db = mongoose.connection.db;
     const TOOL_REGISTRY = await loadToolRegistry();
 
@@ -337,7 +380,10 @@ async function runPlan(req, res) {
                   ],
                 },
               },
-              $set: { updatedAt: new Date() },
+              $set: {
+                updatedAt: new Date(),
+                ...(initialAgentTitle ? { title: initialAgentTitle } : {}),
+              },
             },
             { upsert: true }
           );
@@ -448,8 +494,19 @@ async function runPlan(req, res) {
             error: progress.error,
           });
         }
+
+        if (progress.status === "confirm_needed") {
+          send({
+            type: "confirm_needed",
+            tool: progress.tool,
+            icon: meta.icon,
+            label: meta.label,
+            preview: progress.preview || null,
+          });
+        }
       },
-      userId
+      userId,
+      sessionId
     );
 
     const failed = results.find((r) => r.status === "error");
@@ -582,7 +639,10 @@ async function runPlan(req, res) {
                 ],
               },
             },
-            $set: { updatedAt: new Date() },
+            $set: {
+              updatedAt: new Date(),
+              ...(initialAgentTitle ? { title: initialAgentTitle } : {}),
+            },
           },
           { upsert: true }
         );
@@ -592,12 +652,58 @@ async function runPlan(req, res) {
     }
   } catch (err) {
     console.error("Agent run error:", err.message);
+    captureException(err, {
+      controller: "agentController.runPlan",
+      userId,
+      sessionId,
+    });
     send({ type: "error", error: err.message });
   } finally {
     send({ type: "done" });
     res.write("data: [DONE]\n\n");
     res.end();
   }
+}
+
+async function confirmAgentAction(req, res) {
+  const { sessionId, tool, approved } = req.body || {};
+  const userId = req.user?.username;
+
+  if (!sessionId || !tool) {
+    return res.status(400).json({ error: "sessionId and tool are required" });
+  }
+
+  const pending = getPendingConfirmation(sessionId, tool);
+  if (!pending) {
+    return res.status(404).json({ error: "No pending confirmation found" });
+  }
+
+  const resolved = resolveConfirmation(sessionId, tool, approved);
+  if (!resolved) {
+    return res.status(409).json({ error: "Confirmation could not be resolved" });
+  }
+
+  await Conversation.findOneAndUpdate(
+    { sessionId, userId },
+    {
+      $push: {
+        activityLog: {
+          message: `Confirmation ${approved ? "approved" : "declined"} for ${tool}`,
+          queryType: "agent_confirmation",
+          explanation: pending.preview?.action || tool,
+          createdAt: new Date(),
+        },
+      },
+      $set: { updatedAt: new Date() },
+    }
+  ).catch(() => {});
+
+  res.json({
+    ok: true,
+    approved: Boolean(approved),
+    sessionId,
+    tool,
+  });
 }
 
 // ── POST /api/agent/gmail-reply ───────────────────────────────────────────────
@@ -752,6 +858,7 @@ async function saveTelegramReply(req, res) {
 module.exports = {
   parseIntent,
   runPlan,
+  confirmAgentAction,
   gmailReplyDirect,
   gmailSuggestReply,
   calendarRsvpDirect,

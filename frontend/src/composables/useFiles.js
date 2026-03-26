@@ -35,14 +35,7 @@ export function useFiles() {
 
   function connectDatabase() {
     store.mode = "db";
-    if (!store.attachments.find((a) => a.type === "db")) {
-      store.attachments.push({
-        id: Date.now(),
-        name: "MongoDB",
-        type: "db",
-        status: "ready",
-      });
-    }
+    store.webMode = false;
   }
 
   return { handleFileSelect, removeAttachment, connectDatabase };

@@ -26,7 +26,7 @@
           <span class="gm-nav-icon" v-html="f.svg"></span>
           <span class="gm-nav-label">{{ f.label }}</span>
           <span v-if="labelCounts[f.key] > 0" class="gm-badge">
-            {{ labelCounts[f.key] > 99 ? '99+' : labelCounts[f.key] }}
+            {{ formatCompactCount(labelCounts[f.key]) }}
           </span>
         </button>
       </nav>
@@ -543,8 +543,9 @@ let   observer       = null
 const newEmailBanner = ref(null)
 let   bannerTimer    = null
 
-const { notifications } = useWebSocket()
+const { notifications, unreadByApp } = useWebSocket()
 let prevNotifCount = notifications.length
+let mailboxSyncPromise = null
  
 watch(notifications, (newList) => {
   // Find newest Gmail notification we haven't seen yet
@@ -557,7 +558,7 @@ watch(notifications, (newList) => {
     newEmailBanner.value = `${name}: ${subject.slice(0, 50)}${subject.length > 50 ? '…' : ''}`
  
     // Auto-refresh the inbox list so new email appears
-    loadEmails(true)
+    syncMailboxView().catch(() => {})
  
     // Auto-dismiss after 8s
     clearTimeout(bannerTimer)
@@ -579,10 +580,22 @@ function onDocClick(e) {
 
 const folderLabel = computed(() => folders.find(f => f.key === activeFolder.value)?.label ?? 'Inbox')
 
+function formatCompactCount(value) {
+  const count = Number(value || 0)
+  if (count < 1000) return String(count)
+  return new Intl.NumberFormat('en-IN', {
+    notation: 'compact',
+    maximumFractionDigits: count >= 10000 ? 0 : 1,
+  }).format(count)
+}
+
 // ── Real unread counts via Labels API (single cheap call) ──
 async function fetchLabelCounts() {
   try {
-    const res = await api.get('/api/gmail/labels')
+    const res = await api.get('/api/gmail/labels', {
+      params: { _: Date.now() },
+      headers: { 'Cache-Control': 'no-cache' },
+    })
     labelCounts.value = { ...labelCounts.value, ...res.data }
   } catch(e) {console.error('Failed to fetch label counts:', e.message) }
 }
@@ -652,21 +665,25 @@ function contactPhotoUrl(from) {
 function connectSSE() {
   if (sseSource) sseSource.close()
   sseSource = new EventSource('/api/gmail/events', { withCredentials: true })
-  sseSource.addEventListener('inbox_updated', () => loadEmails(true))
+  sseSource.addEventListener('inbox_updated', async () => {
+    await syncMailboxView()
+  })
 }
 
 // ── Refresh emails (manual button) ────────────────────────────
 async function refreshEmails() {
   refreshing.value = true
-  await loadEmails(true)
+  await syncMailboxView()
   refreshing.value = false
 }
 
 // ── Load emails (reset to first page) ─────────────────────────
 async function loadEmails(silent = false) {
   if (!silent) loading.value = true
-  nextPageToken.value = null
-  emails.value        = []
+  if (!silent) {
+    nextPageToken.value = null
+    emails.value = []
+  }
   try {
     const res = await api.post('/api/gmail/list', {
       folder:    activeFolder.value,
@@ -682,6 +699,33 @@ async function loadEmails(silent = false) {
     setTimeout(setupObserver, 50)
   }
 }
+
+async function syncMailboxView() {
+  if (mailboxSyncPromise) return mailboxSyncPromise
+  mailboxSyncPromise = Promise.all([fetchLabelCounts(), loadEmails(true)])
+    .finally(() => { mailboxSyncPromise = null })
+  return mailboxSyncPromise
+}
+
+function onWindowFocus() {
+  syncMailboxView().catch(() => {})
+}
+
+function onVisibilityChange() {
+  if (document.visibilityState === 'visible') {
+    syncMailboxView().catch(() => {})
+  }
+}
+
+watch(
+  () => unreadByApp.gmail?.count,
+  (next, prev) => {
+    if (typeof next !== 'number') return
+    if (prev === undefined || next === prev) return
+    if (document.visibilityState !== 'visible') return
+    syncMailboxView().catch(() => {})
+  }
+)
 
 // ── Load next page (cursor-based) ─────────────────────────────
 async function loadMore() {
@@ -764,7 +808,9 @@ async function openEmail(email) {
   const i = emails.value.findIndex(e => e.id === email.id)
   if (i !== -1 && emails.value[i].unread) {
     emails.value[i] = { ...emails.value[i], unread: false }
-    if (labelCounts.value.inbox > 0) labelCounts.value.inbox--
+    setTimeout(() => {
+      syncMailboxView().catch(() => {})
+    }, 250)
   }
 }
 
@@ -1362,12 +1408,16 @@ onMounted(async () => {
   setTimeout(setupObserver, 100)
   document.addEventListener('click', onDocClick, true)
   window.addEventListener('message', onFrameMessage)
+  window.addEventListener('focus', onWindowFocus)
+  document.addEventListener('visibilitychange', onVisibilityChange)
 })
 onUnmounted(() => {
   if (observer) observer.disconnect()
   if (sseSource) sseSource.close()
   document.removeEventListener('click', onDocClick, true)
   window.removeEventListener('message', onFrameMessage)
+  window.removeEventListener('focus', onWindowFocus)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
 })
 </script>
 

@@ -1,0 +1,228 @@
+"use strict";
+
+const Integration = require("../models/Integration");
+const { chatCompleteNoSystem } = require("./llmService");
+const {
+  getGmailAttentionSignal,
+  getCalendarUpcomingSignal,
+} = require("./workspaceSignalsService");
+
+async function getUnreadSignals(userId) {
+  const checks = await Promise.allSettled([
+    checkGmail(userId),
+    checkCalendar(userId),
+    checkSlack(userId),
+    checkTelegram(userId),
+    checkWhatsApp(userId),
+  ]);
+
+  const results = {};
+  const [gmail, calendar, slack, telegram, whatsapp] = checks;
+
+  if (gmail.status === "fulfilled" && gmail.value) results.gmail = gmail.value;
+  if (calendar.status === "fulfilled" && calendar.value) {
+    results.google_calendar = calendar.value;
+  }
+  if (slack.status === "fulfilled" && slack.value) results.slack = slack.value;
+  if (telegram.status === "fulfilled" && telegram.value)
+    results.telegram = telegram.value;
+  if (whatsapp.status === "fulfilled" && whatsapp.value)
+    results.whatsapp = whatsapp.value;
+
+  return results;
+}
+
+async function checkGmail(userId) {
+  try {
+    const signal = await getGmailAttentionSignal(userId);
+    if (!signal) return null;
+    return {
+      count: signal.count,
+      previews: signal.previews || [],
+      summary: signal.summary,
+      app: "gmail",
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function checkCalendar(userId) {
+  try {
+    const integration = await Integration.findOne({
+      userId,
+      type: "google_calendar",
+      enabled: true,
+    });
+    if (!integration?.googleCalendar?.accessToken) return null;
+
+    const signal = await getCalendarUpcomingSignal(userId);
+    return {
+      count: signal.count,
+      previews: signal.previews || [],
+      summary: signal.summary,
+      app: "google_calendar",
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function checkSlack(userId) {
+  try {
+    const integration = await Integration.findOne({
+      userId,
+      type: "slack",
+      enabled: true,
+    });
+    if (!integration?.slack?.userToken) return null;
+
+    const axios = require("axios");
+    const token = integration.slack.userToken;
+
+    const res = await axios.get("https://slack.com/api/conversations.list", {
+      headers: { Authorization: `Bearer ${token}` },
+      params: {
+        types: "im,public_channel,private_channel",
+        limit: 200,
+        exclude_archived: true,
+      },
+    });
+
+    let count = 0;
+    const previews = [];
+
+    for (const ch of res.data.channels || []) {
+      const unread = ch.unread_count || 0;
+      if (unread > 0) {
+        count += unread;
+        let name = ch.name || ch.id;
+        if (ch.is_im && ch.user) {
+          try {
+            const u = await axios.get("https://slack.com/api/users.info", {
+              headers: { Authorization: `Bearer ${token}` },
+              params: { user: ch.user },
+            });
+            name =
+              u.data.user?.profile?.display_name || u.data.user?.name || name;
+          } catch {}
+        }
+        if (previews.length < 3) {
+          previews.push({
+            name,
+            unread,
+            type: ch.is_im ? "DM" : "channel",
+          });
+        }
+      }
+    }
+
+    const summary =
+      count > 0 && previews.length
+        ? await aiSummarize(
+            "Slack",
+            count,
+            previews.map(
+              (p) =>
+                `${p.type === "DM" ? "DM from" : "#"}${p.name}: ${
+                  p.unread
+                } unread`
+            )
+          )
+        : null;
+
+    return { count, previews, summary, app: "slack" };
+  } catch {
+    return null;
+  }
+}
+
+async function checkTelegram(userId) {
+  try {
+    const integration = await Integration.findOne({
+      userId,
+      type: "telegram",
+      enabled: true,
+    });
+    if (!integration?.telegram?.sessionString) return null;
+
+    const { toolTelegramGetUnread } = require("./tools/toolTelegram");
+    const result = await toolTelegramGetUnread({ limit: 20 }, { userId });
+
+    const count = result.totalUnread || 0;
+    const chats = result.chats || result.telegramChats || [];
+    const previews = chats.slice(0, 3).map((c) => ({
+      name: c.chatName || c.name,
+      unread: c.unreadCount || c.unread || 0,
+      preview: c.lastMessage || "",
+    }));
+
+    const summary =
+      count > 0 && previews.length
+        ? await aiSummarize(
+            "Telegram",
+            count,
+            previews.map((p) => `${p.name}: ${p.unread} unread`)
+          )
+        : null;
+
+    return { count, previews, summary, app: "telegram" };
+  } catch {
+    return null;
+  }
+}
+
+async function checkWhatsApp(userId) {
+  try {
+    const integration = await Integration.findOne({
+      userId,
+      type: "whatsapp",
+      enabled: true,
+    });
+    if (!integration?.whatsapp?.connected) return null;
+
+    const { whatsappGetUnread } = require("./tools/toolWhatsapp");
+    const result = await whatsappGetUnread({}, { userId });
+    const chats = result?.chats || [];
+    const count = result?.totalUnread || 0;
+    const previews = chats.slice(0, 3).map((c) => ({
+      name: c.chatName,
+      unread: c.unreadCount,
+      preview: c.lastMessage || "",
+    }));
+
+    const summary =
+      count > 0 && previews.length
+        ? await aiSummarize(
+            "WhatsApp",
+            count,
+            previews.map((p) => `${p.name}: ${p.unread} unread`)
+          )
+        : null;
+
+    return { count, previews, summary, app: "whatsapp" };
+  } catch {
+    return null;
+  }
+}
+
+async function aiSummarize(app, count, items) {
+  try {
+    const prompt =
+      `Summarize these ${app} notifications in one short friendly sentence (max 12 words):\n` +
+      items.join("\n");
+    const text = await chatCompleteNoSystem(prompt, 60, 0.4);
+    return text.trim();
+  } catch {
+    return `${count} unread in ${app}`;
+  }
+}
+
+module.exports = {
+  getUnreadSignals,
+  checkGmail,
+  checkCalendar,
+  checkSlack,
+  checkTelegram,
+  checkWhatsApp,
+};

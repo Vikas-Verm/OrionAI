@@ -958,6 +958,7 @@
 <script setup>
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import api from '../services/api'
+import { useWebSocket } from '../composables/useWebSocket'
 
 // ── Auth ──────────────────────────────────────────────────────────────
 const authStep = ref('loading')
@@ -973,6 +974,7 @@ const selDlg = ref(null)
 const draft = ref(''), sending = ref(false)
 const dlgQ = ref(''), dlgFilter = ref('all')
 const photoCache = ref({})
+const { unreadByApp } = useWebSocket()
 
 // ── Modal & Drawer state ──────────────────────────────────────────────
 const showDrawer = ref(false)
@@ -1124,6 +1126,26 @@ function startPolling() {
 
 function stopPolling() {
   if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null }
+}
+
+function applyLiveUnreadBadges() {
+  const entry = unreadByApp.telegram
+  const liveItems = Array.isArray(entry?.items) ? entry.items : []
+  if (!dialogs.value.length || !liveItems.length) return
+
+  const liveMap = new Map(
+    liveItems
+      .filter((item) => item?.name)
+      .map((item) => [String(item.name).trim().toLowerCase(), Number(item.unread || 0) || 0])
+  )
+
+  dialogs.value.forEach((dialog) => {
+    if (!dialog?.name || selDlg.value?.id === dialog.id) return
+    const nextUnread = liveMap.get(String(dialog.name).trim().toLowerCase())
+    if (Number.isFinite(nextUnread) && nextUnread > 0) {
+      dialog.unreadCount = Math.max(Number(dialog.unreadCount || 0), nextUnread)
+    }
+  })
 }
 
 onMounted(async () => {
@@ -1286,6 +1308,7 @@ async function loadDlgs() {
   try {
     const r = await api.get('/api/telegram/dialogs?limit=80')
     dialogs.value = r.data.dialogs
+    applyLiveUnreadBadges()
     batchPhotos(r.data.dialogs)
   } catch (e) { console.error(e) }
   finally { dlgsLoading.value = false }
@@ -1342,6 +1365,14 @@ async function selectDlg(d) {
     api.post(`/api/telegram/dialogs/${encodeURIComponent(d.id)}/read`).catch(() => {})
   }
 }
+
+watch(
+  () => unreadByApp.telegram?.items,
+  () => {
+    applyLiveUnreadBadges()
+  },
+  { deep: true }
+)
 async function loadMsgsReturn(dlg, unreadCount = 0) {
   msgsLoading.value = true; msgs.value = []
   try {

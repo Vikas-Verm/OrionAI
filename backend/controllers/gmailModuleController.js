@@ -44,15 +44,73 @@ async function getCredentials(userId) {
     clientId: doc.gmail.clientId || process.env.GOOGLE_CLIENT_ID,
     clientSecret: doc.gmail.clientSecret || process.env.GOOGLE_CLIENT_SECRET,
     userEmail: doc.gmail.userEmail || "me",
+    expiresAt: doc.gmail.expiresAt || null,
   };
 }
 
-async function getAccessToken(userId) {
-  const cached = tokenCache.get(userId);
-  if (cached && cached.expiresAt > Date.now() + 60_000)
-    return cached.accessToken;
+function isInvalidGrantError(err) {
+  const haystack = [
+    err?.response?.data?.error,
+    err?.response?.data?.error_description,
+    err?.message,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return haystack.includes("invalid_grant");
+}
 
+async function markGmailReconnectRequired(userId) {
+  tokenCache.delete(userId);
+  await Integration.findOneAndUpdate(
+    { userId, type: "gmail" },
+    {
+      $set: {
+        enabled: false,
+        "gmail.accessToken": "",
+        "gmail.expiresAt": null,
+        lastTestOk: false,
+        updatedAt: new Date(),
+      },
+    }
+  ).catch(() => {});
+}
+
+function createGmailReconnectError() {
+  const error = new Error("Gmail reconnect needed.");
+  error.code = "GMAIL_RECONNECT_REQUIRED";
+  return error;
+}
+
+async function getAccessToken(userId) {
   const creds = await getCredentials(userId);
+  const cached = tokenCache.get(userId);
+  const sameMailbox =
+    cached &&
+    cached.refreshToken === creds.refreshToken &&
+    cached.userEmail === creds.userEmail;
+
+  if (sameMailbox && cached.expiresAt > Date.now() + 60_000) {
+    return cached.accessToken;
+  }
+
+  if (cached && !sameMailbox) {
+    tokenCache.delete(userId);
+  }
+
+  const storedExpiresAt = creds.expiresAt
+    ? new Date(creds.expiresAt).getTime()
+    : 0;
+  if (creds.accessToken && storedExpiresAt > Date.now() + 60_000) {
+    tokenCache.set(userId, {
+      accessToken: creds.accessToken,
+      expiresAt: storedExpiresAt,
+      refreshToken: creds.refreshToken,
+      userEmail: creds.userEmail,
+    });
+    return creds.accessToken;
+  }
+
   if (!creds.refreshToken || !creds.clientId || !creds.clientSecret) {
     if (creds.accessToken) return creds.accessToken;
     throw new Error("Gmail OAuth credentials incomplete.");
@@ -71,14 +129,28 @@ async function getAccessToken(userId) {
     tokenCache.set(userId, {
       accessToken: token,
       expiresAt: Date.now() + (r.data.expires_in || 3600) * 1000,
+      refreshToken: creds.refreshToken,
+      userEmail: creds.userEmail,
     });
     return token;
   } catch (err) {
     tokenCache.delete(userId);
+    if (isInvalidGrantError(err)) {
+      await markGmailReconnectRequired(userId);
+      throw createGmailReconnectError();
+    }
     throw new Error(
       `Token refresh failed: ${err.response?.data?.error || err.message}`
     );
   }
+}
+
+function clearCachedAccessToken(userId) {
+  if (!userId) {
+    tokenCache.clear();
+    return;
+  }
+  tokenCache.delete(userId);
 }
 
 function gmailApi(token) {
@@ -89,6 +161,12 @@ function gmailApi(token) {
       "Content-Type": "application/json",
     },
   });
+}
+
+function disableCache(res) {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
 }
 
 // ── Gmail message parsing helpers ─────────────────────────────────
@@ -212,6 +290,7 @@ function messageToFull(msg) {
 exports.listEmails = async (req, res) => {
   const userId = req.user?.username;
   try {
+    disableCache(res);
     const token = await getAccessToken(userId);
     const api = gmailApi(token);
 
@@ -265,6 +344,10 @@ exports.listEmails = async (req, res) => {
 
     res.json({ emails, nextPageToken, hasMore: !!nextPageToken });
   } catch (err) {
+    if (err.code === "GMAIL_RECONNECT_REQUIRED") {
+      console.warn(`Gmail reconnect required for ${userId}`);
+      return res.status(401).json({ error: err.message });
+    }
     console.error("Gmail list error:", err.message);
     res.status(500).json({ error: err.message });
   }
@@ -274,6 +357,7 @@ exports.listEmails = async (req, res) => {
 exports.getThread = async (req, res) => {
   const userId = req.user?.username;
   try {
+    disableCache(res);
     const token = await getAccessToken(userId);
     const api = gmailApi(token);
 
@@ -285,6 +369,9 @@ exports.getThread = async (req, res) => {
     // Mark unread messages as read (fire-and-forget)
     const unreadIds = messages.filter((m) => m.unread).map((m) => m.id);
     if (unreadIds.length) {
+      messages.forEach((message) => {
+        if (unreadIds.includes(message.id)) message.unread = false;
+      });
       Promise.all(
         unreadIds.map((id) =>
           api
@@ -305,6 +392,7 @@ exports.getThread = async (req, res) => {
 exports.getMessage = async (req, res) => {
   const userId = req.user?.username;
   try {
+    disableCache(res);
     const token = await getAccessToken(userId);
     const api = gmailApi(token);
     const r = await api.get(`/messages/${req.body.messageId}`, {
@@ -432,6 +520,7 @@ exports.sendEmail = async (req, res) => {
 // ── GET /api/gmail/labels ─────────────────────────────────────────
 exports.getLabels = async (req, res) => {
   try {
+    disableCache(res);
     const token = await getAccessToken(req.user?.username);
     const api = gmailApi(token);
     const r = await api.get("/labels");
@@ -440,7 +529,10 @@ exports.getLabels = async (req, res) => {
     const results = await Promise.all(
       sel.map(async (lbl) => {
         const d = await api.get(`/labels/${lbl.id}`);
-        return [lbl.id.toLowerCase(), d.data.messagesUnread || 0];
+        return [
+          lbl.id.toLowerCase(),
+          d.data.threadsUnread ?? d.data.messagesUnread ?? 0,
+        ];
       })
     );
     res.json(Object.fromEntries(results));
@@ -452,6 +544,7 @@ exports.getLabels = async (req, res) => {
 // ── GET /api/gmail/profile-picture ───────────────────────────────
 exports.getProfilePicture = async (req, res) => {
   try {
+    disableCache(res);
     const token = await getAccessToken(req.user?.username);
     const r = await axios.get("https://www.googleapis.com/oauth2/v2/userinfo", {
       headers: { Authorization: `Bearer ${token}` },
@@ -473,6 +566,7 @@ exports.getProfilePicture = async (req, res) => {
 exports.getContactPhotos = async (req, res) => {
   const userId = req.user?.username;
   try {
+    disableCache(res);
     const requested = (req.body.emails || [])
       .slice(0, 30)
       .map((e) => e.toLowerCase());
@@ -553,6 +647,7 @@ exports.getContactPhotos = async (req, res) => {
 // ── GET /api/gmail/sync-status ────────────────────────────────────
 // With direct-API architecture there's no background sync — always live.
 exports.getSyncStatus = async (_req, res) => {
+  disableCache(res);
   res.json({ status: "live", lastSyncAt: Date.now() });
 };
 
@@ -598,6 +693,7 @@ exports.sseEvents = async (req, res) => {
 // ── GET /api/gmail/contacts ───────────────────────────────────────
 exports.getContacts = async (req, res) => {
   try {
+    disableCache(res);
     const q = (req.query.q || "").trim();
     if (!q) return res.json({ contacts: [] });
 
@@ -676,6 +772,7 @@ exports.getContacts = async (req, res) => {
 // ── GET /api/gmail/storage-quota ─────────────────────────────────
 exports.getStorageQuota = async (req, res) => {
   try {
+    disableCache(res);
     const token = await getAccessToken(req.user?.username);
     const r = await axios.get(
       "https://www.googleapis.com/drive/v3/about?fields=storageQuota",
@@ -705,3 +802,5 @@ exports.getStorageQuota = async (req, res) => {
     }
   }
 };
+
+exports.clearCachedAccessToken = clearCachedAccessToken;
