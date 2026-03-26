@@ -6,6 +6,7 @@
 
 const Integration = require("../models/Integration");
 const { getOAuthConfig } = require("./googleOAuthConfig");
+const { isConnectedIntegration } = require("./integrationConnectionState");
 const { testDatabaseConnection } = require("./connectedDatabaseService");
 const { testRazorpayConnection } = require("./tools/toolRazorpay");
 
@@ -208,14 +209,19 @@ async function checkIntegration(integration) {
 // ── Run health check for a user ───────────────────────────────────────────
 async function checkUserIntegrations(userId) {
   try {
-    const integrations = await Integration.find({ userId, enabled: true });
+    const integrations = await Integration.find({ userId });
     const results = {};
 
     for (const intg of integrations) {
-      const result = await checkIntegration(intg).catch((err) => ({
-        healthy: false,
-        error: err.message,
-      }));
+      if (!isConnectedIntegration(intg)) continue;
+
+      const result =
+        intg.enabled === false
+          ? { healthy: false, error: "Reconnect needed" }
+          : await checkIntegration(intg).catch((err) => ({
+              healthy: false,
+              error: err.message,
+            }));
 
       const cacheKey = `${userId}:${intg.type}`;
       healthCache.set(cacheKey, { ...result, checkedAt: Date.now() });
@@ -238,10 +244,22 @@ function getHealthStatus(userId, type) {
 
 // ── Get all health statuses for a user ────────────────────────────────────
 async function getAllHealthStatuses(userId) {
-  const integrations = await Integration.find({ userId, enabled: true }).lean();
+  const integrations = await Integration.find({ userId });
   const statuses = {};
 
   for (const intg of integrations) {
+    if (!isConnectedIntegration(intg)) continue;
+
+    if (intg.enabled === false) {
+      const result = { healthy: false, error: "Reconnect needed" };
+      healthCache.set(`${userId}:${intg.type}`, {
+        ...result,
+        checkedAt: Date.now(),
+      });
+      statuses[intg.type] = result;
+      continue;
+    }
+
     const cached = getHealthStatus(userId, intg.type);
     // If checked in last 30 mins, use cache
     if (cached.checkedAt && Date.now() - cached.checkedAt < 30 * 60 * 1000) {

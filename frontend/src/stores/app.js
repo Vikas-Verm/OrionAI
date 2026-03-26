@@ -30,6 +30,9 @@ export const store = reactive({
 
   // Chart
   chartData: null,
+
+  // Module handoff context
+  moduleContext: null,
 });
 
 // ── Computed helpers ──────────────────────────────────────
@@ -69,6 +72,7 @@ export function clearAuth() {
   store.messages = [];
   store.currentSessionId = null;
   store.attachments = [];
+  store.moduleContext = null;
 }
 
 export function setMode(mode) {
@@ -92,4 +96,8 @@ export function resetChat() {
   store.attachments = [];
   store.chartData = null;
   resetCanvas();
+}
+
+export function setModuleContext(context) {
+  store.moduleContext = context || null;
 }

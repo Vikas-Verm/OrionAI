@@ -10,6 +10,8 @@
 import { reactive, computed } from "vue";
 import api from "../services/api";
 
+const NOTIFICATION_HISTORY_LIMIT = 50;
+
 // ── Singleton state ───────────────────────────────────────────────────────
 const state = reactive({
   connected: false,
@@ -52,6 +54,60 @@ let pingInterval = null;
 let isStarted = false;
 let activeUserKey = null;
 const pendingCbs = new Map();
+
+function getPersistedStateKey(userKey) {
+  return `orion:websocket-state:${userKey}`;
+}
+
+function restorePersistedState(userKey) {
+  if (!userKey) return null;
+  try {
+    const raw = localStorage.getItem(getPersistedStateKey(userKey));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return {
+      notifications: Array.isArray(parsed.notifications)
+        ? parsed.notifications.slice(0, NOTIFICATION_HISTORY_LIMIT).map((entry) => ({
+            ...entry,
+            time: entry.time || new Date().toISOString(),
+            read: Boolean(entry.read),
+          }))
+        : [],
+      seenByApp:
+        parsed.seenByApp && typeof parsed.seenByApp === "object"
+          ? parsed.seenByApp
+          : {},
+    };
+  } catch {
+    return null;
+  }
+}
+
+function persistState() {
+  if (!activeUserKey) return;
+  try {
+    const seenByApp = {};
+    for (const [appKey, entry] of Object.entries(state.unreadByApp)) {
+      seenByApp[appKey] = Number(entry?.seenCount || 0) || 0;
+    }
+
+    localStorage.setItem(
+      getPersistedStateKey(activeUserKey),
+      JSON.stringify({
+        notifications: state.notifications
+          .slice(0, NOTIFICATION_HISTORY_LIMIT)
+          .map((entry) => ({
+            ...entry,
+            time:
+              entry.time instanceof Date
+                ? entry.time.toISOString()
+                : entry.time || new Date().toISOString(),
+          })),
+        seenByApp,
+      })
+    );
+  } catch {}
+}
 
 function resetState() {
   state.connected = false;
@@ -191,9 +247,21 @@ export function useWebSocket() {
       if (isNew && newCount > 0 && !isFirst) {
         const meta = APP_META[app];
         if (!meta) continue;
+        const shouldTriggerBriefingRefresh =
+          Number(update.highSignalCount || 0) > 0 ||
+          (app === "gmail" && (ai?.priority || "normal") !== "info") ||
+          ["slack", "telegram", "google_calendar"].includes(app);
 
         const color = ai?.priority ? PRIORITY_COLOR[ai.priority] : meta.color;
-        const id = Date.now() + Math.random();
+        const id = `${app}:${(items || [])
+          .map((item) => item.latestMessageId || item.id)
+          .filter(Boolean)
+          .join("|") || Date.now()}`;
+
+        const existingIndex = state.notifications.findIndex((entry) => entry.id === id);
+        if (existingIndex !== -1) {
+          state.notifications.splice(existingIndex, 1);
+        }
 
         // Add to notification history
         state.notifications.unshift({
@@ -210,8 +278,11 @@ export function useWebSocket() {
           items: items || [],
           time: new Date(),
           read: false,
+          highSignal: shouldTriggerBriefingRefresh,
         });
-        if (state.notifications.length > 50) state.notifications.splice(50);
+        if (state.notifications.length > NOTIFICATION_HISTORY_LIMIT) {
+          state.notifications.splice(NOTIFICATION_HISTORY_LIMIT);
+        }
         // ── TOAST — add to array and auto-dismiss ────────────────────────
         const toastItem = {
           id,
@@ -236,8 +307,23 @@ export function useWebSocket() {
 
         // Browser notification
         showBrowserNotif(app, ai, newCount, meta);
+
+        if (shouldTriggerBriefingRefresh) {
+          document.dispatchEvent(
+            new CustomEvent("orion:priority-refresh-needed", {
+              detail: {
+                reason: "incoming_high_signal",
+                sourceApp: app,
+                count: Number(update.highSignalCount || newCount || 1),
+                summary: ai?.summary || summary || `${newCount} new item${newCount === 1 ? "" : "s"}`,
+              },
+            })
+          );
+        }
       }
     }
+
+    persistState();
   }
 
   function showBrowserNotif(app, ai, count, meta) {
@@ -270,11 +356,23 @@ export function useWebSocket() {
 
   function markRead(id) {
     const n = state.notifications.find((n) => n.id === id);
-    if (n) n.read = true;
+    if (n) {
+      n.read = true;
+      persistState();
+    }
+  }
+
+  function dismissNotification(id) {
+    const index = state.notifications.findIndex((n) => n.id === id);
+    if (index !== -1) {
+      state.notifications.splice(index, 1);
+      persistState();
+    }
   }
 
   function markAllRead() {
     state.notifications.forEach((n) => (n.read = true));
+    persistState();
   }
 
   // ── Mark app as seen — clears recent notification history for that app ────
@@ -291,6 +389,7 @@ export function useWebSocket() {
       entry.displayCount = 0;
       entry.summary = null;
     }
+    persistState();
   }
 
   // ── Send helpers ──────────────────────────────────────────────────────────
@@ -340,6 +439,17 @@ export function useWebSocket() {
     activeUserKey = currentUser;
     resetState();
 
+    const restored = restorePersistedState(currentUser);
+    if (restored?.notifications?.length) {
+      state.notifications.splice(0, state.notifications.length, ...restored.notifications);
+    }
+    if (restored?.seenByApp) {
+      for (const [appKey, seenCount] of Object.entries(restored.seenByApp)) {
+        if (!state.unreadByApp[appKey]) state.unreadByApp[appKey] = {};
+        state.unreadByApp[appKey].seenCount = Number(seenCount || 0) || 0;
+      }
+    }
+
     if ("Notification" in window && Notification.permission === "default") {
       await Notification.requestPermission();
     }
@@ -351,16 +461,21 @@ export function useWebSocket() {
         headers: { "Cache-Control": "no-cache" },
       });
       for (const [appKey, appData] of Object.entries(data.apps || {})) {
+        const existing = state.unreadByApp[appKey] || {};
         state.unreadByApp[appKey] = {
           rawCount: appData?.count || 0,
           count: appData?.count || 0,
-          displayCount: appData?.count || 0,
-          seenCount: 0,
+          displayCount: 0,
+          seenCount: Number(existing.seenCount || 0) || 0,
           items: appData.previews || [],
           summary: appData.summary || null,
           ai: null,
         };
+        state.unreadByApp[appKey].displayCount = computeDisplayCount(
+          state.unreadByApp[appKey]
+        );
       }
+      persistState();
     } catch {
       console.error("Failed to fetch initial unread counts");
     }
@@ -403,6 +518,7 @@ export function useWebSocket() {
     markSeen,
     dismissToast,
     markRead,
+    dismissNotification,
     markAllRead,
   };
 }

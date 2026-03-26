@@ -56,15 +56,14 @@
 
       </div>
       <AgentConfirmModal ref="confirmRef" />
-      <!-- Floating notification bell — visible across all views -->
-      <!-- <FloatingNotificationBell @openModule="onOpenModuleFromSettings" /> -->
+      <NotificationToast @openModule="onOpenModuleFromSettings" />
     </div>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
-import { store, clearAuth, setMode } from './stores/app'
+import { store, clearAuth, setMode, setModuleContext } from './stores/app'
 import { useSession } from './composables/useSession'
 import { useChat } from './composables/useChat'
 import { useFiles } from './composables/useFiles'
@@ -88,7 +87,7 @@ import OnboardingFlow from './components/onboarding/OnboardingFlow.vue'
 
 // Integrations & modules
 import IntegrationsPage from './components/integrations/IntegrationsPage.vue'
-// import FloatingNotificationBell from './components/notification/FloatingNotificationBell.vue'
+import NotificationToast from './components/notification/NotificationToast.vue'
 import TelegramPage from './views/TelegramPage.vue'
 import GmailPage from './views/GmailPage.vue'
 import SlackPage from './views/SlackPage.vue'
@@ -117,6 +116,8 @@ const messageListRef = ref(null)
 const inputAreaRef = ref(null)
 const onboardingRef = ref(null)
 const confirmRef = ref(null)
+let openTelegramListener = null
+let openModuleListener = null
 
 // ── Init ──────────────────────────────────────────────────
 onMounted(async () => {
@@ -129,16 +130,27 @@ onMounted(async () => {
   document.addEventListener('keydown', handleKeyboard)
   document.addEventListener('click', () => inputAreaRef.value?.closeMenus())
   // Listen for TelegramRenderer "Open chat" button
-  document.addEventListener('orion:open-telegram', (e) => {
+  openTelegramListener = (e) => {
     showingIntegrations.value = false
+    setModuleContext({
+      module: 'telegram',
+      ...(e.detail?.context || {}),
+    })
     activeModule.value = 'telegram'
     console.log(e)
-  })
+  }
+  document.addEventListener('orion:open-telegram', openTelegramListener)
 
-  document.addEventListener('orion:open-module', (e) => {
+  openModuleListener = (e) => {
     showingIntegrations.value = false
-    activeModule.value = e.detail?.module || null
-  })
+    const module = e.detail?.module || null
+    setModuleContext(module ? {
+      module,
+      ...(e.detail?.context || {}),
+    } : null)
+    activeModule.value = module
+  }
+  document.addEventListener('orion:open-module', openModuleListener)
 
   if (store.token) {
     api.defaults.headers.common['Authorization'] = `Bearer ${store.token}`
@@ -157,7 +169,8 @@ onMounted(async () => {
 
 onUnmounted(() => {
   document.removeEventListener('keydown', handleKeyboard)
-  document.removeEventListener('orion:open-telegram', () => { })
+  if (openTelegramListener) document.removeEventListener('orion:open-telegram', openTelegramListener)
+  if (openModuleListener) document.removeEventListener('orion:open-module', openModuleListener)
   stop()
 })
 
@@ -182,11 +195,13 @@ function logout() {
 // ── Navigation ────────────────────────────────────────────
 function onOpenIntegrations() {
   showingIntegrations.value = true
+  setModuleContext(null)
   activeModule.value = null
 }
 
 function onOpenIntegration(id) {
   showingIntegrations.value = false
+  setModuleContext(null)
   activeModule.value = id
 }
 
@@ -196,12 +211,14 @@ function onOpenModuleFromSettings(id) {
 
 function closeModule() {
   activeModule.value = null
+  setModuleContext(null)
   showingIntegrations.value = true   // go back to integrations settings
 }
 
 function openDatabaseWorkspace() {
   activeModule.value = null
   showingIntegrations.value = false
+  setModuleContext(null)
   setMode('db')
   store.webMode = false
   nextTick(() => inputAreaRef.value?.focusInput?.())
@@ -210,6 +227,7 @@ function openDatabaseWorkspace() {
 function openRazorpayWorkspace(prompt = '') {
   activeModule.value = null
   showingIntegrations.value = false
+  setModuleContext(null)
   setMode('agent')
   store.webMode = false
   nextTick(() => {
@@ -222,6 +240,7 @@ function openRazorpayWorkspace(prompt = '') {
 async function switchSession(sessionId) {
   activeModule.value = null   // ← close any open module
   showingIntegrations.value = false  // ← close settings too
+  setModuleContext(null)
   await _switchSession(sessionId)
   await nextTick()
   messageListRef.value?.scrollToBottom()

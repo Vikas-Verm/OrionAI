@@ -247,18 +247,33 @@ exports.getBoard = async (req, res) => {
   try {
     const cfg = await getJiraConfig(req.user?.username);
     const project = req.query.project || "";
+    const scope = String(req.query.scope || "all").toLowerCase();
+    const overdueOnly = String(req.query.overdueOnly || "") === "1";
+    const priorityBucket = String(req.query.priorityBucket || "").toLowerCase();
     const startAt = parseInt(req.query.startAt) || 0;
     const maxResults = Math.min(parseInt(req.query.maxResults) || 100, 200);
 
-    let jql = "";
+    const clauses = [];
 
-    // FIX: removed statusCategory != Done (show all statuses incl. Done)
-    // Jira requires a bound clause — always restrict by project or recency
     if (project) {
-      jql = `project in (${project}) ORDER BY updated DESC`;
+      clauses.push(`project in (${project})`);
     } else {
-      jql = 'created >= "2000-01-01" ORDER BY created DESC';
+      clauses.push('created >= "2000-01-01"');
     }
+
+    if (scope === "mine") clauses.push("assignee = currentUser()");
+    else if (scope === "reported") clauses.push("reporter = currentUser()");
+
+    if (overdueOnly) {
+      clauses.push("statusCategory != Done");
+      clauses.push(`duedate < "${new Date().toISOString().split("T")[0]}"`);
+    }
+
+    if (priorityBucket === "high") {
+      clauses.push("priority in (Highest, High)");
+    }
+
+    let jql = `${clauses.join(" AND ")} ORDER BY updated DESC`;
 
     // Cursor-based pagination: first page has no token; subsequent pages pass
     // nextPageToken returned from previous response via req.query.nextPageToken.

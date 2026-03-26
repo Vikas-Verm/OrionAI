@@ -25,11 +25,11 @@
   </template>
   
   <script setup>
-  import { useNotifications } from '../../composables/useNotifications'
+  import { useWebSocket } from '../../composables/useWebSocket'
   
   const emit = defineEmits(['openModule'])
   
-  const { toasts, dismissToast } = useNotifications()
+  const { toasts, dismissToast } = useWebSocket()
   
   function dismiss(id) {
     dismissToast(id)

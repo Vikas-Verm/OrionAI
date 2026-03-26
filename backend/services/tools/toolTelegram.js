@@ -149,6 +149,7 @@ async function toolTelegramSendMessage(params = {}, ctx) {
 
 async function toolTelegramGetUnread(params = {}, ctx) {
   const limit = params.limit || 10;
+  const markRead = Boolean(params.markRead);
 
   const dialogs = await tg.getDialogs(ctx.userId, 80);
 
@@ -164,8 +165,9 @@ async function toolTelegramGetUnread(params = {}, ctx) {
         Math.min(d.unreadCount + 2, 10)
       );
 
-      // mark read async (do not block)
-      tg.markAsRead(ctx.userId, d.id).catch(() => {});
+      if (markRead) {
+        tg.markAsRead(ctx.userId, d.id).catch(() => {});
+      }
 
       return {
         chatId: String(d.id),

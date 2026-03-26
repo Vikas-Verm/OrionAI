@@ -4,65 +4,13 @@ const { google } = require("googleapis");
 const Integration = require("../models/Integration");
 const { getOAuthConfig } = require("./googleOAuthConfig");
 const { calendarGetToday } = require("./tools/toolCalendar");
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-const GMAIL_PRIORITY_24H_QUERY = [
-  "in:inbox",
-  "newer_than:1d",
-  "-from:me",
-  "-category:promotions",
-  "-category:social",
-  "-category:updates",
-  "-category:forums",
-].join(" ");
-const GMAIL_PRIORITY_RECENT_QUERY = [
-  "in:inbox",
-  "newer_than:20m",
-  "-from:me",
-  "-category:promotions",
-  "-category:social",
-  "-category:updates",
-  "-category:forums",
-].join(" ");
-
-function getHeader(headers = [], name) {
-  return (
-    headers.find((header) => header.name?.toLowerCase() === name.toLowerCase())
-      ?.value || ""
-  );
-}
-
-function extractEmailAddress(value = "") {
-  const bracketMatch = value.match(/<([^>]+)>/);
-  const raw = bracketMatch?.[1] || value;
-  const emailMatch = raw.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-  return (emailMatch?.[0] || "").trim().toLowerCase();
-}
-
-function isAutomatedSender(fromValue, headers = []) {
-  const haystack = [
-    fromValue,
-    getHeader(headers, "Reply-To"),
-    getHeader(headers, "Auto-Submitted"),
-    getHeader(headers, "Precedence"),
-    getHeader(headers, "X-Auto-Response-Suppress"),
-  ]
-    .join(" ")
-    .toLowerCase();
-
-  if (
-    /no-?reply|do-?not-?reply|donotreply|mailer-daemon|auto-?reply|bounce/.test(
-      haystack
-    )
-  ) {
-    return true;
-  }
-
-  const autoSubmitted = getHeader(headers, "Auto-Submitted").toLowerCase();
-  if (autoSubmitted && autoSubmitted !== "no") return true;
-
-  return false;
-}
+const {
+  GMAIL_PRIORITY_24H_QUERY,
+  GMAIL_PRIORITY_HEADERS,
+  GMAIL_PRIORITY_RECENT_QUERY,
+  buildGmailSignalSummary,
+  classifyPriorityThread,
+} = require("./gmailPriorityRules");
 
 function isInvalidGrantError(err) {
   const haystack = [
@@ -96,7 +44,6 @@ async function getGmailClient(userId) {
   const integration = await Integration.findOne({
     userId,
     type: "gmail",
-    enabled: true,
   });
   if (!integration?.gmail?.refreshToken && !integration?.gmail?.accessToken) {
     return null;
@@ -123,13 +70,13 @@ async function getGmailClient(userId) {
 }
 
 async function listRecentPriorityGmailMessages(gmail, maxResults = 15) {
-  const result = await gmail.users.messages.list({
+  const result = await gmail.users.threads.list({
     userId: "me",
     maxResults,
     q: GMAIL_PRIORITY_RECENT_QUERY,
-    fields: "messages/id,nextPageToken",
+    fields: "threads/id,nextPageToken",
   });
-  return result.data.messages || [];
+  return result.data.threads || [];
 }
 
 async function listPriorityThreadIds(gmail, maxThreads = 80) {
@@ -150,36 +97,6 @@ async function listPriorityThreadIds(gmail, maxThreads = 80) {
   } while (pageToken && threads.length < maxThreads);
 
   return threads;
-}
-
-function threadNeedsReply(thread, selfEmail, nowMs = Date.now()) {
-  const messages = thread.messages || [];
-  const latestMessage = messages[messages.length - 1];
-  if (!latestMessage) return null;
-
-  const headers = latestMessage.payload?.headers || [];
-  const from = getHeader(headers, "From") || "Unknown";
-  const senderEmail = extractEmailAddress(from);
-  if (!senderEmail || senderEmail === selfEmail) return null;
-  if (isAutomatedSender(from, headers)) return null;
-
-  const latestMs =
-    Number(latestMessage.internalDate || 0) ||
-    Date.parse(getHeader(headers, "Date") || "");
-  if (!latestMs || nowMs - latestMs > DAY_MS) return null;
-
-  return {
-    id: thread.id,
-    subject: getHeader(headers, "Subject") || "(no subject)",
-    from,
-    unread: (latestMessage.labelIds || []).includes("UNREAD"),
-    lastMs: latestMs,
-  };
-}
-
-function buildGmailSignalSummary(count) {
-  if (!count) return null;
-  return `${count} priority email${count === 1 ? "" : "s"} from the last 24h`;
 }
 
 async function getGmailAttentionFromClient(
@@ -205,16 +122,7 @@ async function getGmailAttentionFromClient(
           userId: "me",
           id: thread.id,
           format: "metadata",
-          metadataHeaders: [
-            "Subject",
-            "From",
-            "To",
-            "Date",
-            "Reply-To",
-            "Auto-Submitted",
-            "Precedence",
-            "X-Auto-Response-Suppress",
-          ],
+          metadataHeaders: GMAIL_PRIORITY_HEADERS,
         })
         .then((result) => result.data)
         .catch(() => null)
@@ -223,17 +131,18 @@ async function getGmailAttentionFromClient(
 
   const selfEmail = (integration?.gmail?.userEmail || "").toLowerCase();
   const threads = threadResults
-    .map((thread) => (thread ? threadNeedsReply(thread, selfEmail) : null))
+    .map((thread) => (thread ? classifyPriorityThread(thread, selfEmail) : null))
     .filter(Boolean)
     .sort((a, b) => b.lastMs - a.lastMs);
 
   const previews = threads
     .slice(0, previewLimit)
-    .map(({ id, subject, from, unread }) => ({
+    .map(({ id, subject, from, unread, highConfidence }) => ({
       id,
       subject,
       from,
       unread,
+      highConfidence,
     }));
 
   return {
@@ -277,22 +186,29 @@ function filterUpcomingTimedEvents(events = [], now = new Date()) {
 }
 
 async function getCalendarUpcomingSignal(userId, { previewLimit = 3 } = {}) {
-  const result = await calendarGetToday({ upcomingOnly: true }, { userId });
+  const windowHours = 12;
+  const result = await calendarGetToday(
+    { upcomingOnly: true, windowHours },
+    { userId }
+  );
   const events = result?.events || [];
-  const previews = events.slice(0, previewLimit).map((event) => ({
+  const items = events.map((event) => ({
     id: event.id,
     title: event.title,
     time: event.time,
     date: event.date,
+    start: event.start,
   }));
+  const previews = items.slice(0, previewLimit);
 
   return {
     app: "google_calendar",
     count: events.length,
     previews,
-    items: previews,
+    items,
+    events,
     summary: events.length
-      ? `${events.length} upcoming meeting${events.length === 1 ? "" : "s"} today`
+      ? `${events.length} upcoming meeting${events.length === 1 ? "" : "s"} in the next ${windowHours} hours`
       : null,
   };
 }

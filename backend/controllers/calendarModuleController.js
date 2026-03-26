@@ -6,6 +6,7 @@
 const axios = require("axios");
 const Integration = require("../models/Integration");
 const { getOAuthConfig } = require("../services/googleOAuthConfig");
+const { buildKolkataMonthBounds } = require("../services/calendarWindowUtils");
 
 async function getCalendarClient(userId) {
   const doc = await Integration.findOne({
@@ -86,10 +87,11 @@ exports.getEvents = async (req, res) => {
     const cal = await getCalendarClient(req.user?.username);
     const month = parseInt(req.query.month) || new Date().getMonth() + 1;
     const year = parseInt(req.query.year) || new Date().getFullYear();
+    const monthBounds = buildKolkataMonthBounds(year, month);
 
     const params = {
-      timeMin: new Date(year, month - 1, 1).toISOString(),
-      timeMax: new Date(year, month, 0, 23, 59, 59).toISOString(),
+      timeMin: monthBounds.timeMin,
+      timeMax: monthBounds.timeMax,
       singleEvents: true,
       orderBy: "startTime",
       maxResults: 500,

@@ -2,6 +2,10 @@ const { google } = require("googleapis");
 const Integration = require("../../models/Integration");
 const Fuse = require("fuse.js");
 const { getOAuthConfig } = require("../googleOAuthConfig");
+const {
+  buildKolkataDayBounds,
+  APP_TIMEZONE,
+} = require("../calendarWindowUtils");
 
 // ── Helper: build authorized Google Calendar client ──────────────────────────
 async function getCalendarClient(userId) {
@@ -34,6 +38,7 @@ function fmtEvent(e) {
     title: e.summary || "(No title)",
     start,
     end,
+    description: e.description || null,
     date: dt
       ? dt.toLocaleDateString("en-IN", {
           weekday: "short",
@@ -79,15 +84,17 @@ function filterUpcomingTimedEvents(events = [], now = new Date()) {
 async function calendarGetToday(params, ctx) {
   const { calendar } = await getCalendarClient(ctx.userId);
   const now = new Date();
-  const start = new Date(now);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(now);
-  end.setHours(23, 59, 59, 999);
+  const windowHours = Number(params?.windowHours || 0);
+  const useUpcomingWindow = params?.upcomingOnly && windowHours > 0;
+  const bounds = buildKolkataDayBounds(now);
+  const end = useUpcomingWindow
+    ? new Date(now.getTime() + windowHours * 60 * 60 * 1000)
+    : null;
 
   const res = await calendar.events.list({
     calendarId: "primary",
-    timeMin: start.toISOString(),
-    timeMax: end.toISOString(),
+    timeMin: useUpcomingWindow ? now.toISOString() : bounds.timeMin,
+    timeMax: useUpcomingWindow ? end.toISOString() : bounds.timeMax,
     singleEvents: true,
     orderBy: "startTime",
     maxResults: 20,
@@ -291,12 +298,12 @@ async function calendarUpdate(params, ctx) {
   if (startDateTime)
     patch.start = {
       dateTime: new Date(startDateTime).toISOString(),
-      timeZone: "Asia/Kolkata",
+      timeZone: APP_TIMEZONE,
     };
   if (endDateTime)
     patch.end = {
       dateTime: new Date(endDateTime).toISOString(),
-      timeZone: "Asia/Kolkata",
+      timeZone: APP_TIMEZONE,
     };
   if (attendees) patch.attendees = attendees.map((e) => ({ email: e }));
 

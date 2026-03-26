@@ -1,6 +1,7 @@
 "use strict";
 
 const Integration = require("../models/Integration");
+const { isConnectedIntegration } = require("./integrationConnectionState");
 const { getUnreadSignals } = require("./inboxSignalsService");
 const { toolGetOverdueTickets } = require("./tools/toolJira");
 const { calendarGetToday } = require("./tools/toolCalendar");
@@ -26,8 +27,9 @@ function formatCount(value) {
 }
 
 async function getMorningBriefing(userId) {
-  const integrations = await Integration.find({ userId, enabled: true }).lean();
+  const integrations = await Integration.find({ userId }).lean();
   const connectedApps = integrations
+    .filter((integration) => isConnectedIntegration(integration))
     .map((integration) => integration.type)
     .filter((type) => APP_META[type])
     .map((type) => ({

@@ -17,14 +17,20 @@ const clients = {};
 
 // ── Load session string from DB ───────────────────────────
 async function getSessionString(userId) {
-  const doc = await Integration.findOne({ userId });
+  const doc = await Integration.findOne({ userId, type: "telegram" });
   return doc?.telegram?.sessionString || "";
 }
 
 async function saveSessionString(userId, sessionString) {
   await Integration.findOneAndUpdate(
-    { userId },
-    { $set: { "telegram.sessionString": sessionString } },
+    { userId, type: "telegram" },
+    {
+      $set: {
+        userId,
+        type: "telegram",
+        "telegram.sessionString": sessionString,
+      },
+    },
     { upsert: true }
   );
 }
@@ -76,12 +82,16 @@ async function sendPhoneCode(userId, phoneNumber) {
   // Clear stale DB state (non-fatal)
   try {
     await Integration.findOneAndUpdate(
-      { userId },
+      { userId, type: "telegram" },
       {
         $unset: {
           "telegram.sessionString": "",
           "telegram.phoneCodeHash": "",
           "telegram.pendingPhone": "",
+        },
+        $set: {
+          userId,
+          type: "telegram",
         },
       },
       { upsert: true }
@@ -120,9 +130,11 @@ async function sendPhoneCode(userId, phoneNumber) {
   pendingAuth[userId] = { phone, phoneCodeHash: result.phoneCodeHash };
   try {
     await Integration.findOneAndUpdate(
-      { userId },
+      { userId, type: "telegram" },
       {
         $set: {
+          userId,
+          type: "telegram",
           "telegram.sessionString": client.session.save(),
           "telegram.phoneCodeHash": result.phoneCodeHash,
           "telegram.pendingPhone": phone,
@@ -147,7 +159,7 @@ async function verifyPhoneCode(userId, code) {
     phoneNumber = pendingAuth[userId].phone;
     phoneCodeHash = pendingAuth[userId].phoneCodeHash;
   } else {
-    const doc = await Integration.findOne({ userId });
+    const doc = await Integration.findOne({ userId, type: "telegram" });
     phoneNumber = doc?.telegram?.pendingPhone;
     phoneCodeHash = doc?.telegram?.phoneCodeHash;
   }
@@ -623,7 +635,10 @@ async function logout(userId) {
     await client.disconnect();
     delete clients[userId];
   } catch {}
-  await Integration.findOneAndUpdate({ userId }, { $unset: { telegram: "" } });
+  await Integration.findOneAndUpdate(
+    { userId, type: "telegram" },
+    { $unset: { telegram: "" } }
+  );
 }
 
 module.exports = {

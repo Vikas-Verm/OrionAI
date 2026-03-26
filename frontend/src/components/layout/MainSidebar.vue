@@ -34,12 +34,15 @@
         <div v-if="bellNotifications.length">
           <div class="bell-section-label">RECENT</div>
           <div v-for="n in bellNotifications.slice(0, 15)" :key="n.id" class="bell-history-row"
-            :class="{ 'bell-unread': !n.read }" @click="openAppFromBell(n.route); markRead(n.id)">
-            <span class="bell-history-icon">{{ n.icon }}</span>
-            <div class="bell-history-body">
-              <div class="bell-history-text">{{ n.summary }}</div>
-              <div class="bell-history-meta">{{ n.label }} · {{ bellTimeAgo(n.time) }}</div>
+            :class="{ 'bell-unread': !n.read }">
+            <div class="bell-history-main" @click="openBellNotification(n)">
+              <span class="bell-history-icon">{{ n.icon }}</span>
+              <div class="bell-history-body">
+                <div class="bell-history-text">{{ n.summary }}</div>
+                <div class="bell-history-meta">{{ n.label }} · {{ bellTimeAgo(n.time) }}</div>
+              </div>
             </div>
+            <button class="bell-history-dismiss" @click.stop="dismissBellNotification(n.id)" title="Clear notification">✕</button>
           </div>
         </div>
 
@@ -224,7 +227,7 @@ const { theme, setTheme } = useTheme()
 const {
   unreadByApp, startPolling, stopPolling, markSeen,
   unreadNotifCount, hasUrgent, notifications: bellNotifications,
-  markRead, markAllRead,
+  markRead, dismissNotification, markAllRead,
 } = useWebSocket()
 
 const searchQuery = ref('')
@@ -337,12 +340,27 @@ function openApp(appId) {
   emit('openIntegration', appId)
 }
 
+function hasConnectedState(int) {
+  if (!int?.type) return false
+  if (int.type === 'gmail') return Boolean(int.gmail?.refreshToken || int.gmail?.accessToken || int.gmail?.userEmail)
+  if (int.type === 'google_calendar') return Boolean(int.googleCalendar?.refreshToken || int.googleCalendar?.accessToken || int.googleCalendar?.userEmail)
+  if (int.type === 'slack') return Boolean(int.slack?.userToken || int.slack?.webhookUrl)
+  if (int.type === 'telegram') return Boolean(int.telegram?.sessionString)
+  if (int.type === 'whatsapp') return Boolean(int.whatsapp?.connected)
+  if (int.type === 'jira') return Boolean(int.jira?.domain && int.jira?.email && int.jira?.apiToken)
+  if (int.type === 'database') return Boolean(int.database?.connectionString || int.database?.filePath)
+  if (int.type === 'notion') return Boolean(int.notion?.apiToken)
+  if (int.type === 'razorpay') return Boolean(int.razorpay?.keyId && int.razorpay?.keySecret)
+  if (int.type === 'webhook') return Boolean(int.webhook?.url)
+  return int.enabled !== false
+}
+
 async function loadConnected() {
   try {
     const res = await api.get('/api/integrations')
     Object.keys(connectedMap).forEach(k => delete connectedMap[k])
     for (const int of res.data) {
-      if (int?.enabled !== false) connectedMap[int.type] = true
+      if (hasConnectedState(int)) connectedMap[int.type] = true
     }
   } catch (e) {
     console.error('Sidebar: failed to load integrations', e)
@@ -370,8 +388,18 @@ function onOutsideClick(e) {
 
 function openAppFromBell(route) {
   bellOpen.value = false
-  markSeen(route)
   emit('openIntegration', route)
+}
+
+function dismissBellNotification(id) {
+  dismissNotification(id)
+}
+
+function openBellNotification(notification) {
+  if (!notification) return
+  markRead(notification.id)
+  dismissNotification(notification.id)
+  openAppFromBell(notification.route)
 }
 
 function bellTimeAgo(date) {
@@ -1172,10 +1200,19 @@ defineExpose({ searchInputRef, refreshConnected: loadConnected })
   display: flex;
   align-items: flex-start;
   gap: 9px;
+  justify-content: space-between;
   padding: 8px 14px;
-  cursor: pointer;
   border-top: 1px solid rgba(255, 255, 255, 0.04);
   transition: background 0.12s;
+}
+
+.bell-history-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
 }
 
 .bell-history-row:hover {
@@ -1207,6 +1244,24 @@ defineExpose({ searchInputRef, refreshConnected: loadConnected })
 .bell-history-meta {
   font-size: 10px;
   color: var(--text-muted);
+}
+
+.bell-history-dismiss {
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  line-height: 1;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.bell-history-dismiss:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
 }
 
 .bell-empty {

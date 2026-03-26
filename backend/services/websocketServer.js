@@ -10,6 +10,10 @@ const {
   listRecentPriorityGmailMessages,
   getCalendarUpcomingSignal,
 } = require("./workspaceSignalsService");
+const {
+  GMAIL_PRIORITY_HEADERS,
+  classifyPriorityThread,
+} = require("./gmailPriorityRules");
 
 const connections = new Map();
 const pollers = new Map();
@@ -17,6 +21,7 @@ const lastCounts = new Map();
 const lastGmailMsgIds = new Map();
 const lastTelegramCount = new Map();
 const lastSlackCount = new Map();
+const lastCalendarEventIds = new Map();
 const telegramListeners = new Map();
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -101,7 +106,7 @@ async function pollUser(userId, isFirstRun = false) {
   const [gmailRes, calendarRes, telegramRes, slackRes, whatsappRes] =
     await Promise.allSettled([
       checkGmail(userId, isFirstRun),
-      checkCalendar(userId),
+      checkCalendar(userId, isFirstRun),
       checkTelegram(userId, isFirstRun),
       checkSlack(userId, isFirstRun),
       checkWhatsApp(userId),
@@ -143,6 +148,7 @@ async function pollUser(userId, isFirstRun = false) {
       ai,
       isNew,
       newCount,
+      highSignalCount: result.highSignalCount || 0,
       isFirst: isFirstRun,
     });
 
@@ -185,73 +191,65 @@ async function checkGmail(userId, isFirstRun) {
     if (!client) return null;
     const { gmail, integration } = client;
 
-    // ── Query 1: Recent inbox messages (read OR unread, last 20 min) ──────
-    const [recentMessages, attention] = await Promise.all([
+    const [recentThreads, attention] = await Promise.all([
       listRecentPriorityGmailMessages(gmail, 15),
       getGmailAttentionFromClient(gmail, integration, { previewLimit: 3 }),
     ]);
 
-    const currentIds = new Set(recentMessages.map((m) => m.id));
-    const prevIds = lastGmailMsgIds.get(userId) || new Set();
+    const selfEmail = (integration?.gmail?.userEmail || "").toLowerCase();
+    const threadResults = await Promise.all(
+      recentThreads.map((thread) =>
+        gmail.users.threads
+          .get({
+            userId: "me",
+            id: thread.id,
+            format: "metadata",
+            metadataHeaders: GMAIL_PRIORITY_HEADERS,
+          })
+          .then((result) => result.data)
+          .catch(() => null)
+      )
+    );
 
-    // New = IDs we haven't seen in any previous poll
+    const classifiedRecent = threadResults
+      .map((thread) => (thread ? classifyPriorityThread(thread, selfEmail) : null))
+      .filter(Boolean)
+      .sort((a, b) => b.lastMs - a.lastMs);
+
+    const currentIds = new Set(
+      classifiedRecent.map((thread) => thread.latestMessageId || thread.id)
+    );
+    const prevIds = lastGmailMsgIds.get(userId) || new Set();
     const newIds = [...currentIds].filter((id) => !prevIds.has(id));
 
     lastGmailMsgIds.set(userId, currentIds);
 
     if (!isFirstRun) {
       console.log(
-        `[Gmail] ${userId} — recent (20min): ${recentMessages.length}, new: ${newIds.length}`
+        `[Gmail] ${userId} — recent reply-worthy: ${classifiedRecent.length}, new: ${newIds.length}`
       );
     }
 
-    // ── Fetch previews for new messages ───────────────────────────────────
-    const toFetch = isFirstRun
-      ? recentMessages.slice(0, 3)
-      : recentMessages.filter((m) => newIds.includes(m.id)).slice(0, 3);
+    const newEligibleThreads = classifiedRecent.filter((thread) =>
+      newIds.includes(thread.latestMessageId || thread.id)
+    );
 
-    const items = [];
-    for (const m of toFetch) {
-      try {
-        const msg = await gmail.users.messages.get({
-          userId: "me",
-          id: m.id,
-          format: "metadata",
-          metadataHeaders: ["Subject", "From"],
-        });
-        const hdrs = msg.data.payload?.headers || [];
-        const subject =
-          hdrs.find((h) => h.name === "Subject")?.value || "(no subject)";
-        const from = hdrs.find((h) => h.name === "From")?.value || "Unknown";
-        items.push({ id: m.id, subject, from });
-      } catch {}
-    }
+    const items = (isFirstRun
+      ? classifiedRecent.slice(0, 3)
+      : newEligibleThreads.slice(0, 3)
+    ).map((thread) => ({
+      id: thread.id,
+      latestMessageId: thread.latestMessageId,
+      subject: thread.subject,
+      from: thread.from,
+      unread: thread.unread,
+      highConfidence: thread.highConfidence,
+    }));
 
-    // Fallback: if items empty on first run, show any recent 3
-    if (items.length === 0 && isFirstRun) {
-      for (const m of recentMessages.slice(0, 3)) {
-        try {
-          const msg = await gmail.users.messages.get({
-            userId: "me",
-            id: m.id,
-            format: "metadata",
-            metadataHeaders: ["Subject", "From"],
-          });
-          const hdrs = msg.data.payload?.headers || [];
-          items.push({
-            id: m.id,
-            subject:
-              hdrs.find((h) => h.name === "Subject")?.value || "(no subject)",
-            from: hdrs.find((h) => h.name === "From")?.value || "Unknown",
-          });
-        } catch {}
-      }
-    }
-
-    const hasNew = !isFirstRun && newIds.length > 0;
+    const hasNew = !isFirstRun && items.length > 0;
     if (hasNew) {
       console.log(
-        `📧 Gmail NEW for ${userId}: ${newIds.length} — ${items
+        `📧 Gmail NEW for ${userId}: ${items.length} — ${items
           .map((i) => i.subject)
           .join(" | ")}`
       );
@@ -262,7 +260,8 @@ async function checkGmail(userId, isFirstRun) {
       summary: attention.summary,
       items,
       _isNew: hasNew,
-      _newCount: newIds.length,
+      _newCount: newEligibleThreads.length,
+      highSignalCount: newEligibleThreads.filter((item) => item.highConfidence).length,
     };
   } catch (err) {
     if (err?.code === "GMAIL_RECONNECT_REQUIRED") {
@@ -274,7 +273,7 @@ async function checkGmail(userId, isFirstRun) {
   }
 }
 
-async function checkCalendar(userId) {
+async function checkCalendar(userId, isFirstRun) {
   try {
     const integration = await Integration.findOne({
       userId,
@@ -284,13 +283,22 @@ async function checkCalendar(userId) {
     if (!integration?.googleCalendar?.accessToken) return null;
 
     const signal = await getCalendarUpcomingSignal(userId);
+    const items = signal.items || [];
+    const prevIds = lastCalendarEventIds.get(userId) || new Set();
+    const nextIds = new Set(items.map((item) => item.id).filter(Boolean));
+    const newItems = !isFirstRun
+      ? items.filter((item) => item.id && !prevIds.has(item.id))
+      : [];
+    lastCalendarEventIds.set(userId, nextIds);
+
     return {
       count: signal.count,
-      items: signal.items || [],
+      items,
       summary: signal.summary,
       allowAi: false,
-      _isNew: false,
-      _newCount: 0,
+      _isNew: !isFirstRun && newItems.length > 0,
+      _newCount: newItems.length,
+      highSignalCount: newItems.length,
     };
   } catch {
     return null;
@@ -425,17 +433,15 @@ async function startTelegramListener(userId) {
   telegramListeners.set(userId, "starting");
 
   try {
-    const toolTelegram = require("./tools/toolTelegram");
-    if (!toolTelegram.getTelegramClient) {
-      console.warn(
-        "[Telegram] getTelegramClient not exported — real-time disabled. Export it from toolTelegram.js"
-      );
+    const { getClient } = require("./tools/toolTelegramMTProto");
+    const client = await getClient(userId);
+    if (!client) {
       telegramListeners.delete(userId);
       return;
     }
 
-    const client = await toolTelegram.getTelegramClient(userId);
-    if (!client) {
+    const authorized = await client.isUserAuthorized().catch(() => false);
+    if (!authorized) {
       telegramListeners.delete(userId);
       return;
     }

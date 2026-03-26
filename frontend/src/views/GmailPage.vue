@@ -489,6 +489,7 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import api from '../services/api'
 import { agentAPI } from '../services/api'
 import { useWebSocket } from '../composables/useWebSocket'
+import { store, setModuleContext } from '../stores/app'
 
 defineEmits(['close', 'open-integrations'])
 
@@ -571,6 +572,17 @@ function dismissBanner() {
   newEmailBanner.value = null
   clearTimeout(bannerTimer)
 }
+
+function notifyPriorityStateChange(reason, extras = {}) {
+  document.dispatchEvent(new CustomEvent('orion:priority-refresh-needed', {
+    detail: {
+      reason,
+      sourceApp: 'gmail',
+      ...extras,
+    },
+  }))
+}
+
 // Close profile menu on any click outside the profile wrap
 function onDocClick(e) {
   if (showProfileMenu.value && profileWrapRef.value && !profileWrapRef.value.contains(e.target)) {
@@ -777,6 +789,17 @@ async function switchFolder(key) {
 }
 async function doSearch() { clearTimeout(searchTimer); await loadEmails() }
 
+function applyBriefingContext() {
+  const context = store.moduleContext
+  if (!context || context.module !== 'gmail') return
+
+  activeFolder.value = context.activeFolder || 'inbox'
+  searchQuery.value = context.searchQuery || ''
+  selectedEmail.value = null
+  selectedId.value = null
+  setModuleContext(null)
+}
+
 async function openEmail(email) {
   selectedId.value    = email.id
   selectedEmail.value = email
@@ -808,6 +831,11 @@ async function openEmail(email) {
   const i = emails.value.findIndex(e => e.id === email.id)
   if (i !== -1 && emails.value[i].unread) {
     emails.value[i] = { ...emails.value[i], unread: false }
+    notifyPriorityStateChange('gmail_read', {
+      emailId: email.id,
+      threadId: email.threadId,
+      subject: email.subject,
+    })
     setTimeout(() => {
       syncMailboxView().catch(() => {})
     }, 250)
@@ -890,6 +918,10 @@ async function sendReply() {
     replyDraft.value = ''; replyAttachments.value = []
     replyCC.value = ''; showReplyCC.value = false
     setTimeout(() => replySent.value = false, 3000)
+    notifyPriorityStateChange('gmail_replied', {
+      threadId: selectedEmail.value.threadId,
+      subject: selectedEmail.value.subject,
+    })
 
     // ── 2. Optimistically append sent message to thread ────────
     const now = new Date()
@@ -1401,6 +1433,7 @@ function renderEmailBody(text) {
 }
 
 onMounted(async () => {
+  applyBriefingContext()
   fetchLabelCounts()
   fetchGmailProfile()
   connectSSE()

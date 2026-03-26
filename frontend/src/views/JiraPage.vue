@@ -1111,6 +1111,7 @@
 <script setup>
 import { ref, computed, reactive, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import api from '../services/api'
+import { store, setModuleContext } from '../stores/app'
 
 
 
@@ -1167,6 +1168,9 @@ const projectKey     = ref('')
 const projectName    = ref('')
 const selectedProject = ref('')
 const activeSprint   = ref(null)
+const boardScope     = ref('all')
+const overdueOnly    = ref(false)
+const priorityBucket = ref('')
 
 // Filters
 const searchQ        = ref('')
@@ -1543,9 +1547,24 @@ async function loadBoard() {
 function buildBoardQuery({ token = null, maxResults = PAGE_SIZE } = {}) {
   const p = new URLSearchParams()
   if (selectedProject.value) p.set('project', selectedProject.value)
+  if (boardScope.value && boardScope.value !== 'all') p.set('scope', boardScope.value)
+  if (overdueOnly.value) p.set('overdueOnly', '1')
+  if (priorityBucket.value) p.set('priorityBucket', priorityBucket.value)
   p.set('maxResults', maxResults)
   if (token) p.set('nextPageToken', token)
   return p.toString()
+}
+
+function applyBriefingContext() {
+  const context = store.moduleContext
+  if (!context || context.module !== 'jira') return
+
+  boardScope.value = context.scope || 'all'
+  overdueOnly.value = Boolean(context.overdueOnly)
+  priorityBucket.value = context.priorityBucket || ''
+  activeTab.value = context.activeTab || 'list'
+  searchQ.value = context.searchQuery || ''
+  setModuleContext(null)
 }
 
 async function loadRemainingInBackground() {
@@ -1997,6 +2016,7 @@ function onDocClick(e) {
 }
 
 onMounted(() => {
+  applyBriefingContext()
   loadBoard()
   loadProjects()
   document.addEventListener('keydown', onKeydown)
