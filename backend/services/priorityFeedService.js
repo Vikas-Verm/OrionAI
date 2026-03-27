@@ -9,6 +9,10 @@ const {
   GMAIL_PRIORITY_HEADERS,
   classifyPriorityThread,
 } = require("./gmailPriorityRules");
+const {
+  ACTION_STATES,
+  getCommunicationPriorityItems,
+} = require("./communicationActionService");
 const { calendarGetToday } = require("./tools/toolCalendar");
 const {
   toolGetMyTickets,
@@ -170,6 +174,16 @@ function sortByPriority(items = []) {
     }
     return String(a.title || "").localeCompare(String(b.title || ""));
   });
+}
+
+function isItemReactivatedSinceAction(item, latestAction) {
+  const latestRelevant =
+    item?.meta?.latestMessageAt ||
+    item?.meta?.latestInboundAt ||
+    item?.meta?.lastMessageAt ||
+    null;
+  if (!latestRelevant || !latestAction?.createdAt) return false;
+  return new Date(latestRelevant).getTime() > new Date(latestAction.createdAt).getTime();
 }
 
 function createPromptAction({ label, prompt, mode = "agent" }) {
@@ -630,6 +644,17 @@ function mapMessageSourceToItems(sourceApp, previews = []) {
 }
 
 function buildPrioritySummary(items = []) {
+  const communicationItems = items.filter((item) => item.category === "communication");
+  const approvals = communicationItems.filter(
+    (item) => item.actionState === ACTION_STATES.NEEDS_APPROVAL
+  ).length;
+  const waitingOnYou = communicationItems.filter(
+    (item) => item.actionState === ACTION_STATES.WAITING_ON_YOUR_REPLY
+  ).length;
+  const followUps = communicationItems.filter(
+    (item) => item.actionState === ACTION_STATES.NEEDS_FOLLOW_UP
+  ).length;
+
   return {
     urgentCount: items.filter((item) => item.priority === "High").length,
     quickClearCount: items.filter((item) => item.canClearQuickly).length,
@@ -638,6 +663,9 @@ function buildPrioritySummary(items = []) {
         item.category === "meetings" ||
         (item.category === "tasks" && item.needsAttentionSoon)
     ).length,
+    waitingOnYouCount: waitingOnYou,
+    approvalCount: approvals,
+    followUpCount: followUps,
   };
 }
 
@@ -650,14 +678,24 @@ function buildHeadline(items = [], jiraInsight = null) {
   }
 
   const counts = {
-    replies: items.filter((item) => item.category === "replies").length,
+    communication: items.filter((item) => item.category === "communication").length,
+    approvals: items.filter((item) => item.actionState === ACTION_STATES.NEEDS_APPROVAL).length,
+    followUps: items.filter((item) => item.actionState === ACTION_STATES.NEEDS_FOLLOW_UP).length,
     meetings: items.filter((item) => item.category === "meetings").length,
     tasks: items.filter((item) => item.category === "tasks").length,
   };
 
   const parts = [];
-  if (counts.replies) {
-    parts.push(`${counts.replies} reply-worthy conversation${counts.replies === 1 ? "" : "s"}`);
+  if (counts.communication) {
+    parts.push(
+      `${counts.communication} communication thread${counts.communication === 1 ? "" : "s"} needing judgment`
+    );
+  }
+  if (counts.approvals) {
+    parts.push(`${counts.approvals} approval${counts.approvals === 1 ? "" : "s"}`);
+  }
+  if (counts.followUps) {
+    parts.push(`${counts.followUps} follow-up${counts.followUps === 1 ? "" : "s"}`);
   }
   if (jiraInsight?.myOverdueCount) {
     parts.push(`${jiraInsight.myOverdueCount} of your Jira ticket${jiraInsight.myOverdueCount === 1 ? "" : "s"} overdue`);
@@ -738,6 +776,9 @@ function filterActiveItems(items, latestActionsByItem) {
   return items.filter((item) => {
     const latest = latestActionsByItem.get(item.id);
     if (!latest) return true;
+    if (isItemReactivatedSinceAction(item, latest)) {
+      return true;
+    }
     if (latest.action === "snoozed") {
       return !latest.snoozedUntil || new Date(latest.snoozedUntil).getTime() <= now;
     }
@@ -760,26 +801,23 @@ async function getHomeDashboard(userId) {
     }));
 
   const [
-    gmailItems,
+    communicationItems,
     calendarItems,
     jiraSignals,
-    messagingItems,
     latestActionsByItem,
     recentActions,
   ] = await Promise.all([
-    buildGmailPriorityItems(userId).catch(() => []),
+    getCommunicationPriorityItems(userId).catch(() => []),
     buildCalendarPriorityItems(userId).catch(() => []),
     buildJiraWorkspaceSignals(userId).catch(() => ({ personalItems: [], insight: null })),
-    buildMessagingPriorityItems(userId).catch(() => []),
     getLatestActionsByItem(userId),
     PriorityFeedAction.find({ userId }).sort({ createdAt: -1 }).limit(8).lean(),
   ]);
 
   const allItems = dedupeById([
-    ...gmailItems,
+    ...communicationItems,
     ...calendarItems,
     ...jiraSignals.personalItems,
-    ...messagingItems,
   ]);
   const activeItems = sortByPriority(filterActiveItems(allItems, latestActionsByItem));
   const summary = buildPrioritySummary(activeItems);
@@ -795,9 +833,9 @@ async function getHomeDashboard(userId) {
       dateLabel: formatDateLabel(now),
       summary: buildHeadline(activeItems, jiraSignals.insight),
       stats: [
-        { label: "Urgent now", value: String(summary.urgentCount) },
-        { label: "Quick clears", value: String(summary.quickClearCount) },
-        { label: "Upcoming", value: String(summary.upcomingCount) },
+        { label: "Waiting on you", value: String(summary.waitingOnYouCount || 0) },
+        { label: "Approvals", value: String(summary.approvalCount || 0) },
+        { label: "Follow-ups", value: String(summary.followUpCount || 0) },
       ],
       connectedApps,
       jiraInsight: jiraSignals.insight,
@@ -809,7 +847,10 @@ async function getHomeDashboard(userId) {
       filters: [
         { id: "all", label: "All" },
         { id: "urgent", label: "Urgent" },
-        { id: "replies", label: "Replies" },
+        { id: "communication", label: "Comms" },
+        { id: ACTION_STATES.WAITING_ON_YOUR_REPLY, label: "Replies" },
+        { id: ACTION_STATES.NEEDS_APPROVAL, label: "Approvals" },
+        { id: ACTION_STATES.NEEDS_FOLLOW_UP, label: "Follow-ups" },
         { id: "meetings", label: "Meetings" },
         { id: "tasks", label: "Tasks" },
       ],

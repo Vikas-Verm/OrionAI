@@ -80,6 +80,26 @@
         <button v-if="searchQuery" class="sl-search-clear" @click="clearSearch">×</button>
       </div>
 
+      <div class="sl-action-panel-wrap">
+        <CommunicationInsightsWidget
+          title="OrionAI insights"
+          panel-title="Reply / Action Required"
+          :panel-headline="'Slack conversations currently waiting on your execution'"
+          :summary-text="slackActionSummary"
+          :counts="slackActionCounts"
+          :items="slackActionItems"
+          :groups="slackActionGroups"
+          :loading="slackActionsLoading"
+          :selected-conversation-id="activeChannelId"
+          @refresh="refreshSlackActions"
+          @open="openSlackActionConversation"
+          @draft="draftSlackActionConversation"
+          @done="completeSlackAction"
+          @snooze="snoozeSlackAction"
+          @dismiss="dismissSlackAction"
+        />
+      </div>
+
       <!-- Channels -->
       <div class="sl-section-hdr" @click="sectionsOpen.channels = !sectionsOpen.channels">
         <svg :class="['sl-chevron', sectionsOpen.channels ? 'open' : '']" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
@@ -95,6 +115,9 @@
             @click="openChannel(ch)">
             <span class="sl-ch-sigil">{{ ch.type === 'private' ? '🔒' : '#' }}</span>
             <span class="sl-ch-label" :class="{bold: ch.unread > 0}">{{ ch.name.replace(/^#/, '') }}</span>
+            <span v-if="slackActionState(ch.id)" class="sl-action-chip" :class="`state-${slackActionState(ch.id).actionState}`">
+              {{ slackActionState(ch.id).actionStateLabel }}
+            </span>
             <span v-if="ch.unread > 0" class="sl-badge-red">{{ ch.unread }}</span>
           </div>
           <div class="sl-ch-item sl-ch-add" @click="openModal('browseChannels')">
@@ -123,6 +146,9 @@
             @click="openChannel(ch)">
             <div class="sl-dm-ava" :style="{background: avatarColor(ch.name)}">{{ ch.name.slice(0,1).toUpperCase() }}</div>
             <span class="sl-ch-label" :class="{bold: ch.unread > 0}">{{ ch.name }}</span>
+            <span v-if="slackActionState(ch.id)" class="sl-action-chip" :class="`state-${slackActionState(ch.id).actionState}`">
+              {{ slackActionState(ch.id).actionStateLabel }}
+            </span>
             <span v-if="ch.unread > 0" class="sl-badge-red">{{ ch.unread }}</span>
           </div>
           <div class="sl-ch-item sl-ch-add" @click="openModal('newDM')">
@@ -673,6 +699,9 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import api from '../services/api'
+import CommunicationInsightsWidget from '../components/communications/CommunicationInsightsWidget.vue'
+import { useCommunicationActions, emitCommunicationPriorityRefresh } from '../composables/useCommunicationActions'
+import { store, setModuleContext } from '../stores/app'
 
  defineEmits(['close', 'openIntegrations'])
 
@@ -692,6 +721,16 @@ const fileInputRef = ref(null)
 const inputFocused = ref(false)
 const sectionsOpen = ref({ channels: true, dms: true })
 const attachments = ref([])
+const {
+  actionableItems: slackActionItems,
+  counts: slackActionCounts,
+  groups: slackActionGroups,
+  loading: slackActionsLoading,
+  summaryText: slackActionSummary,
+  stateByConversationId: slackActionMap,
+  refresh: refreshSlackActions,
+  recordAction: recordSlackAction,
+} = useCommunicationActions('slack')
 
 // ── Search ──────────────────────────────────────────────────
 const searchQuery = ref('')
@@ -901,6 +940,24 @@ async function loadAll() {
   }
 }
 
+async function applyModuleContext() {
+  const context = store.moduleContext
+  if (!context || context.module !== 'slack') return
+
+  if (context.channelId) {
+    const channel = channels.value.find((item) => String(item.id) === String(context.channelId))
+    if (channel) {
+      await openChannel(channel)
+    }
+  }
+
+  setModuleContext(null)
+}
+
+function slackActionState(conversationId) {
+  return slackActionMap.value[String(conversationId)] || null
+}
+
 
 // ── Open channel ────────────────────────────────────────────
 async function openChannel(ch) {
@@ -931,6 +988,46 @@ async function refreshMessages() {
     if (messages.value.length > 0) lastMsgTs.value = messages.value[messages.value.length - 1].id
     await nextTick(); scrollToBottom()
   } catch(e) {console.log(e)}
+}
+
+async function openSlackActionConversation(state) {
+  let channel = channels.value.find((item) => String(item.id) === String(state.conversationId))
+  if (!channel) {
+    await loadAll()
+    channel = channels.value.find((item) => String(item.id) === String(state.conversationId))
+  }
+  if (channel) {
+    await openChannel(channel)
+  }
+}
+
+async function draftSlackActionConversation(state) {
+  await openSlackActionConversation(state)
+  nextTick(() => sendInputRef.value?.focus())
+}
+
+async function completeSlackAction(state) {
+  try {
+    await recordSlackAction(state, 'approved')
+  } catch (err) {
+    console.error('Failed to complete Slack action:', err.message)
+  }
+}
+
+async function snoozeSlackAction(state) {
+  try {
+    await recordSlackAction(state, 'snoozed', { snoozeMinutes: 60 })
+  } catch (err) {
+    console.error('Failed to snooze Slack action:', err.message)
+  }
+}
+
+async function dismissSlackAction(state) {
+  try {
+    await recordSlackAction(state, 'dismissed')
+  } catch (err) {
+    console.error('Failed to dismiss Slack action:', err.message)
+  }
 }
 
 // ── FIX 8: Smart polling for real-time messages ─────────────
@@ -1027,6 +1124,11 @@ async function sendMessage() {
     const idx = messages.value.findIndex(m => m.id === tmpId)
     if (idx !== -1 && res.data.message) messages.value.splice(idx, 1, { ...res.data.message, replyTo: savedReply })
     if (messages.value.length > 0) lastMsgTs.value = messages.value[messages.value.length - 1].id
+    emitCommunicationPriorityRefresh('communication_replied', {
+      sourceApp: 'slack',
+      conversationId: activeChannelId.value,
+    })
+    refreshSlackActions({ silent: true }).catch(() => {})
   } catch(e) {
     messages.value = messages.value.filter(m => m.id !== tmpId)
     sendText.value = text
@@ -1228,8 +1330,10 @@ function onKeyDown(e) {
   if (e.key === 'Escape') { closeAllPopups(); modal.value = null; replyingTo.value = null }
 }
 
-onMounted(() => {
-  loadAll()
+onMounted(async () => {
+  await loadAll()
+  await refreshSlackActions()
+  await applyModuleContext()
   loadPrefs()
   document.addEventListener('keydown', onKeyDown)
   if (prefs.value.autoRefresh && activeChannelId.value) startPolling()
@@ -1246,6 +1350,20 @@ onUnmounted(() => {
 
 /* ── Sidebar ─────────────────────────────────────────────── */
 .sl-sidebar { width:258px; flex-shrink:0; background:var(--bg-surface); border-right:1px solid var(--border-subtle); display:flex; flex-direction:column; overflow:hidden; }
+.sl-action-panel-wrap { padding: 0 10px 10px; }
+.sl-sidebar :deep(.comm-insights) { background: var(--bg-base); }
+.sl-sidebar :deep(.comm-panel) { background: var(--bg-base); }
+.sl-action-chip {
+  display:inline-flex; align-items:center; justify-content:center;
+  padding:3px 7px; border-radius:999px;
+  font-size:9px; font-weight:700;
+  background:rgba(148,163,184,.16);
+  color:var(--text-secondary);
+}
+.sl-action-chip.state-waiting_on_your_reply { background:rgba(245,158,11,.14); color:#b45309; }
+.sl-action-chip.state-needs_approval { background:rgba(239,68,68,.14); color:#b91c1c; }
+.sl-action-chip.state-needs_follow_up { background:rgba(14,165,233,.14); color:#0369a1; }
+.sl-action-chip.state-waiting_on_others { background:rgba(16,185,129,.14); color:#047857; }
 
 /* Workspace header */
 .sl-ws-header { padding:8px 10px 6px; border-bottom:1px solid var(--border-subtle); flex-shrink:0; position:relative; }

@@ -81,6 +81,11 @@ export const agentAPI = {
     api.post("/api/agent/gmail-reply", { threadId, messageId, replyTo, subject, body }),
 };
 
+export const communicationAPI = {
+  actionStates: (source = "all") =>
+    api.get("/api/communications/action-states", { params: { source } }),
+};
+
 export function streamAgentRun(steps, sessionId, userMessage) {
   const token = localStorage.getItem("token");
   return fetch(`${API_BASE}/api/agent/run`, {

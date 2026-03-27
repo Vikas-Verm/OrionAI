@@ -511,6 +511,26 @@
           <button v-for="f in FILTERS" :key="f.v" :class="['tg-fpill', dlgFilter===f.v&&'on']" @click="dlgFilter=f.v">{{ f.l }}</button>
         </div>
 
+        <div class="tg-action-panel-wrap">
+          <CommunicationInsightsWidget
+            title="OrionAI insights"
+            panel-title="Reply / Action Required"
+            :panel-headline="'Telegram conversations OrionAI believes are really waiting on you'"
+            :summary-text="telegramActionSummary"
+            :counts="telegramActionCounts"
+            :items="telegramActionItems"
+            :groups="telegramActionGroups"
+            :loading="telegramActionsLoading"
+            :selected-conversation-id="selDlg?.id"
+            @refresh="refreshTelegramActions"
+            @open="openTelegramActionConversation"
+            @draft="draftTelegramActionConversation"
+            @done="completeTelegramAction"
+            @snooze="snoozeTelegramAction"
+            @dismiss="dismissTelegramAction"
+          />
+        </div>
+
         <!-- Stories ring bar -->
         <div v-if="storiesContacts.length || true" class="tg-stories-bar">
           <!-- My story ring -->
@@ -561,7 +581,12 @@
             <div class="tg-dlg-body">
               <div class="tg-dlg-top">
                 <span class="tg-dlg-name">{{ d.name }}</span>
-                <span class="tg-dlg-date">{{ fmtDate(d.lastDate) }}</span>
+                <div class="tg-dlg-meta">
+                  <span v-if="telegramActionState(d.id)" class="tg-action-chip" :class="`state-${telegramActionState(d.id).actionState}`">
+                    {{ telegramActionState(d.id).actionStateLabel }}
+                  </span>
+                  <span class="tg-dlg-date">{{ fmtDate(d.lastDate) }}</span>
+                </div>
               </div>
               <div class="tg-dlg-prev">{{ d.lastMessage || '…' }}</div>
             </div>
@@ -959,6 +984,9 @@
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import api from '../services/api'
 import { useWebSocket } from '../composables/useWebSocket'
+import CommunicationInsightsWidget from '../components/communications/CommunicationInsightsWidget.vue'
+import { useCommunicationActions, emitCommunicationPriorityRefresh } from '../composables/useCommunicationActions'
+import { store, setModuleContext } from '../stores/app'
 
 // ── Auth ──────────────────────────────────────────────────────────────
 const authStep = ref('loading')
@@ -975,6 +1003,16 @@ const draft = ref(''), sending = ref(false)
 const dlgQ = ref(''), dlgFilter = ref('all')
 const photoCache = ref({})
 const { unreadByApp } = useWebSocket()
+const {
+  actionableItems: telegramActionItems,
+  counts: telegramActionCounts,
+  groups: telegramActionGroups,
+  loading: telegramActionsLoading,
+  summaryText: telegramActionSummary,
+  stateByConversationId: telegramActionMap,
+  refresh: refreshTelegramActions,
+  recordAction: recordTelegramAction,
+} = useCommunicationActions('telegram')
 
 // ── Modal & Drawer state ──────────────────────────────────────────────
 const showDrawer = ref(false)
@@ -1148,13 +1186,38 @@ function applyLiveUnreadBadges() {
   })
 }
 
+function telegramActionState(conversationId) {
+  return telegramActionMap.value[String(conversationId)] || null
+}
+
+async function applyModuleContext() {
+  const context = store.moduleContext
+  if (!context || context.module !== 'telegram') return
+
+  if (context.dialogId) {
+    const dialog = dialogs.value.find((item) => String(item.id) === String(context.dialogId))
+    if (dialog) {
+      await selectDlg(dialog)
+    }
+  }
+
+  setModuleContext(null)
+}
+
 onMounted(async () => {
   const a = ACCENTS.find(x => x.id === activeAccent.value) || ACCENTS[0]
   applyAccent(a)
 
   try {
     const r = await api.get('/api/telegram/me')
-    if (r.data?.authorized) { me.value = r.data; authStep.value = 'done'; loadDlgs(); startPolling() }
+    if (r.data?.authorized) {
+      me.value = r.data
+      authStep.value = 'done'
+      await loadDlgs()
+      await refreshTelegramActions()
+      await applyModuleContext()
+      startPolling()
+    }
     else authStep.value = 'phone'
   } catch { authStep.value = 'phone' }
 
@@ -1231,13 +1294,24 @@ async function submitCode() {
   try {
     const r = await api.post('/api/telegram/auth/code', { code: authCode.value })
     if (r.data.needsPassword) authStep.value = 'password'
-    else { me.value = r.data; authStep.value = 'done'; loadDlgs() }
+    else {
+      me.value = r.data
+      authStep.value = 'done'
+      await loadDlgs()
+      await refreshTelegramActions()
+    }
   } catch (e) { authError.value = e.response?.data?.error || 'Invalid code' }
   finally { authLoading.value = false }
 }
 async function submitPassword() {
   authError.value = ''; authLoading.value = true
-  try { const r = await api.post('/api/telegram/auth/password', { password: authPwd.value }); me.value = r.data; authStep.value = 'done'; loadDlgs() }
+  try {
+    const r = await api.post('/api/telegram/auth/password', { password: authPwd.value })
+    me.value = r.data
+    authStep.value = 'done'
+    await loadDlgs()
+    await refreshTelegramActions()
+  }
   catch (e) { authError.value = e.response?.data?.error || 'Wrong password' }
   finally { authLoading.value = false }
 }
@@ -1312,6 +1386,46 @@ async function loadDlgs() {
     batchPhotos(r.data.dialogs)
   } catch (e) { console.error(e) }
   finally { dlgsLoading.value = false }
+}
+
+async function openTelegramActionConversation(state) {
+  let dialog = dialogs.value.find((item) => String(item.id) === String(state.conversationId))
+  if (!dialog) {
+    await loadDlgs()
+    dialog = dialogs.value.find((item) => String(item.id) === String(state.conversationId))
+  }
+  if (dialog) {
+    await selectDlg(dialog)
+  }
+}
+
+async function draftTelegramActionConversation(state) {
+  await openTelegramActionConversation(state)
+  nextTick(() => inputEl.value?.focus())
+}
+
+async function completeTelegramAction(state) {
+  try {
+    await recordTelegramAction(state, 'approved')
+  } catch (err) {
+    console.error('Failed to complete Telegram action:', err.message)
+  }
+}
+
+async function snoozeTelegramAction(state) {
+  try {
+    await recordTelegramAction(state, 'snoozed', { snoozeMinutes: 60 })
+  } catch (err) {
+    console.error('Failed to snooze Telegram action:', err.message)
+  }
+}
+
+async function dismissTelegramAction(state) {
+  try {
+    await recordTelegramAction(state, 'dismissed')
+  } catch (err) {
+    console.error('Failed to dismiss Telegram action:', err.message)
+  }
 }
 async function batchPhotos(list) {
   for (let i = 0; i < list.length; i += 5) {
@@ -1467,6 +1581,11 @@ async function sendMsg() {
       text,
       replyToMsgId: rep?.id || undefined,
     })
+    emitCommunicationPriorityRefresh('communication_replied', {
+      sourceApp: 'telegram',
+      conversationId: selDlg.value.id,
+    })
+    refreshTelegramActions({ silent: true }).catch(() => {})
   } catch { msgs.value = msgs.value.filter(m => m.id !== opt.id) }
   finally { sending.value = false }
 }
@@ -2194,6 +2313,9 @@ function fIconCol(n = '') { return EX[(n.split('.').pop() || '').toLowerCase()] 
 /* ── SIDEBAR ── */
 .tg-sidebar { width: 300px; flex-shrink: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border-subtle); background: var(--bg-surface); overflow: hidden; }
 .tg-sidebar-head { display: flex; align-items: center; gap: 6px; padding: 9px 10px 7px; border-bottom: 1px solid var(--border-subtle); }
+.tg-action-panel-wrap { padding: 0 10px 10px; }
+.tg-sidebar :deep(.comm-insights) { background: var(--bg-base); }
+.tg-sidebar :deep(.comm-panel) { background: var(--bg-base); }
 .tg-searchbar { flex: 1; position: relative; }
 .tg-si { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none; }
 .tg-searchbar-input { width: 100%; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 20px; padding: 7px 12px 7px 28px; font-size: 13px; color: var(--text-primary); outline: none; }
@@ -2230,9 +2352,21 @@ function fIconCol(n = '') { return EX[(n.split('.').pop() || '').toLowerCase()] 
 .tg-unread { position: absolute; top: -2px; right: -2px; min-width: 18px; height: 18px; border-radius: 9px; background: var(--tg-accent); color: #fff; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; padding: 0 4px; }
 .tg-dlg-body { flex: 1; min-width: 0; }
 .tg-dlg-top { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 2px; gap: 8px; }
+.tg-dlg-meta { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .tg-dlg-name { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tg-dlg-date { font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
 .tg-dlg-prev { font-size: 12.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tg-action-chip {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 3px 7px; border-radius: 999px;
+  font-size: 9px; font-weight: 700;
+  background: rgba(148,163,184,.16);
+  color: var(--text-secondary);
+}
+.tg-action-chip.state-waiting_on_your_reply { background: rgba(245,158,11,.14); color: #b45309; }
+.tg-action-chip.state-needs_approval { background: rgba(239,68,68,.14); color: #b91c1c; }
+.tg-action-chip.state-needs_follow_up { background: rgba(14,165,233,.14); color: #0369a1; }
+.tg-action-chip.state-waiting_on_others { background: rgba(16,185,129,.14); color: #047857; }
 
 /* ── CHAT PANE ── */
 .tg-chat-pane { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--bg-base); }

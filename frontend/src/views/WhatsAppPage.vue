@@ -20,6 +20,26 @@
         <div class="wa-search-wrap">
           <input v-model="search" class="wa-search" placeholder="Search chats..." />
         </div>
+
+        <div v-if="isConnected" class="wa-action-panel-wrap">
+          <CommunicationInsightsWidget
+            title="OrionAI insights"
+            panel-title="Reply / Action Required"
+            :panel-headline="'WhatsApp chats OrionAI believes are truly waiting on you'"
+            :summary-text="whatsappActionSummary"
+            :counts="whatsappActionCounts"
+            :items="whatsappActionItems"
+            :groups="whatsappActionGroups"
+            :loading="whatsappActionsLoading"
+            :selected-conversation-id="selectedChat?.id"
+            @refresh="refreshWhatsAppActions"
+            @open="openWhatsAppActionConversation"
+            @draft="draftWhatsAppActionConversation"
+            @done="completeWhatsAppAction"
+            @snooze="snoozeWhatsAppAction"
+            @dismiss="dismissWhatsAppAction"
+          />
+        </div>
   
         <!-- Loading -->
         <div v-if="loading" class="wa-loading">
@@ -47,7 +67,12 @@
               {{ avatarInitials(chat.name) }}
             </div>
             <div class="wa-chat-info">
-              <div class="wa-chat-name">{{ chat.name }}</div>
+              <div class="wa-chat-name-row">
+                <div class="wa-chat-name">{{ chat.name }}</div>
+                <span v-if="whatsappActionState(chat.id)" class="wa-action-chip" :class="`state-${whatsappActionState(chat.id).actionState}`">
+                  {{ whatsappActionState(chat.id).actionStateLabel }}
+                </span>
+              </div>
               <div class="wa-chat-preview">{{ chat.lastMessage || '...' }}</div>
             </div>
             <div class="wa-chat-meta">
@@ -147,6 +172,9 @@
   <script setup>
   import { ref, computed, nextTick, onMounted } from 'vue'
   import api from '../services/api'
+  import CommunicationInsightsWidget from '../components/communications/CommunicationInsightsWidget.vue'
+  import { useCommunicationActions, emitCommunicationPriorityRefresh } from '../composables/useCommunicationActions'
+  import { store, setModuleContext } from '../stores/app'
   
 //   const emit = defineEmits(['close'])
   
@@ -161,6 +189,16 @@
   const isConnected = ref(false)
   const messagesEl  = ref(null)
   const replyInput  = ref(null)
+  const {
+    actionableItems: whatsappActionItems,
+    counts: whatsappActionCounts,
+    groups: whatsappActionGroups,
+    loading: whatsappActionsLoading,
+    summaryText: whatsappActionSummary,
+    stateByConversationId: whatsappActionMap,
+    refresh: refreshWhatsAppActions,
+    recordAction: recordWhatsAppAction,
+  } = useCommunicationActions('whatsapp')
   
   const filteredChats = computed(() =>
     search.value
@@ -170,7 +208,11 @@
   
   onMounted(async () => {
     await checkStatus()
-    if (isConnected.value) await loadChats()
+    if (isConnected.value) {
+      await loadChats()
+      await refreshWhatsAppActions()
+      await applyModuleContext()
+    }
   })
   
   async function checkStatus() {
@@ -192,6 +234,24 @@
     } finally {
       loading.value = false
     }
+  }
+
+  function whatsappActionState(conversationId) {
+    return whatsappActionMap.value[String(conversationId)] || null
+  }
+
+  async function applyModuleContext() {
+    const context = store.moduleContext
+    if (!context || context.module !== 'whatsapp') return
+
+    if (context.chatId) {
+      const chat = chats.value.find((item) => String(item.id) === String(context.chatId))
+      if (chat) {
+        await selectChat(chat)
+      }
+    }
+
+    setModuleContext(null)
   }
   
   async function selectChat(chat) {
@@ -216,6 +276,46 @@
       msgsLoading.value = false
     }
   }
+
+  async function openWhatsAppActionConversation(state) {
+    let chat = chats.value.find((item) => String(item.id) === String(state.conversationId))
+    if (!chat) {
+      await loadChats()
+      chat = chats.value.find((item) => String(item.id) === String(state.conversationId))
+    }
+    if (chat) {
+      await selectChat(chat)
+    }
+  }
+
+  async function draftWhatsAppActionConversation(state) {
+    await openWhatsAppActionConversation(state)
+    nextTick(() => replyInput.value?.focus())
+  }
+
+  async function completeWhatsAppAction(state) {
+    try {
+      await recordWhatsAppAction(state, 'approved')
+    } catch (err) {
+      console.error('Failed to complete WhatsApp action:', err.message)
+    }
+  }
+
+  async function snoozeWhatsAppAction(state) {
+    try {
+      await recordWhatsAppAction(state, 'snoozed', { snoozeMinutes: 60 })
+    } catch (err) {
+      console.error('Failed to snooze WhatsApp action:', err.message)
+    }
+  }
+
+  async function dismissWhatsAppAction(state) {
+    try {
+      await recordWhatsAppAction(state, 'dismissed')
+    } catch (err) {
+      console.error('Failed to dismiss WhatsApp action:', err.message)
+    }
+  }
   
   async function sendMessage() {
     const text = replyText.value.trim()
@@ -238,6 +338,11 @@
       replyText.value = ''
       await nextTick()
       scrollToBottom()
+      emitCommunicationPriorityRefresh('communication_replied', {
+        sourceApp: 'whatsapp',
+        conversationId: selectedChat.value.id,
+      })
+      refreshWhatsAppActions({ silent: true }).catch(() => {})
     } catch (err) {
       console.error('Send failed:', err)
     } finally {
@@ -312,6 +417,9 @@
   .wa-icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
   
   .wa-search-wrap { padding: 8px 12px; }
+  .wa-action-panel-wrap { padding: 0 12px 10px; }
+  .wa-sidebar :deep(.comm-insights) { background: var(--bg-base); }
+  .wa-sidebar :deep(.comm-panel) { background: var(--bg-base); }
   .wa-search {
     width: 100%;
     background: var(--bg-elevated);
@@ -352,11 +460,27 @@
   .wa-chat-avatar.is-group { background: linear-gradient(135deg, #6366f1, #8b5cf6); }
   
   .wa-chat-info { flex: 1; min-width: 0; }
+  .wa-chat-name-row {
+    display:flex;
+    align-items:center;
+    gap:8px;
+  }
   .wa-chat-name {
     font-size: 13px; font-weight: 600;
     color: var(--text-primary);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
+  .wa-action-chip {
+    display:inline-flex; align-items:center; justify-content:center;
+    padding:3px 7px; border-radius:999px;
+    font-size:9px; font-weight:700;
+    background:rgba(148,163,184,.16);
+    color:var(--text-secondary);
+  }
+  .wa-action-chip.state-waiting_on_your_reply { background:rgba(245,158,11,.14); color:#b45309; }
+  .wa-action-chip.state-needs_approval { background:rgba(239,68,68,.14); color:#b91c1c; }
+  .wa-action-chip.state-needs_follow_up { background:rgba(14,165,233,.14); color:#0369a1; }
+  .wa-action-chip.state-waiting_on_others { background:rgba(16,185,129,.14); color:#047857; }
   .wa-chat-preview {
     font-size: 11px; color: var(--text-muted);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;

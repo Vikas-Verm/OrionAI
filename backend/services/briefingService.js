@@ -3,6 +3,7 @@
 const Integration = require("../models/Integration");
 const { isConnectedIntegration } = require("./integrationConnectionState");
 const { getUnreadSignals } = require("./inboxSignalsService");
+const { getCommunicationActionStates } = require("./communicationActionService");
 const { toolGetOverdueTickets } = require("./tools/toolJira");
 const { calendarGetToday } = require("./tools/toolCalendar");
 
@@ -41,8 +42,9 @@ async function getMorningBriefing(userId) {
 
   const connectedSet = new Set(connectedApps.map((app) => app.id));
 
-  const [unreadSignals, jiraResult, calendarResult] = await Promise.all([
+  const [unreadSignals, communicationResult, jiraResult, calendarResult] = await Promise.all([
     getUnreadSignals(userId),
+    getCommunicationActionStates(userId, { source: "all" }).catch(() => null),
     connectedSet.has("jira")
       ? toolGetOverdueTickets({}, { userId }).catch(() => null)
       : Promise.resolve(null),
@@ -56,6 +58,7 @@ async function getMorningBriefing(userId) {
   const timeOfDay =
     hours < 12 ? "morning" : hours < 17 ? "afternoon" : "evening";
 
+  const communicationCounts = communicationResult?.counts || {};
   const signalEntries = Object.entries(unreadSignals).filter(
     ([, value]) => (value?.count || 0) > 0
   );
@@ -81,26 +84,24 @@ async function getMorningBriefing(userId) {
   if (connectedSet.has("jira")) {
     stats.push(
       {
-        label: "Your overdue tickets",
-        value: formatCount(myOverdueCount),
+        label: "Waiting on you",
+        value: formatCount(communicationCounts.replyRequiredCount || 0),
       },
       {
-        label: "Total overdue tickets",
-        value: formatCount(overdueCount),
+        label: "Approvals",
+        value: formatCount(communicationCounts.approvalCount || 0),
       }
     );
   } else {
     stats.push({
-      label: "Needs attention",
-      value: formatCount(totalUnread),
+      label: "Waiting on you",
+      value: formatCount(communicationCounts.replyRequiredCount || 0),
     });
   }
 
   stats.push({
-    label: "Today",
-    value: calendarEvents.length
-      ? `${calendarEvents.length} meeting${calendarEvents.length === 1 ? "" : "s"}`
-      : "Clear",
+    label: "Follow-ups",
+    value: formatCount(communicationCounts.followUpCount || 0),
   });
 
   const alerts = [];
@@ -118,19 +119,21 @@ async function getMorningBriefing(userId) {
     });
   }
 
-  if (totalUnread > 0) {
+  if ((communicationCounts.actionableCount || 0) > 0) {
     alerts.push({
       id: "unanswered-messages",
-      severity: totalUnread >= 8 ? "high" : "medium",
+      severity: (communicationCounts.actionableCount || 0) >= 8 ? "high" : "medium",
       icon: "💬",
-      title: `${formatCount(totalUnread)} messages are waiting on you`,
-      detail: unreadEntries
-        .map(
-          ([app, value]) =>
-            `${APP_META[app]?.label || app} ${formatCount(value.count)}`
-        )
-        .join(" · "),
-      appId: unreadEntries[0]?.[0] || "gmail",
+      title: `${formatCount(communicationCounts.actionableCount || 0)} conversations are waiting on you`,
+      detail:
+        communicationResult?.summaryText ||
+        unreadEntries
+          .map(
+            ([app, value]) =>
+              `${APP_META[app]?.label || app} ${formatCount(value.count)}`
+          )
+          .join(" · "),
+      appId: "gmail",
       prompt:
         "Summarize the messages waiting for a reply across my connected apps and draft responses for the urgent ones.",
     });
@@ -151,7 +154,7 @@ async function getMorningBriefing(userId) {
 
   const summary = buildSummary({
     connectedCount: connectedApps.length,
-    totalUnread,
+    totalUnread: communicationCounts.actionableCount || totalUnread,
     overdueCount,
     myOverdueCount,
     calendarCount: calendarEvents.length,
@@ -205,7 +208,7 @@ function buildSummary({ connectedCount, totalUnread, overdueCount, myOverdueCoun
   const parts = [];
   if (totalUnread) {
     parts.push(
-      `${formatCount(totalUnread)} message${totalUnread === 1 ? "" : "s"} waiting`
+      `${formatCount(totalUnread)} conversation${totalUnread === 1 ? "" : "s"} waiting`
     );
   }
   if (overdueCount) {

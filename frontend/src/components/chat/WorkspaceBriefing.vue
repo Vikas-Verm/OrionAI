@@ -238,7 +238,10 @@ const dailyBriefing = computed(() => dashboard.value?.dailyBriefing || {})
 const filters = computed(() => dashboard.value?.priorityFeed?.filters || [
   { id: 'all', label: 'All' },
   { id: 'urgent', label: 'Urgent' },
-  { id: 'replies', label: 'Replies' },
+  { id: 'communication', label: 'Comms' },
+  { id: 'waiting_on_your_reply', label: 'Replies' },
+  { id: 'needs_approval', label: 'Approvals' },
+  { id: 'needs_follow_up', label: 'Follow-ups' },
   { id: 'meetings', label: 'Meetings' },
   { id: 'tasks', label: 'Tasks' },
 ])
@@ -284,6 +287,9 @@ const emptyStateDescription = computed(() => dashboard.value?.priorityFeed?.empt
 const filteredItems = computed(() => {
   if (activeFilter.value === 'all') return items.value
   if (activeFilter.value === 'urgent') return items.value.filter((item) => item.priority === 'High')
+  if (['waiting_on_your_reply', 'needs_approval', 'needs_follow_up', 'waiting_on_others'].includes(activeFilter.value)) {
+    return items.value.filter((item) => item.actionState === activeFilter.value)
+  }
   return items.value.filter((item) => item.category === activeFilter.value)
 })
 
@@ -455,6 +461,11 @@ function onPriorityRefreshNeeded(event) {
   }
 
   if (reason === 'gmail_read' || reason === 'gmail_replied') {
+    loadDashboard({ silent: true, mode: 'replace' })
+    return
+  }
+
+  if (reason === 'communication_replied' || reason === 'communication_action_recorded') {
     loadDashboard({ silent: true, mode: 'replace' })
   }
 }

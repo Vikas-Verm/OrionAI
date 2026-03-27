@@ -6,6 +6,7 @@
           <span>{{ item.sourceIcon }}</span>
           <span>{{ item.sourceLabel }}</span>
         </span>
+        <span v-if="item.actionStateLabel" class="priority-state-chip">{{ item.actionStateLabel }}</span>
         <span class="priority-level" :class="`level-${priorityTone}`">{{ item.priority }}</span>
       </div>
 
@@ -25,7 +26,7 @@
     </div>
 
     <div class="priority-controls">
-      <button class="priority-control approve" :disabled="busy" @click.stop="emit('approve', item)">Approve</button>
+      <button class="priority-control approve" :disabled="busy" @click.stop="emit('approve', item)">{{ approveLabel }}</button>
       <button class="priority-control" :disabled="busy" @click.stop="toggleEdit">Edit</button>
       <button class="priority-control" :disabled="busy" @click.stop="emit('dismiss', item)">Dismiss</button>
       <button class="priority-control" :disabled="busy" @click.stop="toggleSnooze">Snooze</button>
@@ -110,6 +111,9 @@ const snoozeOptions = [
 ]
 
 const priorityTone = computed(() => String(props.item.priority || 'low').toLowerCase())
+const approveLabel = computed(() =>
+  props.item?.actionState === 'needs_approval' ? 'Handled' : 'Mark done'
+)
 const editInputId = computed(() => `priority-edit-${String(props.item.id || 'item').replace(/[^a-zA-Z0-9_-]/g, '-')}`)
 const liveMessageTimestamp = computed(() =>
   props.item?.meta?.latestMessageAt ||
@@ -298,6 +302,18 @@ function emitEditedApproval() {
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.priority-state-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.14);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .priority-source {

@@ -131,6 +131,27 @@
           Live
         </span>
       </div>
+
+      <div class="gm-insights-wrap">
+        <CommunicationInsightsWidget
+          title="OrionAI insights"
+          panel-title="Reply / Action Required"
+          :panel-headline="'Gmail threads OrionAI believes are genuinely waiting on you'"
+          :summary-text="gmailActionSummary"
+          :counts="gmailActionCounts"
+          :items="gmailActionItems"
+          :groups="gmailActionGroups"
+          :loading="gmailActionsLoading"
+          :selected-conversation-id="selectedEmail?.threadId || selectedId"
+          @refresh="refreshGmailActions"
+          @open="openGmailActionConversation"
+          @draft="draftGmailActionConversation"
+          @done="completeGmailAction"
+          @snooze="snoozeGmailAction"
+          @dismiss="dismissGmailAction"
+        />
+      </div>
+
       <!-- New email toast banner — shows when WS pushes new Gmail notification -->
       <transition name="gm-slide-down">
         <div v-if="newEmailBanner" class="gm-new-email-banner" @click="dismissBanner">
@@ -192,7 +213,16 @@
           <div class="gm-row-content">
             <div class="gm-row-line1">
               <span class="gm-row-from">{{ senderName(displayFrom(email)) }}</span>
-              <span class="gm-row-date">{{ email.date }}</span>
+              <div class="gm-row-line1-meta">
+                <span
+                  v-if="gmailActionState(email.threadId)"
+                  class="gm-action-chip"
+                  :class="`state-${gmailActionState(email.threadId).actionState}`"
+                >
+                  {{ gmailActionState(email.threadId).actionStateLabel }}
+                </span>
+                <span class="gm-row-date">{{ email.date }}</span>
+              </div>
             </div>
             <div class="gm-row-subject">{{ email.subject }}</div>
             <div class="gm-row-snippet">{{ email.snippet }}</div>
@@ -489,6 +519,8 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import api from '../services/api'
 import { agentAPI } from '../services/api'
 import { useWebSocket } from '../composables/useWebSocket'
+import CommunicationInsightsWidget from '../components/communications/CommunicationInsightsWidget.vue'
+import { useCommunicationActions } from '../composables/useCommunicationActions'
 import { store, setModuleContext } from '../stores/app'
 
 defineEmits(['close', 'open-integrations'])
@@ -545,6 +577,16 @@ const newEmailBanner = ref(null)
 let   bannerTimer    = null
 
 const { notifications, unreadByApp } = useWebSocket()
+const {
+  actionableItems: gmailActionItems,
+  counts: gmailActionCounts,
+  groups: gmailActionGroups,
+  loading: gmailActionsLoading,
+  summaryText: gmailActionSummary,
+  stateByConversationId: gmailActionMap,
+  refresh: refreshGmailActions,
+  recordAction: recordGmailAction,
+} = useCommunicationActions('gmail')
 let prevNotifCount = notifications.length
 let mailboxSyncPromise = null
  
@@ -581,6 +623,10 @@ function notifyPriorityStateChange(reason, extras = {}) {
       ...extras,
     },
   }))
+}
+
+function gmailActionState(threadId) {
+  return gmailActionMap.value[String(threadId)] || null
 }
 
 // Close profile menu on any click outside the profile wrap
@@ -686,6 +732,7 @@ function connectSSE() {
 async function refreshEmails() {
   refreshing.value = true
   await syncMailboxView()
+  await refreshGmailActions({ silent: true })
   refreshing.value = false
 }
 
@@ -842,6 +889,60 @@ async function openEmail(email) {
   }
 }
 
+async function openGmailActionConversation(state) {
+  const existing = emails.value.find((email) => String(email.threadId) === String(state.threadId || state.conversationId))
+  if (existing) {
+    await openEmail(existing)
+    return
+  }
+
+  const synthetic = {
+    id: state.platformMetadata?.latestMessageId || state.conversationId,
+    threadId: state.threadId || state.conversationId,
+    from: state.platformMetadata?.latestFrom || state.participantLabel || '',
+    to: state.platformMetadata?.latestTo || '',
+    cc: state.platformMetadata?.latestCc || '',
+    subject: state.conversationTitle,
+    date: '',
+    snippet: state.previewText || '',
+    unread: true,
+  }
+
+  emails.value = [synthetic, ...emails.value.filter((email) => String(email.threadId) !== String(synthetic.threadId))]
+  await openEmail(synthetic)
+}
+
+async function draftGmailActionConversation(state) {
+  await openGmailActionConversation(state)
+  if (selectedEmail.value) {
+    await openReply()
+  }
+}
+
+async function completeGmailAction(state) {
+  try {
+    await recordGmailAction(state, 'approved')
+  } catch (err) {
+    console.error('Failed to mark Gmail action done:', err.message)
+  }
+}
+
+async function snoozeGmailAction(state) {
+  try {
+    await recordGmailAction(state, 'snoozed', { snoozeMinutes: 60 })
+  } catch (err) {
+    console.error('Failed to snooze Gmail action:', err.message)
+  }
+}
+
+async function dismissGmailAction(state) {
+  try {
+    await recordGmailAction(state, 'dismissed')
+  } catch (err) {
+    console.error('Failed to dismiss Gmail action:', err.message)
+  }
+}
+
 async function openReply() {
   showReply.value = true; replyDraft.value = ''; suggestLoading.value = true
   try {
@@ -922,6 +1023,7 @@ async function sendReply() {
       threadId: selectedEmail.value.threadId,
       subject: selectedEmail.value.subject,
     })
+    refreshGmailActions({ silent: true }).catch(() => {})
 
     // ── 2. Optimistically append sent message to thread ────────
     const now = new Date()
@@ -1438,6 +1540,7 @@ onMounted(async () => {
   fetchGmailProfile()
   connectSSE()
   await loadEmails()
+  await refreshGmailActions()
   setTimeout(setupObserver, 100)
   document.addEventListener('click', onDocClick, true)
   window.addEventListener('message', onFrameMessage)
@@ -1515,6 +1618,7 @@ onUnmounted(() => {
   width:310px; flex-shrink:0; display:flex; flex-direction:column;
   border-right:1px solid var(--border-subtle);
 }
+.gm-insights-wrap { padding: 0 12px 12px; }
 .gm-list-topbar {
   display:flex; align-items:center; gap:8px;
   padding:10px 11px 0;
@@ -1578,6 +1682,8 @@ onUnmounted(() => {
   flex:1; overflow-y:auto;
   scrollbar-width:thin; scrollbar-color:var(--border-default) transparent;
 }
+.gm-list-pane :deep(.comm-insights) { background: var(--bg-surface); }
+.gm-list-pane :deep(.comm-panel) { background: var(--bg-base); }
 .gm-list-scroll::-webkit-scrollbar { width:3px; }
 .gm-list-scroll::-webkit-scrollbar-thumb { background:var(--border-default); border-radius:2px; }
 
@@ -1623,6 +1729,7 @@ onUnmounted(() => {
 }
 .gm-row-content { flex:1; min-width:0; }
 .gm-row-line1 { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:2px; }
+.gm-row-line1-meta { display:flex; align-items:center; gap:8px; flex-shrink:0; }
 .gm-row-from {
   font-size:13px; font-weight:500; color:var(--text-secondary);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:155px;
@@ -1644,6 +1751,17 @@ onUnmounted(() => {
   background:#4285F4; flex-shrink:0; margin-top:6px;
   box-shadow:0 0 5px rgba(66,133,244,.6);
 }
+.gm-action-chip {
+  display:inline-flex; align-items:center; justify-content:center;
+  padding:3px 8px; border-radius:999px;
+  font-size:10px; font-weight:700;
+  background:rgba(148,163,184,.14);
+  color:var(--text-secondary);
+}
+.gm-action-chip.state-waiting_on_your_reply { background:rgba(245,158,11,.14); color:#b45309; }
+.gm-action-chip.state-needs_approval { background:rgba(239,68,68,.14); color:#b91c1c; }
+.gm-action-chip.state-needs_follow_up { background:rgba(14,165,233,.14); color:#0369a1; }
+.gm-action-chip.state-waiting_on_others { background:rgba(16,185,129,.14); color:#047857; }
 .gm-empty-list {
   display:flex; flex-direction:column; align-items:center;
   justify-content:center; gap:10px; padding:56px 24px; color:var(--text-muted);

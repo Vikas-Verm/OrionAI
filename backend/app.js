@@ -37,6 +37,7 @@ const {
 const googleAuthRoutes = require("./routes/googleAuthRoutes");
 const healthRoutes = require("./routes/healthRoutes");
 const briefingRoutes = require("./routes/briefingRoutes");
+const communicationRoutes = require("./routes/communicationRoutes");
 const {
   initErrorMonitoring,
   attachErrorMonitoringContext,
@@ -94,6 +95,7 @@ app.post("/api/webhooks/slack", handleSlackWebhook);
 // WebSocket handles real-time; this handles the first page load
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/briefing", authenticate, briefingRoutes);
+app.use("/api/communications", authenticate, communicationRoutes);
 app.use("/api/whatsapp", whatsappRoutes);
 app.use("/api/automations", automationRoutes);
 app.use("/auth/google", googleAuthRoutes);
