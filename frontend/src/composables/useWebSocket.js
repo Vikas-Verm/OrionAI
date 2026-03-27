@@ -36,6 +36,53 @@ function computeDisplayCount(entry = {}) {
   return Math.max(rawCount - seenCount, 0);
 }
 
+function normalizeNotificationIdentity(value = "") {
+  return String(value || "").trim().toLowerCase();
+}
+
+function buildNotificationEventId(app, items = []) {
+  const itemKey = (items || [])
+    .map((item) => item.latestMessageId || item.messageId || item.id)
+    .filter(Boolean)
+    .join("|");
+  return `${app}:${itemKey || Date.now()}`;
+}
+
+function buildNotificationGroupKey(app, items = []) {
+  if (app !== "telegram") return null;
+  const firstItem = Array.isArray(items) ? items[0] || null : null;
+  const actorKey = normalizeNotificationIdentity(
+    firstItem?.senderKey ||
+      firstItem?.chatId ||
+      firstItem?.id ||
+      firstItem?.name
+  );
+  return actorKey ? `${app}:${actorKey}` : null;
+}
+
+function buildNotificationSenderName(app, items = [], existingSenderName = "") {
+  if (app !== "telegram") return existingSenderName || "";
+  const firstItem = Array.isArray(items) ? items[0] || null : null;
+  return String(firstItem?.name || existingSenderName || "").trim();
+}
+
+function buildHistorySummary({
+  app,
+  items = [],
+  count = 1,
+  fallbackSummary = "",
+  senderName = "",
+}) {
+  if (app !== "telegram") return fallbackSummary;
+
+  const firstItem = Array.isArray(items) ? items[0] || null : null;
+  const preview = String(firstItem?.preview || "").trim();
+  const label = senderName || firstItem?.name || "Unknown";
+
+  if (count <= 1 && preview) return preview;
+  return `Messages from ${label}: ${count} messages`;
+}
+
 const APP_META = {
   gmail: { label: "Gmail", icon: "📧", color: "#EA4335", route: "gmail" },
   slack: { label: "Slack", icon: "💬", color: "#E01E5A", route: "slack" },
@@ -253,25 +300,44 @@ export function useWebSocket() {
           ["slack", "telegram", "google_calendar"].includes(app);
 
         const color = ai?.priority ? PRIORITY_COLOR[ai.priority] : meta.color;
-        const id = `${app}:${(items || [])
-          .map((item) => item.latestMessageId || item.id)
-          .filter(Boolean)
-          .join("|") || Date.now()}`;
+        const eventId = buildNotificationEventId(app, items);
+        const groupKey = buildNotificationGroupKey(app, items);
+        const senderName = buildNotificationSenderName(app, items);
+        const fallbackSummary = ai?.summary || `${newCount} new in ${meta.label}`;
+        const existingIndex =
+          app === "telegram" && groupKey
+            ? state.notifications.findIndex((entry) => entry.groupKey === groupKey)
+            : state.notifications.findIndex((entry) => entry.id === eventId);
+        const existingEntry = existingIndex !== -1 ? state.notifications[existingIndex] : null;
 
-        const existingIndex = state.notifications.findIndex((entry) => entry.id === id);
         if (existingIndex !== -1) {
           state.notifications.splice(existingIndex, 1);
         }
 
+        const mergedCount =
+          app === "telegram" && existingEntry
+            ? Number(existingEntry.count || 0) + newCount
+            : newCount;
+        const notificationId = app === "telegram" && groupKey ? groupKey : eventId;
+        const notificationSummary = buildHistorySummary({
+          app,
+          items,
+          count: mergedCount,
+          fallbackSummary,
+          senderName: senderName || existingEntry?.senderName || "",
+        });
+
         // Add to notification history
         state.notifications.unshift({
-          id,
+          ...(existingEntry || {}),
+          id: notificationId,
+          groupKey: groupKey || null,
           app,
           icon: meta.icon,
           color,
           label: meta.label,
-          count: newCount,
-          summary: ai?.summary || `${newCount} new in ${meta.label}`,
+          count: mergedCount,
+          summary: notificationSummary,
           priority: ai?.priority || "normal",
           action: ai?.action || "Open",
           route: meta.route,
@@ -279,19 +345,20 @@ export function useWebSocket() {
           time: new Date(),
           read: false,
           highSignal: shouldTriggerBriefingRefresh,
+          senderName: senderName || existingEntry?.senderName || "",
         });
         if (state.notifications.length > NOTIFICATION_HISTORY_LIMIT) {
           state.notifications.splice(NOTIFICATION_HISTORY_LIMIT);
         }
         // ── TOAST — add to array and auto-dismiss ────────────────────────
         const toastItem = {
-          id,
+          id: eventId,
           app,
           icon: meta.icon,
           color,
           label: meta.label,
           count: newCount,
-          summary: ai?.summary || `${newCount} new in ${meta.label}`,
+          summary: fallbackSummary,
           priority: ai?.priority || "normal",
           action: ai?.action || "Open",
           route: meta.route,
@@ -300,10 +367,10 @@ export function useWebSocket() {
 
         const duration = ai?.priority === "urgent" ? 10_000 : 6_000;
         setTimeout(() => {
-          const i = state.toasts.findIndex((t) => t.id === id);
+          const i = state.toasts.findIndex((t) => t.id === eventId);
           if (i !== -1) state.toasts.splice(i, 1);
         }, duration);
-        setTimeout(() => dismissToast(id), duration);
+        setTimeout(() => dismissToast(eventId), duration);
 
         // Browser notification
         showBrowserNotif(app, ai, newCount, meta);

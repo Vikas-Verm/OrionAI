@@ -75,17 +75,17 @@
           <strong>{{ jiraInsight.myOverdueCount }}</strong>
           <p>Personally assigned Jira work that is already overdue.</p>
         </article>
-        <article class="jira-insight-card">
+        <article class="jira-insight-card org">
           <span class="jira-insight-label">Org overdue tickets</span>
           <strong>{{ jiraInsight.orgOverdueCount }}</strong>
           <p>Overall overdue count in the connected Jira workspace scope.</p>
         </article>
-        <article class="jira-insight-card compact">
+        <article class="jira-insight-card compact blocked">
           <span class="jira-insight-label">Blocked overdue</span>
           <strong>{{ jiraInsight.blockedOverdueCount }}</strong>
           <p>Overdue tickets that also look blocked or stuck.</p>
         </article>
-        <article class="jira-insight-card compact">
+        <article class="jira-insight-card compact high-priority">
           <span class="jira-insight-label">High-priority overdue</span>
           <strong>{{ jiraInsight.highPriorityOverdueCount }}</strong>
           <p>Overdue tickets already marked high or highest priority.</p>
@@ -618,6 +618,7 @@ onUnmounted(() => {
 
 .briefing-stat,
 .priority-summary-card,
+.jira-insight-card,
 .priority-empty,
 .audit-trail-item,
 .briefing-suggestion {
@@ -742,6 +743,24 @@ onUnmounted(() => {
   background:
     radial-gradient(circle at top right, rgba(239, 68, 68, 0.14), transparent 36%),
     rgba(26, 12, 19, 0.84);
+}
+
+.jira-insight-card.org {
+  background:
+    radial-gradient(circle at top right, rgba(59, 130, 246, 0.14), transparent 36%),
+    rgba(10, 18, 32, 0.84);
+}
+
+.jira-insight-card.blocked {
+  background:
+    radial-gradient(circle at top right, rgba(245, 158, 11, 0.16), transparent 36%),
+    rgba(32, 22, 8, 0.84);
+}
+
+.jira-insight-card.high-priority {
+  background:
+    radial-gradient(circle at top right, rgba(249, 115, 22, 0.16), transparent 36%),
+    rgba(34, 16, 8, 0.84);
 }
 
 .jira-insight-label {
@@ -871,11 +890,11 @@ onUnmounted(() => {
     radial-gradient(circle at 82% 18%, rgba(45, 212, 191, 0.12), transparent 26%),
     linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(240, 247, 255, 0.96));
   --briefing-hero-border: rgba(148, 163, 184, 0.24);
-  --briefing-hero-shadow: 0 18px 42px rgba(148, 163, 184, 0.18);
+  --briefing-hero-shadow: 0 12px 28px rgba(148, 163, 184, 0.12);
   --briefing-badge-bg: rgba(251, 191, 36, 0.12);
   --briefing-badge-border: rgba(245, 158, 11, 0.2);
   --briefing-badge-text: #b45309;
-  --briefing-date-text: rgba(30, 41, 59, 0.56);
+  --briefing-date-text: rgba(30, 41, 59, 0.72);
   --briefing-orb-bg: linear-gradient(135deg, rgba(251, 191, 36, 0.16), rgba(45, 212, 191, 0.08));
   --briefing-orb-border: rgba(148, 163, 184, 0.22);
   --briefing-heading: #0f172a;
@@ -890,21 +909,225 @@ onUnmounted(() => {
   --briefing-chip-text: #1e293b;
 }
 
+:global([data-theme="light"]) .briefing-hero {
+  box-shadow: var(--briefing-hero-shadow);
+}
+
 :global([data-theme="light"]) .priority-summary-card,
 :global([data-theme="light"]) .jira-insight-card,
 :global([data-theme="light"]) .priority-empty,
 :global([data-theme="light"]) .audit-trail-item,
 :global([data-theme="light"]) .briefing-suggestion,
 :global([data-theme="light"]) .priority-filter-chip {
-  border-color: rgba(148, 163, 184, 0.2);
-  background: rgba(255, 255, 255, 0.86);
-  box-shadow: 0 16px 34px rgba(148, 163, 184, 0.14);
+  border-color: rgba(148, 163, 184, 0.28);
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 10px 24px rgba(148, 163, 184, 0.12);
+}
+
+:global([data-theme="light"]) .jira-insight-card.primary {
+  background:
+    radial-gradient(circle at top right, rgba(239, 68, 68, 0.12), transparent 38%),
+    rgba(255, 245, 245, 0.92);
+}
+
+:global([data-theme="light"]) .jira-insight-card.org {
+  background:
+    radial-gradient(circle at top right, rgba(59, 130, 246, 0.12), transparent 38%),
+    rgba(241, 247, 255, 0.92);
+}
+
+:global([data-theme="light"]) .jira-insight-card.blocked {
+  background:
+    radial-gradient(circle at top right, rgba(245, 158, 11, 0.14), transparent 38%),
+    rgba(255, 249, 235, 0.92);
+}
+
+:global([data-theme="light"]) .jira-insight-card.high-priority {
+  background:
+    radial-gradient(circle at top right, rgba(249, 115, 22, 0.14), transparent 38%),
+    rgba(255, 244, 238, 0.92);
 }
 
 :global([data-theme="light"]) .briefing-update-pill {
   color: #0f766e;
   background: rgba(20, 184, 166, 0.12);
   border-color: rgba(20, 184, 166, 0.24);
+}
+
+:global([data-theme="light"]) .briefing-section-head h3,
+:global([data-theme="light"]) .priority-empty strong,
+:global([data-theme="light"]) .audit-trail-item strong,
+:global([data-theme="light"]) .jira-insight-card strong {
+  color: #0f172a;
+}
+
+:global([data-theme="light"]) .briefing-section-head span,
+:global([data-theme="light"]) .briefing-apps-label,
+:global([data-theme="light"]) .audit-trail-time {
+  color: rgba(71, 85, 105, 0.84);
+}
+
+:global([data-theme="light"]) .jira-insight-label,
+:global([data-theme="light"]) .priority-summary-label,
+:global([data-theme="light"]) .briefing-suggestion-label,
+:global([data-theme="light"]) .audit-trail-badge,
+:global([data-theme="light"]) .audit-trail-state {
+  color: #334155;
+}
+
+:global([data-theme="light"]) .briefing-suggestion,
+:global([data-theme="light"]) .jira-insight-action {
+  color: #0f172a;
+}
+
+:global([data-theme="light"]) .briefing-suggestion-label,
+:global([data-theme="light"]) .audit-trail-badge,
+:global([data-theme="light"]) .audit-trail-state {
+  background: rgba(241, 245, 249, 0.94);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+}
+
+:global([data-theme="light"]) .jira-insight-card p,
+:global([data-theme="light"]) .priority-empty p,
+:global([data-theme="light"]) .audit-trail-item p,
+:global([data-theme="light"]) .briefing-suggestion-text {
+  color: rgba(15, 23, 42, 0.82);
+}
+
+:global([data-theme="light"]) .priority-filter-chip {
+  border-color: rgba(148, 163, 184, 0.28);
+  background: rgba(248, 250, 255, 0.96);
+  color: rgba(51, 65, 85, 0.94);
+}
+
+:global([data-theme="light"]) .priority-filter-chip.active {
+  border-color: rgba(99, 102, 241, 0.28);
+  background: rgba(99, 102, 241, 0.18);
+  color: #3730a3;
+}
+
+@media (prefers-color-scheme: light) {
+  :global([data-theme="system"]) .briefing-shell {
+    --briefing-hero-bg:
+      radial-gradient(circle at top left, rgba(251, 191, 36, 0.18), transparent 36%),
+      radial-gradient(circle at 82% 18%, rgba(45, 212, 191, 0.12), transparent 26%),
+      linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(240, 247, 255, 0.96));
+    --briefing-hero-border: rgba(148, 163, 184, 0.24);
+    --briefing-hero-shadow: 0 12px 28px rgba(148, 163, 184, 0.12);
+    --briefing-badge-bg: rgba(251, 191, 36, 0.12);
+    --briefing-badge-border: rgba(245, 158, 11, 0.2);
+    --briefing-badge-text: #b45309;
+    --briefing-date-text: rgba(30, 41, 59, 0.72);
+    --briefing-orb-bg: linear-gradient(135deg, rgba(251, 191, 36, 0.16), rgba(45, 212, 191, 0.08));
+    --briefing-orb-border: rgba(148, 163, 184, 0.22);
+    --briefing-heading: #0f172a;
+    --briefing-kicker: rgba(15, 23, 42, 0.78);
+    --briefing-summary: rgba(15, 23, 42, 0.68);
+    --briefing-stat-bg: rgba(255, 255, 255, 0.84);
+    --briefing-stat-border: rgba(148, 163, 184, 0.2);
+    --briefing-stat-label: rgba(71, 85, 105, 0.82);
+    --briefing-stat-value: #0f172a;
+    --briefing-chip-bg: rgba(255, 255, 255, 0.86);
+    --briefing-chip-border: rgba(148, 163, 184, 0.18);
+    --briefing-chip-text: #1e293b;
+  }
+
+  :global([data-theme="system"]) .briefing-hero {
+    box-shadow: var(--briefing-hero-shadow);
+  }
+
+  :global([data-theme="system"]) .priority-summary-card,
+  :global([data-theme="system"]) .jira-insight-card,
+  :global([data-theme="system"]) .priority-empty,
+  :global([data-theme="system"]) .audit-trail-item,
+  :global([data-theme="system"]) .briefing-suggestion,
+  :global([data-theme="system"]) .priority-filter-chip {
+    border-color: rgba(148, 163, 184, 0.28);
+    background: rgba(255, 255, 255, 0.95);
+    box-shadow: 0 10px 24px rgba(148, 163, 184, 0.12);
+  }
+
+  :global([data-theme="system"]) .jira-insight-card.primary {
+    background:
+      radial-gradient(circle at top right, rgba(239, 68, 68, 0.12), transparent 38%),
+      rgba(255, 245, 245, 0.92);
+  }
+
+  :global([data-theme="system"]) .jira-insight-card.org {
+    background:
+      radial-gradient(circle at top right, rgba(59, 130, 246, 0.12), transparent 38%),
+      rgba(241, 247, 255, 0.92);
+  }
+
+  :global([data-theme="system"]) .jira-insight-card.blocked {
+    background:
+      radial-gradient(circle at top right, rgba(245, 158, 11, 0.14), transparent 38%),
+      rgba(255, 249, 235, 0.92);
+  }
+
+  :global([data-theme="system"]) .jira-insight-card.high-priority {
+    background:
+      radial-gradient(circle at top right, rgba(249, 115, 22, 0.14), transparent 38%),
+      rgba(255, 244, 238, 0.92);
+  }
+
+  :global([data-theme="system"]) .briefing-update-pill {
+    color: #0f766e;
+    background: rgba(20, 184, 166, 0.12);
+    border-color: rgba(20, 184, 166, 0.24);
+  }
+
+  :global([data-theme="system"]) .briefing-section-head h3,
+  :global([data-theme="system"]) .priority-empty strong,
+  :global([data-theme="system"]) .audit-trail-item strong,
+  :global([data-theme="system"]) .jira-insight-card strong {
+    color: #0f172a;
+  }
+
+  :global([data-theme="system"]) .briefing-section-head span,
+  :global([data-theme="system"]) .briefing-apps-label,
+  :global([data-theme="system"]) .audit-trail-time {
+    color: rgba(71, 85, 105, 0.84);
+  }
+
+  :global([data-theme="system"]) .jira-insight-label,
+  :global([data-theme="system"]) .priority-summary-label,
+  :global([data-theme="system"]) .briefing-suggestion-label,
+  :global([data-theme="system"]) .audit-trail-badge,
+  :global([data-theme="system"]) .audit-trail-state {
+    color: #334155;
+  }
+
+  :global([data-theme="system"]) .briefing-suggestion,
+  :global([data-theme="system"]) .jira-insight-action {
+    color: #0f172a;
+  }
+
+  :global([data-theme="system"]) .briefing-suggestion-label,
+  :global([data-theme="system"]) .audit-trail-badge,
+  :global([data-theme="system"]) .audit-trail-state {
+    background: rgba(241, 245, 249, 0.94);
+    border: 1px solid rgba(148, 163, 184, 0.22);
+  }
+
+  :global([data-theme="system"]) .jira-insight-card p,
+  :global([data-theme="system"]) .priority-empty p,
+  :global([data-theme="system"]) .audit-trail-item p,
+  :global([data-theme="system"]) .briefing-suggestion-text {
+    color: rgba(15, 23, 42, 0.82);
+  }
+
+  :global([data-theme="system"]) .priority-filter-chip {
+    border-color: rgba(148, 163, 184, 0.28);
+    background: rgba(248, 250, 255, 0.96);
+    color: rgba(51, 65, 85, 0.94);
+  }
+
+  :global([data-theme="system"]) .priority-filter-chip.active {
+    border-color: rgba(99, 102, 241, 0.28);
+    background: rgba(99, 102, 241, 0.18);
+    color: #3730a3;
+  }
 }
 
 @media (max-width: 860px) {
@@ -920,6 +1143,86 @@ onUnmounted(() => {
   .priority-summary-grid,
   .jira-insight-grid {
     grid-template-columns: 1fr;
+  }
+}
+</style>
+
+<style>
+[data-theme="light"] .briefing-shell .briefing-section-head span,
+[data-theme="light"] .briefing-shell .briefing-apps-label,
+[data-theme="light"] .briefing-shell .audit-trail-time {
+  color: rgba(51, 65, 85, 0.84) !important;
+}
+
+[data-theme="light"] .briefing-shell .briefing-suggestion,
+[data-theme="light"] .briefing-shell .jira-insight-action {
+  color: #0f172a !important;
+  background: rgba(255, 255, 255, 0.96) !important;
+  border-color: rgba(148, 163, 184, 0.28) !important;
+  box-shadow: 0 10px 24px rgba(148, 163, 184, 0.12) !important;
+}
+
+[data-theme="light"] .briefing-shell .briefing-suggestion-label,
+[data-theme="light"] .briefing-shell .briefing-suggestion-text {
+  color: rgba(15, 23, 42, 0.84) !important;
+}
+
+[data-theme="light"] .briefing-shell .priority-filter-chip {
+  color: rgba(51, 65, 85, 0.94) !important;
+  background: rgba(248, 250, 255, 0.96) !important;
+  border-color: rgba(148, 163, 184, 0.28) !important;
+}
+
+[data-theme="light"] .briefing-shell .priority-filter-chip.active {
+  color: #3730a3 !important;
+  background: rgba(99, 102, 241, 0.18) !important;
+  border-color: rgba(99, 102, 241, 0.28) !important;
+}
+
+[data-theme="light"] .briefing-shell .audit-trail-badge,
+[data-theme="light"] .briefing-shell .audit-trail-state {
+  color: #334155 !important;
+  background: rgba(241, 245, 249, 0.94) !important;
+  border: 1px solid rgba(148, 163, 184, 0.22) !important;
+}
+
+@media (prefers-color-scheme: light) {
+  [data-theme="system"] .briefing-shell .briefing-section-head span,
+  [data-theme="system"] .briefing-shell .briefing-apps-label,
+  [data-theme="system"] .briefing-shell .audit-trail-time {
+    color: rgba(51, 65, 85, 0.84) !important;
+  }
+
+  [data-theme="system"] .briefing-shell .briefing-suggestion,
+  [data-theme="system"] .briefing-shell .jira-insight-action {
+    color: #0f172a !important;
+    background: rgba(255, 255, 255, 0.96) !important;
+    border-color: rgba(148, 163, 184, 0.28) !important;
+    box-shadow: 0 10px 24px rgba(148, 163, 184, 0.12) !important;
+  }
+
+  [data-theme="system"] .briefing-shell .briefing-suggestion-label,
+  [data-theme="system"] .briefing-shell .briefing-suggestion-text {
+    color: rgba(15, 23, 42, 0.84) !important;
+  }
+
+  [data-theme="system"] .briefing-shell .priority-filter-chip {
+    color: rgba(51, 65, 85, 0.94) !important;
+    background: rgba(248, 250, 255, 0.96) !important;
+    border-color: rgba(148, 163, 184, 0.28) !important;
+  }
+
+  [data-theme="system"] .briefing-shell .priority-filter-chip.active {
+    color: #3730a3 !important;
+    background: rgba(99, 102, 241, 0.18) !important;
+    border-color: rgba(99, 102, 241, 0.28) !important;
+  }
+
+  [data-theme="system"] .briefing-shell .audit-trail-badge,
+  [data-theme="system"] .briefing-shell .audit-trail-state {
+    color: #334155 !important;
+    background: rgba(241, 245, 249, 0.94) !important;
+    border: 1px solid rgba(148, 163, 184, 0.22) !important;
   }
 }
 </style>

@@ -329,6 +329,9 @@ async function checkTelegram(userId, isFirstRun) {
     return {
       count,
       items: chats.slice(0, 5).map((c) => ({
+        id: c.chatId || c.id || c.username || c.chatName || c.name,
+        chatId: c.chatId || c.id || null,
+        senderKey: c.chatId || c.id || c.username || c.chatName || c.name,
         name: c.chatName || c.name,
         unread: c.unreadCount || c.unread || 0,
         preview: c.lastMessage || "",
@@ -456,11 +459,21 @@ async function startTelegramListener(userId) {
         const sender = await message.getSender().catch(() => null);
         const from =
           sender?.firstName || sender?.title || sender?.username || "Unknown";
-        const text = message.text || "";
+        const senderKey = String(
+          sender?.id || sender?.username || sender?.phone || sender?.title || from
+        );
+        const text = (message.text || "").trim();
+        const preview = text || "Sent a media message";
+        const realtimeSummary = `${from}: ${preview}`.slice(0, 160);
 
-        const ai = await aiProcess("telegram", [
+        const aiResult = await aiProcess("telegram", [
           { name: from, preview: text.slice(0, 80) },
         ]).catch(() => null);
+        const ai = {
+          ...(aiResult || {}),
+          summary: realtimeSummary,
+          action: aiResult?.action || "Open",
+        };
 
         const prev = lastCounts.get(userId)?.telegram || 0;
         const next = prev + 1;
@@ -476,7 +489,8 @@ async function startTelegramListener(userId) {
             {
               app: "telegram",
               count: next,
-              items: [{ name: from, preview: text.slice(0, 80), unread: 1 }],
+              items: [{ id: senderKey, senderKey, name: from, preview, unread: 1 }],
+              summary: realtimeSummary,
               ai,
               isNew: true,
               newCount: 1,

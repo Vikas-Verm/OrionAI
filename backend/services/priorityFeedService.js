@@ -320,6 +320,9 @@ function mapGmailThreadToPriorityItem(thread, selfEmail) {
       snippet: thread.snippet || "",
       unread: classified.unread,
       ageHours: classified.ageHours,
+      latestMessageAt: classified.lastMs
+        ? new Date(classified.lastMs).toISOString()
+        : null,
       highConfidence: classified.highConfidence,
     },
     ...buildSourceBadge("gmail"),

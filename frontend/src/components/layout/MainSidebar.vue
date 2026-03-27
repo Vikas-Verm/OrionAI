@@ -39,7 +39,7 @@
               <span class="bell-history-icon">{{ n.icon }}</span>
               <div class="bell-history-body">
                 <div class="bell-history-text">{{ n.summary }}</div>
-                <div class="bell-history-meta">{{ n.label }} · {{ bellTimeAgo(n.time) }}</div>
+                <div class="bell-history-meta">{{ bellMeta(n) }}</div>
               </div>
             </div>
             <button class="bell-history-dismiss" @click.stop="dismissBellNotification(n.id)" title="Clear notification">✕</button>
@@ -408,6 +408,14 @@ function bellTimeAgo(date) {
   if (m < 1) return 'just now'
   if (m < 60) return `${m}m ago`
   return `${Math.floor(m / 60)}h ago`
+}
+
+function bellMeta(notification) {
+  const parts = [notification?.label || 'Notification']
+  if (notification?.senderName) parts.push(notification.senderName)
+  const time = bellTimeAgo(notification?.time)
+  if (time) parts.push(time)
+  return parts.join(' · ')
 }
 
 const { getStatus, getErrorMessage, startAutoCheck, stopAutoCheck } = useIntegrationHealth()

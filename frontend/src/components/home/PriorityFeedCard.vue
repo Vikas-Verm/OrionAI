@@ -16,8 +16,8 @@
         </button>
       </div>
 
-      <p class="priority-reason">{{ item.reason }}</p>
-      <p class="priority-why"><strong>Why this matters</strong> {{ item.whyThisMatters }}</p>
+      <p class="priority-reason">{{ displayReason }}</p>
+      <p class="priority-why"><strong>Why this matters</strong> {{ displayWhyThisMatters }}</p>
       <div class="priority-next">
         <span class="priority-next-label">Next action</span>
         <span class="priority-next-text">{{ item.action?.label || item.suggestedNextAction }}</span>
@@ -80,7 +80,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
 const props = defineProps({
   item: { type: Object, required: true },
@@ -100,6 +100,8 @@ const expanded = ref(false)
 const editing = ref(false)
 const showSnoozeOptions = ref(false)
 const editText = ref(props.item.suggestedNextAction || '')
+const nowTick = ref(Date.now())
+let relativeTimer = null
 
 const snoozeOptions = [
   { label: '1h', minutes: 60 },
@@ -109,6 +111,38 @@ const snoozeOptions = [
 
 const priorityTone = computed(() => String(props.item.priority || 'low').toLowerCase())
 const editInputId = computed(() => `priority-edit-${String(props.item.id || 'item').replace(/[^a-zA-Z0-9_-]/g, '-')}`)
+const liveMessageTimestamp = computed(() =>
+  props.item?.meta?.latestMessageAt ||
+  props.item?.meta?.lastMessageAt ||
+  null
+)
+const liveAgeLabel = computed(() => {
+  nowTick.value
+  const source = liveMessageTimestamp.value
+  if (!source) return ''
+
+  const diffMs = Date.now() - new Date(source).getTime()
+  if (!Number.isFinite(diffMs)) return ''
+  if (diffMs < 60 * 1000) return 'just now'
+
+  const totalMinutes = Math.floor(diffMs / 60000)
+  if (totalMinutes < 60) return `${totalMinutes}m ago`
+
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  if (hours < 24) {
+    return minutes > 0 ? `${hours}h ${minutes}m ago` : `${hours}h ago`
+  }
+
+  const days = Math.floor(hours / 24)
+  return `${days}d ago`
+})
+const displayReason = computed(() =>
+  applyLiveAgeToReason(props.item?.reason || '', liveAgeLabel.value)
+)
+const displayWhyThisMatters = computed(() =>
+  applyLiveAgeToWhy(props.item?.whyThisMatters || '', liveAgeLabel.value)
+)
 
 watch(
   () => props.item,
@@ -119,6 +153,56 @@ watch(
     showSnoozeOptions.value = false
   }
 )
+
+watch(
+  liveMessageTimestamp,
+  (value) => {
+    stopRelativeTimer()
+    if (value) {
+      nowTick.value = Date.now()
+      relativeTimer = setInterval(() => {
+        nowTick.value = Date.now()
+      }, 30 * 1000)
+    }
+  },
+  { immediate: true }
+)
+
+onMounted(() => {
+  if (liveMessageTimestamp.value && !relativeTimer) {
+    relativeTimer = setInterval(() => {
+      nowTick.value = Date.now()
+    }, 30 * 1000)
+  }
+})
+
+onUnmounted(() => {
+  stopRelativeTimer()
+})
+
+function stopRelativeTimer() {
+  if (relativeTimer) {
+    clearInterval(relativeTimer)
+    relativeTimer = null
+  }
+}
+
+function applyLiveAgeToReason(text, liveAge) {
+  if (!text || !liveAge) return text
+  const reasonAge = liveAge === 'just now' ? 'fresh' : `${liveAge.replace(/ ago$/, '')} old`
+  return text.replace(/\b\d+h old\b/i, reasonAge)
+}
+
+function applyLiveAgeToWhy(text, liveAge) {
+  if (!text || !liveAge) return text
+  return text
+    .replace(/\bless than an hour ago\b/i, liveAge)
+    .replace(/\b\d+\s+hours?\s+ago\b/i, liveAge)
+    .replace(/\b\d+\s+days?\s+ago\b/i, liveAge)
+    .replace(/\bis\s+less than an hour old\b/i, liveAge === 'just now' ? 'is only moments old' : `is ${liveAge.replace(/ ago$/, '')} old`)
+    .replace(/\bis\s+\d+\s+hours?\s+old\b/i, liveAge === 'just now' ? 'is only moments old' : `is ${liveAge.replace(/ ago$/, '')} old`)
+    .replace(/\bis\s+\d+\s+days?\s+old\b/i, liveAge === 'just now' ? 'is only moments old' : `is ${liveAge.replace(/ ago$/, '')} old`)
+}
 
 function toggleEdit() {
   expanded.value = true
