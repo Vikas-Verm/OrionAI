@@ -58,6 +58,7 @@ function detectIntent(text = "") {
       hasApproval: false,
       hasFollowUp: false,
       hasPromise: false,
+      hasUrgency: false,
       looksResolved: false,
       isInformational: false,
       signals: [],
@@ -68,6 +69,7 @@ function detectIntent(text = "") {
   const requestHits = findMatchingPatterns(normalized, INTENT_PATTERNS.request);
   const followUpHits = findMatchingPatterns(normalized, INTENT_PATTERNS.followUp);
   const promiseHits = findMatchingPatterns(normalized, INTENT_PATTERNS.promise);
+  const urgencyHits = findMatchingPatterns(normalized, INTENT_PATTERNS.urgency);
   const resolutionHits = findMatchingPatterns(normalized, INTENT_PATTERNS.resolution);
   const informationalHits = findMatchingPatterns(normalized, INTENT_PATTERNS.informational);
   const questionSignal = hasQuestionSignal(normalized);
@@ -78,6 +80,7 @@ function detectIntent(text = "") {
     hasApproval: approvalHits.length > 0,
     hasFollowUp: followUpHits.length > 0,
     hasPromise: promiseHits.length > 0,
+    hasUrgency: urgencyHits.length > 0,
     looksResolved:
       resolutionHits.length > 0 &&
       !questionSignal &&
@@ -94,6 +97,7 @@ function detectIntent(text = "") {
       ...(requestHits.length ? ["request"] : []),
       ...(followUpHits.length ? ["follow_up"] : []),
       ...(promiseHits.length ? ["promise"] : []),
+      ...(urgencyHits.length ? ["urgency"] : []),
       ...(questionSignal ? ["question"] : []),
       ...(resolutionHits.length ? ["resolved"] : []),
       ...(informationalHits.length ? ["informational"] : []),
@@ -104,7 +108,6 @@ function detectIntent(text = "") {
 function isMeaningfulMessage(message = {}) {
   if (!message) return false;
   if (message.isMeaningful === false) return false;
-  if (message.senderType === "system") return false;
   return Boolean(
     normalizeText(message.text) ||
       normalizeText(message.previewText) ||
@@ -126,6 +129,10 @@ function inferUserExpectedToAct(conversation, latestInbound) {
     return true;
   }
 
+  if (latestInbound.replyToCurrentUser || latestInbound.inReplyToCurrentUser) {
+    return true;
+  }
+
   if (conversation?.sourceMetadata?.assignedToCurrentUser) {
     return true;
   }
@@ -135,6 +142,13 @@ function inferUserExpectedToAct(conversation, latestInbound) {
   }
 
   if (conversation?.sourceType === "gmail" && conversation?.sourceMetadata?.directRecipient) {
+    return true;
+  }
+
+  if (
+    conversation?.sourceMetadata?.explicitlyDirectedToCurrentUser ||
+    conversation?.sourceMetadata?.recentMentionOfCurrentUser
+  ) {
     return true;
   }
 
@@ -148,6 +162,7 @@ function buildActionReason(actionState, details = {}) {
     latestInbound = null,
     mentionedCurrentUser = false,
     promisedFollowUp = false,
+    responsibilityShifted = false,
     excludedReason = "",
     userRepliedAfterLatestInbound = false,
     userExpectedToAct = false,
@@ -187,6 +202,9 @@ function buildActionReason(actionState, details = {}) {
   }
 
   if (actionState === ACTION_STATES.WAITING_ON_OTHERS) {
+    if (responsibilityShifted) {
+      return "Latest reply acknowledges the request and takes ownership of the next step.";
+    }
     if (userRepliedAfterLatestInbound) {
       return "You already replied; next action appears to be on the other side.";
     }
@@ -227,6 +245,7 @@ function computeConfidence(actionState, details = {}) {
   if (details.latestInboundIntent?.hasApproval) score += 0.18;
   if (details.latestInboundIntent?.hasQuestion || details.latestInboundIntent?.hasRequest) score += 0.16;
   if (details.latestInboundIntent?.hasFollowUp) score += 0.12;
+  if (details.latestInboundIntent?.hasUrgency || details.latestMeaningfulIntent?.hasUrgency) score += 0.06;
   if (details.latestMeaningfulIntent?.hasPromise) score += 0.12;
   if (details.userExpectedToAct) score += 0.14;
   if (details.mentionedCurrentUser) score += 0.1;
@@ -258,6 +277,7 @@ function computePriorityBoost(actionState, details = {}) {
   if (details.latestInboundIntent?.hasQuestion || details.latestInboundIntent?.hasRequest) signalBoost += 6;
   if (details.mentionedCurrentUser) signalBoost += 5;
   if (details.conversation?.sourceMetadata?.isDirect) signalBoost += 4;
+  if (details.latestInboundIntent?.hasUrgency || details.latestMeaningfulIntent?.hasUrgency) signalBoost += 6;
 
   return clamp(base + recencyBoost + signalBoost, 0, 98);
 }
@@ -350,9 +370,31 @@ function classifyConversation(conversation, options = {}) {
   const userRepliedAfterLatestInbound = Boolean(
     latestInbound && latestOutbound && latestOutbound.timestamp > latestInbound.timestamp
   );
+  const priorOutboundRequestedAction = Boolean(
+    latestOutbound &&
+      latestInbound &&
+      latestOutbound.timestamp < latestInbound.timestamp &&
+      (
+        latestOutboundIntent.hasApproval ||
+        latestOutboundIntent.hasQuestion ||
+        latestOutboundIntent.hasRequest ||
+        latestOutboundIntent.hasFollowUp
+      )
+  );
+  const latestInboundTakesOwnership = Boolean(
+    latestInbound &&
+      latestMeaningful &&
+      latestMeaningful.id === latestInbound.id &&
+      latestInbound.direction === "inbound" &&
+      latestInboundIntent.hasPromise &&
+      !latestInboundIntent.hasQuestion &&
+      !latestInboundIntent.hasRequest &&
+      priorOutboundRequestedAction
+  );
 
   const latestInboundAgeHours = hoursSince(latestInbound?.timestamp, nowMs);
   const latestOutboundAgeHours = hoursSince(latestOutbound?.timestamp, nowMs);
+  const latestNoiseText = normalizeLower(latestMeaningful.text || latestMeaningful.previewText || "");
 
   const excludedReason = conversation?.sourceMetadata?.excludedReason || "";
   if (excludedReason) {
@@ -368,6 +410,24 @@ function classifyConversation(conversation, options = {}) {
         mentionedCurrentUser,
         userRepliedAfterLatestInbound,
         excludedReason,
+      },
+      nowMs
+    );
+  }
+
+  if (matchesAny(latestNoiseText, INTENT_PATTERNS.oneTimeCode)) {
+    return buildNoActionState(
+      conversation,
+      {
+        latestMeaningful,
+        latestInbound,
+        latestOutbound,
+        latestInboundIntent,
+        latestMeaningfulIntent,
+        addressedToCurrentUser,
+        mentionedCurrentUser,
+        userRepliedAfterLatestInbound,
+        excludedReason: "This looks like a login or verification message and does not require action.",
       },
       nowMs
     );
@@ -391,7 +451,19 @@ function classifyConversation(conversation, options = {}) {
     );
   }
 
-  if (latestMeaningful.senderType === "bot" || latestMeaningful.senderType === "system") {
+  const automatedMessageNeedsAction = Boolean(
+    latestInbound &&
+      userExpectedToAct &&
+      (latestInboundIntent.hasApproval ||
+        latestInboundIntent.hasQuestion ||
+        latestInboundIntent.hasRequest ||
+        latestInboundIntent.hasFollowUp)
+  );
+
+  if (
+    (latestMeaningful.senderType === "bot" || latestMeaningful.senderType === "system") &&
+    !automatedMessageNeedsAction
+  ) {
     return buildNoActionState(
       conversation,
       {
@@ -430,6 +502,7 @@ function classifyConversation(conversation, options = {}) {
   if (
     latestInbound &&
     latestInboundIntent.hasApproval &&
+    !latestInboundTakesOwnership &&
     !userRepliedAfterLatestInbound &&
     userExpectedToAct &&
     latestInboundAgeHours !== null &&
@@ -477,6 +550,7 @@ function classifyConversation(conversation, options = {}) {
         latestInboundTimestamp: latestInbound.timestamp,
         latestMessageTimestamp: latestMeaningful.timestamp,
         latestInboundIntent,
+        latestMeaningfulIntent,
         mentionedCurrentUser,
         conversation,
       }),
@@ -499,6 +573,7 @@ function classifyConversation(conversation, options = {}) {
 
   const latestInboundNeedsReply = Boolean(
     latestInbound &&
+      !latestInboundTakesOwnership &&
       !userRepliedAfterLatestInbound &&
       userExpectedToAct &&
       (latestInboundIntent.hasQuestion ||
@@ -553,6 +628,7 @@ function classifyConversation(conversation, options = {}) {
         latestInboundTimestamp: latestInbound.timestamp,
         latestMessageTimestamp: latestMeaningful.timestamp,
         latestInboundIntent,
+        latestMeaningfulIntent,
         mentionedCurrentUser,
         conversation,
       }),
@@ -595,6 +671,7 @@ function classifyConversation(conversation, options = {}) {
       addressedToCurrentUser,
       mentionedCurrentUser,
       userExpectedToAct,
+      latestMeaningfulIntent,
     });
 
     return {
@@ -629,6 +706,7 @@ function classifyConversation(conversation, options = {}) {
         latestInboundTimestamp: latestInbound?.timestamp || latestOutbound?.timestamp || null,
         latestMessageTimestamp: latestMeaningful.timestamp,
         latestInboundIntent,
+        latestMeaningfulIntent: latestOutboundIntent,
         mentionedCurrentUser,
         conversation,
       }),
@@ -658,6 +736,7 @@ function classifyConversation(conversation, options = {}) {
   );
 
   if (
+    latestInboundTakesOwnership ||
     userRepliedAfterLatestInbound ||
     (latestOutboundAsksForSomething &&
       latestOutboundAgeHours !== null &&
@@ -697,6 +776,7 @@ function classifyConversation(conversation, options = {}) {
         latestInboundIntent,
         latestMeaningfulIntent,
         latestInbound,
+        responsibilityShifted: latestInboundTakesOwnership,
         userRepliedAfterLatestInbound,
         userExpectedToAct,
       }),
@@ -707,6 +787,7 @@ function classifyConversation(conversation, options = {}) {
         latestInboundTimestamp: latestInbound?.timestamp || latestOutbound?.timestamp || null,
         latestMessageTimestamp: latestMeaningful.timestamp,
         latestInboundIntent,
+        latestMeaningfulIntent,
         mentionedCurrentUser,
         conversation,
       }),

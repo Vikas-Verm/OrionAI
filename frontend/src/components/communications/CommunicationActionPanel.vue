@@ -18,7 +18,7 @@
         :key="group.id"
         class="comm-filter-chip"
         :class="{ active: activeFilter === group.id }"
-        @click="activeFilter = group.id"
+        @click="setActiveFilter(group.id)"
       >
         <span>{{ group.label }}</span>
         <strong>{{ group.count }}</strong>
@@ -92,11 +92,12 @@ const props = defineProps({
   loading: { type: Boolean, default: false },
   compact: { type: Boolean, default: false },
   selectedConversationId: { type: [String, Number], default: null },
+  activeFilter: { type: String, default: 'all' },
 })
 
-defineEmits(['refresh', 'open', 'draft', 'done', 'snooze', 'dismiss'])
+const emit = defineEmits(['refresh', 'open', 'draft', 'done', 'snooze', 'dismiss', 'filter-change'])
 
-const activeFilter = ref('all')
+const activeFilter = ref(props.activeFilter || 'all')
 
 const visibleItems = computed(() =>
   props.items.filter((item) => item.actionState !== 'no_action_needed')
@@ -133,10 +134,20 @@ watch(
       const nextDefault = nextGroups.find((group) =>
         ['waiting_on_your_reply', 'needs_approval', 'needs_follow_up'].includes(group.id) && group.count > 0
       )
-      activeFilter.value = nextDefault?.id || 'all'
+      setActiveFilter(nextDefault?.id || 'all')
     }
   },
   { immediate: true, deep: true }
+)
+
+watch(
+  () => props.activeFilter,
+  (nextValue) => {
+    const nextFilter = nextValue || 'all'
+    if (nextFilter !== activeFilter.value) {
+      activeFilter.value = nextFilter
+    }
+  }
 )
 
 function confidenceLabel(value) {
@@ -159,6 +170,12 @@ function relativeTime(timestamp) {
 
   const days = Math.floor(hours / 24)
   return `${days}d ago`
+}
+
+function setActiveFilter(filterId) {
+  const nextFilter = filterId || 'all'
+  activeFilter.value = nextFilter
+  emit('filter-change', nextFilter)
 }
 </script>
 

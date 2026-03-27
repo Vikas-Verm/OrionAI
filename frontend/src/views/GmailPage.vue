@@ -289,7 +289,11 @@
           <!-- Thread messages -->
           <div v-else class="gm-thread-msgs">
             <div v-for="(msg, idx) in threadMessages" :key="msg.id"
-              :class="['gm-thread-msg', msg._optimistic && 'gm-thread-msg--sending']">
+              :class="[
+                'gm-thread-msg',
+                msg.direction === 'outbound' ? 'gm-thread-msg--outbound' : 'gm-thread-msg--inbound',
+                msg._optimistic && 'gm-thread-msg--sending',
+              ]">
               <!-- Message header -->
               <div class="gm-tm-hdr">
                 <!-- Avatar: contact photo > own profile > company logo > initials -->
@@ -316,6 +320,12 @@
                 <div class="gm-tm-sender-info">
                   <div class="gm-tm-sender-row">
                     <span class="gm-detail-sender-name">{{ senderName(msg.from) }}</span>
+                    <span
+                      class="gm-direction-chip"
+                      :class="msg.direction === 'outbound' ? 'is-outbound' : 'is-inbound'"
+                    >
+                      {{ msg.direction === 'outbound' ? 'Sent' : 'Received' }}
+                    </span>
                     <span v-if="msg.unread" class="gm-unread-chip">Unread</span>
                   </div>
                   <div class="gm-detail-sender-email">&lt;{{ extractEmail(msg.from) }}&gt;</div>
@@ -364,7 +374,7 @@
         <div class="gm-reply-dock">
           <div v-if="!showReply" class="gm-reply-chip" @click="openReply">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 00-4-4H4"/></svg>
-            <span>Reply to <strong>{{ senderName(selectedEmail.from) }}</strong></span>
+            <span>Reply to <strong>{{ replyTargetName }}</strong></span>
             <span class="gm-reply-chip-hint">Click to compose</span>
           </div>
 
@@ -372,7 +382,7 @@
             <div class="gm-rc-header">
               <div class="gm-rc-to">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 00-4-4H4"/></svg>
-                Replying to <strong>{{ senderName(selectedEmail.from) }}</strong>
+                Replying to <strong>{{ replyTargetName }}</strong>
               </div>
               <div style="display:flex;align-items:center;gap:10px">
                 <button v-if="!showReplyCC" class="gm-ccbcc-btn" style="margin:0" @click="showReplyCC=true">Cc</button>
@@ -637,6 +647,29 @@ function onDocClick(e) {
 }
 
 const folderLabel = computed(() => folders.find(f => f.key === activeFolder.value)?.label ?? 'Inbox')
+const latestThreadMessage = computed(() => {
+  const items = threadMessages.value || []
+  return items.length ? items[items.length - 1] : null
+})
+const latestExternalThreadMessage = computed(() => {
+  return [...(threadMessages.value || [])]
+    .reverse()
+    .find((msg) => !(msg.isSelf || isSelf(msg.from))) || null
+})
+const replyTargetDisplay = computed(() => {
+  if (latestThreadMessage.value && !(latestThreadMessage.value.isSelf || isSelf(latestThreadMessage.value.from))) {
+    return latestThreadMessage.value.replyTo || latestThreadMessage.value.from
+  }
+  if (latestExternalThreadMessage.value) {
+    return latestExternalThreadMessage.value.replyTo || latestExternalThreadMessage.value.from
+  }
+  if (selectedEmail.value?.isSent) {
+    return selectedEmail.value.to || selectedEmail.value.from || ''
+  }
+  return selectedEmail.value?.replyTo || selectedEmail.value?.from || selectedEmail.value?.to || ''
+})
+const replyTargetAddress = computed(() => extractEmail(replyTargetDisplay.value))
+const replyTargetName = computed(() => senderName(replyTargetDisplay.value || selectedEmail.value?.from || selectedEmail.value?.to || ''))
 
 function formatCompactCount(value) {
   const count = Number(value || 0)
@@ -732,7 +765,6 @@ function connectSSE() {
 async function refreshEmails() {
   refreshing.value = true
   await syncMailboxView()
-  await refreshGmailActions({ silent: true })
   refreshing.value = false
 }
 
@@ -761,7 +793,11 @@ async function loadEmails(silent = false) {
 
 async function syncMailboxView() {
   if (mailboxSyncPromise) return mailboxSyncPromise
-  mailboxSyncPromise = Promise.all([fetchLabelCounts(), loadEmails(true)])
+  mailboxSyncPromise = Promise.all([
+    fetchLabelCounts(),
+    loadEmails(true),
+    refreshGmailActions({ silent: true }),
+  ])
     .finally(() => { mailboxSyncPromise = null })
   return mailboxSyncPromise
 }
@@ -858,11 +894,12 @@ async function openEmail(email) {
   try {
     const res = await api.post('/api/gmail/thread', { threadId: email.threadId })
     threadMessages.value = res.data.messages || []
-    // Update selectedEmail with full first-message data
-    const match = threadMessages.value.find(m => m.id === email.id)
-    if (match) selectedEmail.value = { ...email, ...match }
+    if (res.data.thread) {
+      selectedEmail.value = { ...email, ...res.data.thread }
+    }
     // Fetch contact photos for all thread participants
     fetchContactPhotos(threadMessages.value.map(m => m.from))
+    refreshGmailActions({ silent: true }).catch(() => {})
   } catch (e) {
       console.log('Thread fetch failed, trying single message fetch:', e.message)
     // Fallback to single message fetch
@@ -897,7 +934,7 @@ async function openGmailActionConversation(state) {
   }
 
   const synthetic = {
-    id: state.platformMetadata?.latestMessageId || state.conversationId,
+    id: state.threadId || state.conversationId,
     threadId: state.threadId || state.conversationId,
     from: state.platformMetadata?.latestFrom || state.participantLabel || '',
     to: state.platformMetadata?.latestTo || '',
@@ -944,11 +981,14 @@ async function dismissGmailAction(state) {
 }
 
 async function openReply() {
+  if (!replyTargetAddress.value) return
   showReply.value = true; replyDraft.value = ''; suggestLoading.value = true
   try {
     const { data } = await agentAPI.gmailSuggestReply({
-      subject: selectedEmail.value.subject, from: selectedEmail.value.from,
-      body: selectedEmail.value.body, snippet: selectedEmail.value.snippet,
+      subject: selectedEmail.value.subject,
+      from: replyTargetDisplay.value || selectedEmail.value.from,
+      body: latestThreadMessage.value?.body || selectedEmail.value.body,
+      snippet: latestThreadMessage.value?.snippet || selectedEmail.value.snippet,
     })
     replyDraft.value = data.suggested || ''
   } catch (e) {console.error('AI suggestion failed:', e.message) }
@@ -995,7 +1035,8 @@ function buildSendFormData({ to, cc, bcc, subject, body, threadId, attachments }
 }
 
 async function sendReply() {
-  if (!replyDraft.value.trim() && !replyAttachments.value.length) return
+  const replyTo = replyTargetAddress.value
+  if ((!replyDraft.value.trim() && !replyAttachments.value.length) || !replyTo) return
   replySending.value = true
 
   // Capture draft state before clearing
@@ -1005,7 +1046,7 @@ async function sendReply() {
 
   try {
     const fd = buildSendFormData({
-      to:          selectedEmail.value.from,
+      to:          replyTo,
       cc:          draftCC,
       subject:     `Re: ${selectedEmail.value.subject}`,
       body:        draftBody,
@@ -1032,9 +1073,13 @@ async function sendReply() {
       id:         `optimistic_${Date.now()}`,
       threadId:   selectedEmail.value.threadId,
       from:       gmailProfile.value?.email || '',
-      to:         selectedEmail.value.from,
+      to:         replyTo,
       cc:         draftCC || '',
       subject:    `Re: ${selectedEmail.value.subject}`,
+      timestamp:  now.getTime(),
+      direction:  'outbound',
+      isSelf:     true,
+      senderEmail: extractEmail(gmailProfile.value?.email || ''),
       date:       timeStr,
       snippet:    draftBody.slice(0, 100),
       body:       draftBody,
@@ -1052,6 +1097,9 @@ async function sendReply() {
         const res = await api.post('/api/gmail/thread', { threadId: selectedEmail.value.threadId })
         if (res.data.messages?.length) {
           threadMessages.value = res.data.messages
+          if (res.data.thread) {
+            selectedEmail.value = { ...selectedEmail.value, ...res.data.thread }
+          }
           fetchContactPhotos(res.data.messages.map(m => m.from))
         }
       } catch { /* keep optimistic message if reload fails */ }
@@ -1618,7 +1666,7 @@ onUnmounted(() => {
   width:310px; flex-shrink:0; display:flex; flex-direction:column;
   border-right:1px solid var(--border-subtle);
 }
-.gm-insights-wrap { padding: 0 12px 12px; }
+.gm-insights-wrap { padding: 0 12px 8px; }
 .gm-list-topbar {
   display:flex; align-items:center; gap:8px;
   padding:10px 11px 0;
@@ -1856,12 +1904,34 @@ onUnmounted(() => {
 
 /* Individual thread message card */
 .gm-thread-msg { padding:20px 26px 0; }
+.gm-thread-msg--outbound {
+  background:linear-gradient(180deg, rgba(66,133,244,.05) 0%, rgba(66,133,244,0) 100%);
+}
+.gm-thread-msg--inbound {
+  background:linear-gradient(180deg, rgba(234,67,53,.04) 0%, rgba(234,67,53,0) 100%);
+}
 .gm-thread-msg--sending { opacity:.6; transition:opacity .4s; }
 .gm-tm-hdr {
   display:flex; align-items:flex-start; gap:12px; margin-bottom:14px;
 }
 .gm-tm-sender-info { flex:1; min-width:0; }
 .gm-tm-sender-row { display:flex; align-items:center; gap:8px; margin-bottom:2px; }
+.gm-direction-chip {
+  display:inline-flex; align-items:center; justify-content:center;
+  padding:2px 7px; border-radius:999px;
+  font-size:10px; font-weight:700;
+  border:1px solid transparent;
+}
+.gm-direction-chip.is-outbound {
+  background:rgba(66,133,244,.12);
+  color:#2563eb;
+  border-color:rgba(66,133,244,.18);
+}
+.gm-direction-chip.is-inbound {
+  background:rgba(234,67,53,.1);
+  color:#c5221f;
+  border-color:rgba(234,67,53,.16);
+}
 .gm-tm-to { display:flex; gap:6px; font-size:12px; margin-top:3px; }
 .gm-tm-body { padding:0 0 20px 52px; }
 

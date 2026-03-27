@@ -177,6 +177,13 @@ function hdr(headers = [], name) {
   );
 }
 
+function extractEmailAddress(value = "") {
+  const bracketMatch = String(value || "").match(/<([^>]+)>/);
+  const raw = bracketMatch?.[1] || value;
+  const emailMatch = String(raw || "").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return (emailMatch?.[0] || "").trim().toLowerCase();
+}
+
 function b64(data) {
   if (!data) return "";
   return Buffer.from(
@@ -237,26 +244,46 @@ function fmtDate(raw) {
   }
 }
 
+function sortThreadMessages(messages = []) {
+  return [...messages].sort(
+    (a, b) => Number(a?.internalDate || 0) - Number(b?.internalDate || 0)
+  );
+}
+
 // ── Map a Gmail thread API response to the shape the frontend expects
-function threadToEmail(thread) {
-  const msgs = thread.messages || [];
+function threadToEmail(thread, selfEmail = "") {
+  const msgs = sortThreadMessages(thread.messages || []);
   const lastMsg = msgs[msgs.length - 1] || {};
   const firstMsg = msgs[0] || {};
   const lastHdrs = lastMsg.payload?.headers || [];
   const firstHdrs = firstMsg.payload?.headers || [];
+  const normalizedSelfEmail = String(selfEmail || "").toLowerCase();
+  const lastFrom = hdr(lastHdrs, "from");
+  const lastSenderEmail = extractEmailAddress(lastFrom);
   const subject =
     hdr(firstHdrs, "subject") || hdr(lastHdrs, "subject") || "(no subject)";
   const allLabels = msgs.flatMap((m) => m.labelIds || []);
   const isSent = allLabels.includes("SENT") && !allLabels.includes("INBOX");
+  const rawDate = hdr(lastHdrs, "date");
+  const latestDirection =
+    normalizedSelfEmail && lastSenderEmail === normalizedSelfEmail
+      ? "outbound"
+      : "inbound";
+
   return {
     id: thread.id,
     threadId: thread.id,
-    from: hdr(lastHdrs, "from"),
+    latestMessageId: lastMsg.id || null,
+    from: lastFrom,
     to: hdr(lastHdrs, "to") || hdr(firstHdrs, "to"),
     cc: hdr(lastHdrs, "cc") || hdr(firstHdrs, "cc"),
     origFrom: hdr(firstHdrs, "from"),
     subject,
-    date: fmtDate(hdr(lastHdrs, "date")),
+    rawDate,
+    date: fmtDate(rawDate),
+    timestamp: Number(lastMsg.internalDate || 0) || null,
+    latestDirection,
+    senderEmail: lastSenderEmail,
     snippet: thread.snippet || "",
     unread: allLabels.includes("UNREAD"),
     starred: allLabels.includes("STARRED"),
@@ -266,22 +293,46 @@ function threadToEmail(thread) {
 }
 
 // ── Map a full Gmail message to the shape the frontend expects ─────
-function messageToFull(msg) {
+function messageToFull(msg, selfEmail = "") {
   const headers = msg.payload?.headers || [];
   const flags = msg.labelIds || [];
+  const from = hdr(headers, "from");
+  const senderEmail = extractEmailAddress(from);
+  const normalizedSelfEmail = String(selfEmail || "").toLowerCase();
+  const rawDate = hdr(headers, "date");
+  const direction =
+    normalizedSelfEmail && senderEmail === normalizedSelfEmail
+      ? "outbound"
+      : "inbound";
+  const plainBody = extractBody(msg.payload, "text/plain");
+
   return {
     id: msg.id,
     threadId: msg.threadId,
-    from: hdr(headers, "from"),
+    from,
     to: hdr(headers, "to"),
+    cc: hdr(headers, "cc"),
+    bcc: hdr(headers, "bcc"),
+    replyTo: hdr(headers, "reply-to"),
     subject: hdr(headers, "subject") || "(no subject)",
-    date: fmtDate(hdr(headers, "date")),
+    rawDate,
+    date: fmtDate(rawDate),
+    timestamp: Number(msg.internalDate || 0) || null,
+    direction,
+    isSelf: direction === "outbound",
+    senderEmail,
     snippet: msg.snippet || "",
-    body: extractBody(msg.payload, "text/plain"),
+    body: plainBody || msg.snippet || "",
     html: extractBody(msg.payload, "text/html"),
     attachments: extractAtts(msg.payload),
     unread: flags.includes("UNREAD"),
   };
+}
+
+function mapThreadMessages(thread, selfEmail = "") {
+  return sortThreadMessages(thread.messages || []).map((message) =>
+    messageToFull(message, selfEmail)
+  );
 }
 
 // ── POST /api/gmail/list ──────────────────────────────────────────
@@ -292,6 +343,7 @@ exports.listEmails = async (req, res) => {
   try {
     disableCache(res);
     const token = await getAccessToken(userId);
+    const creds = await getCredentials(userId);
     const api = gmailApi(token);
 
     const folder = req.body.folder || "inbox";
@@ -332,7 +384,7 @@ exports.listEmails = async (req, res) => {
           .get(`/threads/${t.id}`, {
             params: {
               format: "metadata",
-              metadataHeaders: ["From", "To", "Subject", "Date"],
+              metadataHeaders: ["From", "To", "Cc", "Subject", "Date", "Reply-To"],
             },
           })
           .then((r) => r.data)
@@ -340,7 +392,9 @@ exports.listEmails = async (req, res) => {
       )
     );
 
-    const emails = threadDetails.filter(Boolean).map(threadToEmail);
+    const emails = threadDetails
+      .filter(Boolean)
+      .map((thread) => threadToEmail(thread, creds.userEmail));
 
     res.json({ emails, nextPageToken, hasMore: !!nextPageToken });
   } catch (err) {
@@ -359,12 +413,14 @@ exports.getThread = async (req, res) => {
   try {
     disableCache(res);
     const token = await getAccessToken(userId);
+    const creds = await getCredentials(userId);
     const api = gmailApi(token);
 
     const threadRes = await api.get(`/threads/${req.body.threadId}`, {
       params: { format: "full" },
     });
-    const messages = (threadRes.data.messages || []).map(messageToFull);
+    const thread = threadToEmail(threadRes.data, creds.userEmail);
+    const messages = mapThreadMessages(threadRes.data, creds.userEmail);
 
     // Mark unread messages as read (fire-and-forget)
     const unreadIds = messages.filter((m) => m.unread).map((m) => m.id);
@@ -372,6 +428,7 @@ exports.getThread = async (req, res) => {
       messages.forEach((message) => {
         if (unreadIds.includes(message.id)) message.unread = false;
       });
+      thread.unread = false;
       Promise.all(
         unreadIds.map((id) =>
           api
@@ -381,7 +438,7 @@ exports.getThread = async (req, res) => {
       ).catch(() => {});
     }
 
-    res.json({ messages });
+    res.json({ thread, messages });
   } catch (err) {
     console.error("Gmail thread error:", err.message);
     res.status(500).json({ error: err.message });
@@ -394,11 +451,12 @@ exports.getMessage = async (req, res) => {
   try {
     disableCache(res);
     const token = await getAccessToken(userId);
+    const creds = await getCredentials(userId);
     const api = gmailApi(token);
     const r = await api.get(`/messages/${req.body.messageId}`, {
       params: { format: "full" },
     });
-    res.json(messageToFull(r.data));
+    res.json(messageToFull(r.data, creds.userEmail));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -804,3 +862,9 @@ exports.getStorageQuota = async (req, res) => {
 };
 
 exports.clearCachedAccessToken = clearCachedAccessToken;
+exports.__test = {
+  threadToEmail,
+  messageToFull,
+  mapThreadMessages,
+  extractEmailAddress,
+};

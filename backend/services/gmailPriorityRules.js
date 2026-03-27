@@ -44,6 +44,7 @@ const GMAIL_INCLUDE_SIGNALS = [
   { match: /please share|please send|share\b|send\b/, label: "requested document", score: 12, why: "asked you to send something" },
   { match: /please review|kindly check|review this|check this/, label: "needs review", score: 12, why: "asked you to review something" },
   { match: /approval|approve|sign off|green light/, label: "approval ask", score: 15, why: "is asking for your approval" },
+  { match: /leave request|leave apply|apply(?:ing)? for leave|request(?:ing)? leave|can i take leave|grant (?:my|the)? leave|approve my leave/, label: "leave approval", score: 18, why: "is asking you to approve leave" },
   { match: /follow[\s-]?up|following up|circling back|checking in/, label: "follow-up", score: 13, why: "looks like a follow-up waiting on you" },
   { match: /need your response|need your update|waiting for your update/, label: "waiting on update", score: 15, why: "is explicitly waiting on your update" },
   { match: /share an update|status update|send an update|provide an update/, label: "status request", score: 12, why: "asked you for a status update" },

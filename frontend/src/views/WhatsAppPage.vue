@@ -417,7 +417,7 @@
   .wa-icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
   
   .wa-search-wrap { padding: 8px 12px; }
-  .wa-action-panel-wrap { padding: 0 12px 10px; }
+  .wa-action-panel-wrap { padding: 0 12px 8px; }
   .wa-sidebar :deep(.comm-insights) { background: var(--bg-base); }
   .wa-sidebar :deep(.comm-panel) { background: var(--bg-base); }
   .wa-search {

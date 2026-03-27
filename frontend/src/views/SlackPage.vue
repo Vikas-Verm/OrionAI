@@ -1350,7 +1350,7 @@ onUnmounted(() => {
 
 /* ── Sidebar ─────────────────────────────────────────────── */
 .sl-sidebar { width:258px; flex-shrink:0; background:var(--bg-surface); border-right:1px solid var(--border-subtle); display:flex; flex-direction:column; overflow:hidden; }
-.sl-action-panel-wrap { padding: 0 10px 10px; }
+.sl-action-panel-wrap { padding: 0 10px 8px; }
 .sl-sidebar :deep(.comm-insights) { background: var(--bg-base); }
 .sl-sidebar :deep(.comm-panel) { background: var(--bg-base); }
 .sl-action-chip {

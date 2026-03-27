@@ -2313,7 +2313,7 @@ function fIconCol(n = '') { return EX[(n.split('.').pop() || '').toLowerCase()] 
 /* ── SIDEBAR ── */
 .tg-sidebar { width: 300px; flex-shrink: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border-subtle); background: var(--bg-surface); overflow: hidden; }
 .tg-sidebar-head { display: flex; align-items: center; gap: 6px; padding: 9px 10px 7px; border-bottom: 1px solid var(--border-subtle); }
-.tg-action-panel-wrap { padding: 0 10px 10px; }
+.tg-action-panel-wrap { padding: 0 10px 8px; }
 .tg-sidebar :deep(.comm-insights) { background: var(--bg-base); }
 .tg-sidebar :deep(.comm-panel) { background: var(--bg-base); }
 .tg-searchbar { flex: 1; position: relative; }

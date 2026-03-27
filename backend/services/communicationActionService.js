@@ -339,6 +339,14 @@ async function fetchGmailStates(userId, options = {}) {
 }
 
 function normalizeGmailThread(thread, selfEmail) {
+  const firstHeaders = thread.messages?.[0]?.payload?.headers || [];
+  const latestHeaders =
+    thread.messages?.[thread.messages.length - 1]?.payload?.headers || [];
+  const latestToValue = getHeader(latestHeaders, "To") || getHeader(firstHeaders, "To");
+  const latestCcValue = getHeader(latestHeaders, "Cc") || getHeader(firstHeaders, "Cc");
+  const directRecipient = splitEmails(latestToValue).includes(selfEmail);
+  const ccOnlyRecipient = !directRecipient && splitEmails(latestCcValue).includes(selfEmail);
+
   const messages = [...(thread.messages || [])]
     .sort((a, b) => Number(a.internalDate || 0) - Number(b.internalDate || 0))
     .map((message) => {
@@ -369,9 +377,6 @@ function normalizeGmailThread(thread, selfEmail) {
       };
     });
 
-  const firstHeaders = thread.messages?.[0]?.payload?.headers || [];
-  const latestHeaders =
-    thread.messages?.[thread.messages.length - 1]?.payload?.headers || [];
   const subject =
     getHeader(firstHeaders, "Subject") ||
     getHeader(latestHeaders, "Subject") ||
@@ -385,13 +390,12 @@ function normalizeGmailThread(thread, selfEmail) {
     participantLabel: extractSenderName(getHeader(latestHeaders, "From") || getHeader(firstHeaders, "From")),
     previewText: normalizeText(thread.snippet || ""),
     sourceMetadata: {
-      directRecipient: splitEmails(getHeader(latestHeaders, "To") || getHeader(firstHeaders, "To")).includes(selfEmail),
-      ccOnlyRecipient:
-        !splitEmails(getHeader(latestHeaders, "To") || getHeader(firstHeaders, "To")).includes(selfEmail) &&
-        splitEmails(getHeader(latestHeaders, "Cc") || getHeader(firstHeaders, "Cc")).includes(selfEmail),
+      directRecipient,
+      ccOnlyRecipient,
       excludedReason: looksLikeBulkEmail(thread),
       participantLabel: extractSenderName(getHeader(latestHeaders, "From") || getHeader(firstHeaders, "From")),
-      isDirect: true,
+      isDirect: directRecipient,
+      explicitlyDirectedToCurrentUser: directRecipient,
     },
     platformMetadata: {
       latestFrom: getHeader(latestHeaders, "From"),
@@ -435,10 +439,10 @@ async function fetchSlackStates(userId) {
   });
 
   const conversations = (listRes.data.channels || [])
-    .filter((channel) => channel.is_im || channel.is_mpim || Number(channel.unread_count || 0) > 0)
+    .filter((channel) => channel.is_im || channel.is_mpim || channel.is_channel || channel.is_group)
     .sort((a, b) => {
       if (Boolean(b.is_im) !== Boolean(a.is_im)) return Number(b.is_im) - Number(a.is_im);
-      return Number(b.unread_count || 0) - Number(a.unread_count || 0);
+      return Number(b.unread_count_display || b.unread_count || 0) - Number(a.unread_count_display || a.unread_count || 0);
     })
     .slice(0, SOURCE_THRESHOLDS.slack.maxConversations);
 
@@ -554,7 +558,12 @@ async function fetchTelegramStates(userId) {
 
   const dialogs = await tg.getDialogs(userId, 80).catch(() => []);
   const candidates = dialogs
-    .filter((dialog) => dialog.type === "user" || Number(dialog.unreadCount || 0) > 0)
+    .filter(
+      (dialog) =>
+        dialog.type === "user" ||
+        dialog.type === "group" ||
+        Number(dialog.unreadCount || 0) > 0
+    )
     .sort((a, b) => {
       if (a.type === "user" && b.type !== "user") return -1;
       if (b.type === "user" && a.type !== "user") return 1;
