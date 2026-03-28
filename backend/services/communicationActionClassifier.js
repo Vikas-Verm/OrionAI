@@ -19,6 +19,39 @@ function normalizeLower(value = "") {
   return normalizeText(value).toLowerCase();
 }
 
+function stripQuotedReplyText(value = "", sourceType = "") {
+  let text = String(value || "").replace(/\r/g, "\n");
+  if (!text) return "";
+
+  const looksLikeEmailReply =
+    sourceType === "gmail" ||
+    /\bOn .+ wrote:/i.test(text) ||
+    /-{2,}\s*Original Message\s*-{2,}/i.test(text) ||
+    /^From:\s.+$/im.test(text);
+
+  if (looksLikeEmailReply) {
+    const quoteMarkers = [
+      /\bOn .+ wrote:/i,
+      /-{2,}\s*Original Message\s*-{2,}/i,
+      /^From:\s.+$/im,
+    ];
+
+    for (const pattern of quoteMarkers) {
+      const match = text.match(pattern);
+      if (match?.index >= 0) {
+        text = text.slice(0, match.index);
+        break;
+      }
+    }
+  }
+
+  const visibleLines = text
+    .split("\n")
+    .filter((line) => !/^\s*>/.test(line));
+
+  return normalizeText(visibleLines.join("\n"));
+}
+
 function toTimestamp(value) {
   if (value instanceof Date) return value.getTime();
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -26,6 +59,11 @@ function toTimestamp(value) {
   }
   if (typeof value === "string" && /^\d+$/.test(value)) {
     const numeric = Number(value);
+    return numeric > 1e12 ? numeric : numeric * 1000;
+  }
+  if (typeof value === "string" && /^\d+(?:\.\d+)?$/.test(value)) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return null;
     return numeric > 1e12 ? numeric : numeric * 1000;
   }
   const parsed = Date.parse(value);
@@ -56,47 +94,96 @@ function detectIntent(text = "") {
       hasQuestion: false,
       hasRequest: false,
       hasApproval: false,
+      hasApprovalDecision: false,
+      hasDenial: false,
       hasFollowUp: false,
       hasPromise: false,
+      hasAcknowledgement: false,
       hasUrgency: false,
       looksResolved: false,
+      resolvesPreviousRequest: false,
       isInformational: false,
+      semanticRole: "informational",
       signals: [],
     };
   }
 
   const approvalHits = findMatchingPatterns(normalized, INTENT_PATTERNS.approval);
+  const approvalDecisionHits = findMatchingPatterns(
+    normalized,
+    INTENT_PATTERNS.approvalDecision
+  );
+  const denialHits = findMatchingPatterns(normalized, INTENT_PATTERNS.denial);
   const requestHits = findMatchingPatterns(normalized, INTENT_PATTERNS.request);
   const followUpHits = findMatchingPatterns(normalized, INTENT_PATTERNS.followUp);
   const promiseHits = findMatchingPatterns(normalized, INTENT_PATTERNS.promise);
+  const acknowledgementHits = findMatchingPatterns(
+    normalized,
+    INTENT_PATTERNS.acknowledgement
+  );
   const urgencyHits = findMatchingPatterns(normalized, INTENT_PATTERNS.urgency);
   const resolutionHits = findMatchingPatterns(normalized, INTENT_PATTERNS.resolution);
   const informationalHits = findMatchingPatterns(normalized, INTENT_PATTERNS.informational);
   const questionSignal = hasQuestionSignal(normalized);
+  const decisionSignal =
+    approvalDecisionHits.length > 0 || denialHits.length > 0;
+  const resolvesPreviousRequest =
+    (decisionSignal || resolutionHits.length > 0) &&
+    !questionSignal &&
+    !requestHits.length &&
+    !followUpHits.length &&
+    !promiseHits.length;
+  const semanticRole = approvalDecisionHits.length
+    ? "approval"
+    : denialHits.length
+      ? "denial"
+      : followUpHits.length
+        ? "follow_up"
+        : promiseHits.length
+          ? "commitment"
+          : acknowledgementHits.length
+            ? "acknowledgement"
+            : approvalHits.length
+              ? "approval_request"
+              : questionSignal || requestHits.length
+                ? "ask"
+                : resolutionHits.length
+                  ? "resolved"
+                  : informationalHits.length
+                    ? "informational"
+                    : "informational";
 
   return {
     hasQuestion: questionSignal,
     hasRequest: questionSignal || requestHits.length > 0,
     hasApproval: approvalHits.length > 0,
+    hasApprovalDecision: approvalDecisionHits.length > 0,
+    hasDenial: denialHits.length > 0,
     hasFollowUp: followUpHits.length > 0,
     hasPromise: promiseHits.length > 0,
+    hasAcknowledgement: acknowledgementHits.length > 0,
     hasUrgency: urgencyHits.length > 0,
     looksResolved:
-      resolutionHits.length > 0 &&
-      !questionSignal &&
-      !requestHits.length &&
-      !approvalHits.length,
+      resolvesPreviousRequest &&
+      !approvalHits.length &&
+      !acknowledgementHits.length,
+    resolvesPreviousRequest,
     isInformational:
       informationalHits.length > 0 &&
       !questionSignal &&
       !requestHits.length &&
       !approvalHits.length &&
-      !followUpHits.length,
+      !followUpHits.length &&
+      !promiseHits.length,
+    semanticRole,
     signals: [
       ...(approvalHits.length ? ["approval"] : []),
+      ...(approvalDecisionHits.length ? ["approval_decision"] : []),
+      ...(denialHits.length ? ["denial"] : []),
       ...(requestHits.length ? ["request"] : []),
       ...(followUpHits.length ? ["follow_up"] : []),
       ...(promiseHits.length ? ["promise"] : []),
+      ...(acknowledgementHits.length ? ["acknowledgement"] : []),
       ...(urgencyHits.length ? ["urgency"] : []),
       ...(questionSignal ? ["question"] : []),
       ...(resolutionHits.length ? ["resolved"] : []),
@@ -122,14 +209,14 @@ function resolveThresholds(sourceType) {
   };
 }
 
-function inferUserExpectedToAct(conversation, latestInbound) {
-  if (!latestInbound) return false;
+function inferMessageExpectedToAct(conversation, message) {
+  if (!message) return false;
 
-  if (latestInbound.addressedToCurrentUser || latestInbound.mentionedCurrentUser) {
+  if (message.addressedToCurrentUser || message.mentionedCurrentUser) {
     return true;
   }
 
-  if (latestInbound.replyToCurrentUser || latestInbound.inReplyToCurrentUser) {
+  if (message.replyToCurrentUser || message.inReplyToCurrentUser) {
     return true;
   }
 
@@ -155,11 +242,311 @@ function inferUserExpectedToAct(conversation, latestInbound) {
   return false;
 }
 
+function inferUserExpectedToAct(conversation, latestInbound) {
+  return inferMessageExpectedToAct(conversation, latestInbound);
+}
+
+function hasActionIntent(intent = {}) {
+  return Boolean(
+    intent.hasApproval ||
+      intent.hasQuestion ||
+      intent.hasRequest ||
+      intent.hasFollowUp
+  );
+}
+
+function hasOwnershipSignal(intent = {}) {
+  return Boolean(
+    (intent.hasPromise || intent.hasAcknowledgement) &&
+      !intent.hasQuestion &&
+      !intent.hasRequest
+  );
+}
+
+function isActionableState(actionState) {
+  return (
+    actionState === ACTION_STATES.WAITING_ON_YOUR_REPLY ||
+    actionState === ACTION_STATES.NEEDS_APPROVAL ||
+    actionState === ACTION_STATES.NEEDS_FOLLOW_UP
+  );
+}
+
+function findPriorMessage(messages = [], startIndex, predicate) {
+  for (let index = startIndex - 1; index >= 0; index -= 1) {
+    if (predicate(messages[index], index)) {
+      return messages[index];
+    }
+  }
+  return null;
+}
+
+function buildResponsibilityAnalysis(conversation, sortedMessages = []) {
+  const meaningfulMessages = sortedMessages
+    .filter(isMeaningfulMessage)
+    .map((message) => {
+      const intent = detectIntent(message.text || message.previewText || "");
+      const userExpectedToAct = inferMessageExpectedToAct(conversation, message);
+      const addressedToCurrentUser = Boolean(
+        message.addressedToCurrentUser ||
+          message.mentionedCurrentUser ||
+          message.replyToCurrentUser ||
+          message.inReplyToCurrentUser
+      );
+
+      return {
+        ...message,
+        intent,
+        userExpectedToAct,
+        addressedToCurrentUser,
+        asksCurrentUser:
+          message.direction === "inbound" &&
+          userExpectedToAct &&
+          hasActionIntent(intent),
+        asksOtherParty:
+          message.direction === "outbound" &&
+          hasActionIntent(intent),
+        takesOwnership:
+          message.direction === "inbound" &&
+          message.senderType === "human" &&
+          hasOwnershipSignal(intent),
+      };
+    });
+
+  const latestMeaningful =
+    meaningfulMessages[meaningfulMessages.length - 1] || null;
+  const latestInbound =
+    [...meaningfulMessages]
+      .reverse()
+      .find((message) => message.direction === "inbound") || null;
+  const latestOutbound =
+    [...meaningfulMessages]
+      .reverse()
+      .find((message) => message.direction === "outbound") || null;
+  const latestInboundAsk =
+    [...meaningfulMessages].reverse().find((message) => message.asksCurrentUser) ||
+    null;
+  const latestOutboundAsk =
+    [...meaningfulMessages]
+      .reverse()
+      .find((message) => message.asksOtherParty) || null;
+
+  let responsibilityMessage = latestMeaningful;
+  let responsibilityReason = latestMeaningful ? "latest_meaningful" : "none";
+  let currentActor = "none";
+  let responsibilityShifted = false;
+  let anchorMessage = null;
+
+  for (let index = meaningfulMessages.length - 1; index >= 0; index -= 1) {
+    const message = meaningfulMessages[index];
+    const priorInboundAsk = findPriorMessage(
+      meaningfulMessages,
+      index,
+      (candidate) => candidate.asksCurrentUser
+    );
+    const priorOutboundAsk = findPriorMessage(
+      meaningfulMessages,
+      index,
+      (candidate) => candidate.asksOtherParty
+    );
+
+    if (
+      message.direction === "outbound" &&
+      message.intent.hasPromise &&
+      priorInboundAsk &&
+      priorInboundAsk.timestamp < message.timestamp
+    ) {
+      responsibilityMessage = message;
+      responsibilityReason = "promised_follow_up";
+      currentActor = "current_user";
+      anchorMessage = priorInboundAsk;
+      break;
+    }
+
+    if (
+      message.direction === "inbound" &&
+      message.takesOwnership &&
+      priorOutboundAsk &&
+      priorOutboundAsk.timestamp < message.timestamp
+    ) {
+      responsibilityMessage = message;
+      responsibilityReason = "ownership_reply";
+      currentActor = "other";
+      responsibilityShifted = true;
+      anchorMessage = priorOutboundAsk;
+      break;
+    }
+
+    if (
+      message.direction === "inbound" &&
+      message.takesOwnership &&
+      priorInboundAsk &&
+      priorInboundAsk.timestamp < message.timestamp
+    ) {
+      responsibilityMessage = message;
+      responsibilityReason = "peer_ownership_reply";
+      currentActor = "other";
+      responsibilityShifted = true;
+      anchorMessage = priorInboundAsk;
+      break;
+    }
+
+    if (
+      message.direction === "inbound" &&
+      message.intent.resolvesPreviousRequest &&
+      priorOutboundAsk &&
+      priorOutboundAsk.timestamp < message.timestamp
+    ) {
+      responsibilityMessage = message;
+      responsibilityReason = "resolved_reply";
+      currentActor = "none";
+      anchorMessage = priorOutboundAsk;
+      break;
+    }
+
+    if (
+      message.direction === "inbound" &&
+      message.intent.resolvesPreviousRequest &&
+      priorInboundAsk &&
+      priorInboundAsk.timestamp < message.timestamp
+    ) {
+      responsibilityMessage = message;
+      responsibilityReason = "resolved_reply";
+      currentActor = "none";
+      anchorMessage = priorInboundAsk;
+      break;
+    }
+
+    if (message.asksCurrentUser) {
+      responsibilityMessage = message;
+      responsibilityReason = "direct_ask";
+      currentActor = "current_user";
+      anchorMessage = message;
+      break;
+    }
+
+    if (message.direction === "outbound" && message.asksOtherParty) {
+      responsibilityMessage = message;
+      responsibilityReason = "outbound_request";
+      currentActor = "other";
+      anchorMessage = message;
+      break;
+    }
+
+    if (
+      message.direction === "outbound" &&
+      priorInboundAsk &&
+      priorInboundAsk.timestamp < message.timestamp
+    ) {
+      responsibilityMessage = message;
+      responsibilityReason = "user_replied";
+      currentActor = "other";
+      anchorMessage = priorInboundAsk;
+      break;
+    }
+
+    if (
+      message.direction === "inbound" &&
+      priorOutboundAsk &&
+      priorOutboundAsk.timestamp < message.timestamp
+    ) {
+      if (message.asksCurrentUser) {
+        responsibilityMessage = message;
+        responsibilityReason = "counter_request";
+        currentActor = "current_user";
+        anchorMessage = message;
+        break;
+      }
+
+      if (message.intent.looksResolved) {
+        responsibilityMessage = message;
+        responsibilityReason = "resolved_reply";
+        currentActor = "none";
+        anchorMessage = priorOutboundAsk;
+        break;
+      }
+
+      responsibilityMessage = message;
+      responsibilityReason = message.intent.hasAcknowledgement
+        ? "acknowledged_reply"
+        : "other_replied";
+      currentActor = "other";
+      responsibilityShifted = Boolean(
+        message.takesOwnership || message.intent.hasAcknowledgement
+      );
+      anchorMessage = priorOutboundAsk;
+      break;
+    }
+
+    if (message.intent.looksResolved) {
+      responsibilityMessage = message;
+      responsibilityReason = "resolved";
+      currentActor = "none";
+      anchorMessage = message;
+      break;
+    }
+
+    if (
+      message.direction === "inbound" &&
+      conversation?.sourceMetadata?.isGroup &&
+      !message.userExpectedToAct &&
+      !hasActionIntent(message.intent)
+    ) {
+      responsibilityMessage = message;
+      responsibilityReason = "group_noise";
+      currentActor = "none";
+      anchorMessage = message;
+      break;
+    }
+  }
+
+  return {
+    meaningfulMessages,
+    latestMeaningful,
+    latestInbound,
+    latestOutbound,
+    latestInboundAsk,
+    latestOutboundAsk,
+    latestMeaningfulIntent: latestMeaningful?.intent || detectIntent(""),
+    latestInboundIntent: latestInbound?.intent || detectIntent(""),
+    latestOutboundIntent: latestOutbound?.intent || detectIntent(""),
+    mentionedCurrentUser: Boolean(
+      latestInbound?.mentionedCurrentUser || latestMeaningful?.mentionedCurrentUser
+    ),
+    addressedToCurrentUser: Boolean(
+      latestInbound?.addressedToCurrentUser ||
+        latestMeaningful?.addressedToCurrentUser ||
+        conversation?.sourceMetadata?.directRecipient ||
+        conversation?.sourceMetadata?.isDirect ||
+        conversation?.sourceMetadata?.assignedToCurrentUser
+    ),
+    userExpectedToAct:
+      responsibilityMessage?.userExpectedToAct ||
+      latestInboundAsk?.userExpectedToAct ||
+      inferUserExpectedToAct(conversation, latestInbound),
+    userRepliedAfterLatestInbound: Boolean(
+      latestInbound && latestOutbound && latestOutbound.timestamp > latestInbound.timestamp
+    ),
+    responsibilityMessage,
+    responsibilityIntent: responsibilityMessage?.intent || detectIntent(""),
+    responsibilityReason,
+    responsibilityShifted,
+    currentActor,
+    anchorMessage,
+    latestInboundTakesOwnership: Boolean(
+      responsibilityMessage &&
+        responsibilityMessage.direction === "inbound" &&
+        responsibilityReason === "ownership_reply"
+    ),
+  };
+}
+
 function buildActionReason(actionState, details = {}) {
   const {
     latestInboundIntent = {},
     latestMeaningfulIntent = {},
     latestInbound = null,
+    responsibilityIntent = {},
+    responsibilityReason = "",
     mentionedCurrentUser = false,
     promisedFollowUp = false,
     responsibilityShifted = false,
@@ -170,25 +557,25 @@ function buildActionReason(actionState, details = {}) {
 
   if (actionState === ACTION_STATES.NEEDS_APPROVAL) {
     if (mentionedCurrentUser) {
-      return "Approval was requested from you directly and no reply has been sent.";
+      return "Latest message asks for your approval directly.";
     }
-    return "Approval requested in the most recent inbound message.";
+    return "Latest message asks for your approval.";
   }
 
   if (actionState === ACTION_STATES.WAITING_ON_YOUR_REPLY) {
     if (mentionedCurrentUser) {
-      return "You were mentioned directly and no reply has been sent.";
+      return "You were directly asked to respond and have not replied yet.";
     }
     if (latestInboundIntent.hasApproval) {
-      return "Latest message asks for confirmation or sign-off and you have not replied.";
+      return "Latest message asks for confirmation or sign-off.";
     }
     if (latestInboundIntent.hasQuestion) {
-      return "This thread is waiting on your response to a direct question.";
+      return "This conversation is waiting on your reply to a direct question.";
     }
     if (latestInboundIntent.hasFollowUp) {
-      return "A follow-up came in and the conversation still appears to be waiting on you.";
+      return "You were directly asked for an update in the latest follow-up.";
     }
-    return "Latest inbound message contains a direct ask and you have not replied.";
+    return "This conversation is waiting on your reply.";
   }
 
   if (actionState === ACTION_STATES.NEEDS_FOLLOW_UP) {
@@ -196,19 +583,29 @@ function buildActionReason(actionState, details = {}) {
       return "You previously committed to send an update and the follow-up still looks open.";
     }
     if (latestInboundIntent.hasFollowUp || latestInboundIntent.hasQuestion || latestInboundIntent.hasRequest) {
-      return "This conversation still appears to be waiting on your response and now needs follow-up.";
+      return "This conversation still appears to be waiting on you and now needs follow-up.";
     }
     return "The thread still looks unresolved and likely needs you to re-engage.";
   }
 
   if (actionState === ACTION_STATES.WAITING_ON_OTHERS) {
     if (responsibilityShifted) {
-      return "Latest reply acknowledges the request and takes ownership of the next step.";
+      return "The other person has acknowledged and is taking the next step.";
+    }
+    if (responsibilityReason === "acknowledged_reply") {
+      return "The other person acknowledged the request, so the next move appears to be on their side.";
     }
     if (userRepliedAfterLatestInbound) {
       return "You already replied; next action appears to be on the other side.";
     }
-    if (latestMeaningfulIntent.hasQuestion || latestMeaningfulIntent.hasRequest || latestMeaningfulIntent.hasApproval) {
+    if (
+      latestMeaningfulIntent.hasQuestion ||
+      latestMeaningfulIntent.hasRequest ||
+      latestMeaningfulIntent.hasApproval ||
+      responsibilityIntent.hasQuestion ||
+      responsibilityIntent.hasRequest ||
+      responsibilityIntent.hasApproval
+    ) {
       return "You made the latest actionable move and are currently waiting on someone else.";
     }
     if (userExpectedToAct) {
@@ -226,6 +623,32 @@ function buildActionReason(actionState, details = {}) {
   }
 
   return "This looks informational and does not require action.";
+}
+
+function buildResolvedReason(details = {}) {
+  const {
+    latestMeaningfulIntent = {},
+    responsibilityIntent = {},
+    responsibilityReason = "",
+  } = details;
+
+  if (latestMeaningfulIntent.hasApprovalDecision || responsibilityIntent.hasApprovalDecision) {
+    return "Latest reply approved the request.";
+  }
+
+  if (latestMeaningfulIntent.hasDenial || responsibilityIntent.hasDenial) {
+    return "Latest reply denied or closed the request.";
+  }
+
+  if (
+    responsibilityReason === "resolved_reply" ||
+    latestMeaningfulIntent.resolvesPreviousRequest ||
+    responsibilityIntent.resolvesPreviousRequest
+  ) {
+    return "Latest reply answered the previous ask.";
+  }
+
+  return "This request appears resolved.";
 }
 
 function buildConfidenceBand(value) {
@@ -282,11 +705,11 @@ function computePriorityBoost(actionState, details = {}) {
   return clamp(base + recencyBoost + signalBoost, 0, 98);
 }
 
-function buildNoActionState(conversation, payload = {}, nowMs = Date.now()) {
-  const confidence = computeConfidence(ACTION_STATES.NO_ACTION_NEEDED, payload);
+function buildBaseState(conversation, actionState, payload = {}, nowMs = Date.now()) {
   const latestMeaningful = payload.latestMeaningful || null;
   const latestInbound = payload.latestInbound || null;
   const latestOutbound = payload.latestOutbound || null;
+  const confidence = computeConfidence(actionState, payload);
 
   return {
     id: `comm:${conversation.sourceType}:${conversation.conversationId}`,
@@ -305,12 +728,23 @@ function buildNoActionState(conversation, payload = {}, nowMs = Date.now()) {
     hasApprovalIntent: Boolean(payload.latestInboundIntent?.hasApproval),
     hasFollowUpIntent: Boolean(payload.latestInboundIntent?.hasFollowUp),
     hasMentionOfCurrentUser: Boolean(payload.mentionedCurrentUser),
-    actionState: ACTION_STATES.NO_ACTION_NEEDED,
-    actionStateLabel: ACTION_STATE_META[ACTION_STATES.NO_ACTION_NEEDED].label,
-    actionReason: buildActionReason(ACTION_STATES.NO_ACTION_NEEDED, payload),
+    currentActor: payload.currentActor || "none",
+    responsibilityShifted: Boolean(payload.responsibilityShifted),
+    surfaceEligible: isActionableState(actionState),
+    actionState,
+    actionStateLabel: ACTION_STATE_META[actionState].label,
+    actionReason: buildActionReason(actionState, payload),
     confidence,
     confidenceBand: buildConfidenceBand(confidence),
-    priorityBoost: 0,
+    priorityBoost:
+      actionState === ACTION_STATES.NO_ACTION_NEEDED
+        ? 0
+        : computePriorityBoost(actionState, {
+            ...payload,
+            nowMs,
+            latestInboundTimestamp: payload.latestInboundTimestamp || latestInbound?.timestamp || null,
+            latestMessageTimestamp: payload.latestMessageTimestamp || latestMeaningful?.timestamp || null,
+          }),
     excludedReason: payload.excludedReason || "",
     participantLabel:
       conversation.participantLabel ||
@@ -328,87 +762,110 @@ function buildNoActionState(conversation, payload = {}, nowMs = Date.now()) {
   };
 }
 
+function buildNoActionState(conversation, payload = {}, nowMs = Date.now()) {
+  return buildBaseState(
+    conversation,
+    ACTION_STATES.NO_ACTION_NEEDED,
+    payload,
+    nowMs
+  );
+}
+
+function buildClassifiedState(conversation, actionState, payload = {}, nowMs = Date.now()) {
+  return buildBaseState(conversation, actionState, payload, nowMs);
+}
+
 function classifyConversation(conversation, options = {}) {
   const nowMs = options.nowMs || Date.now();
   const thresholds = resolveThresholds(conversation?.sourceType);
   const sortedMessages = [...(conversation?.messages || [])]
-    .map((message) => ({
-      ...message,
-      timestamp: toTimestamp(message.timestamp),
-      text: normalizeText(message.text || message.previewText || ""),
-    }))
+    .map((message) => {
+      const cleanedText = stripQuotedReplyText(
+        message.text || message.previewText || "",
+        conversation?.sourceType
+      );
+      return {
+        ...message,
+        timestamp: toTimestamp(message.timestamp),
+        text: cleanedText,
+        previewText: cleanedText,
+      };
+    })
     .filter((message) => message.timestamp)
     .sort((a, b) => a.timestamp - b.timestamp);
-
-  const meaningfulMessages = sortedMessages.filter(isMeaningfulMessage);
-  const latestMeaningful = meaningfulMessages[meaningfulMessages.length - 1] || null;
-  const latestInbound =
-    [...meaningfulMessages].reverse().find((message) => message.direction === "inbound") ||
-    null;
-  const latestOutbound =
-    [...meaningfulMessages].reverse().find((message) => message.direction === "outbound") ||
-    null;
+  const analysis = buildResponsibilityAnalysis(conversation, sortedMessages);
+  const {
+    latestMeaningful,
+    latestInbound,
+    latestOutbound,
+    latestMeaningfulIntent,
+    latestInboundIntent,
+    latestOutboundIntent,
+    mentionedCurrentUser,
+    addressedToCurrentUser,
+    userExpectedToAct,
+    userRepliedAfterLatestInbound,
+    responsibilityMessage,
+    responsibilityIntent,
+    responsibilityReason,
+    responsibilityShifted,
+    currentActor,
+    latestInboundTakesOwnership,
+  } = analysis;
 
   if (!conversation || !latestMeaningful) {
     return buildNoActionState(conversation || { sourceType: "other", conversationId: "unknown" }, {}, nowMs);
   }
 
-  const latestMeaningfulIntent = detectIntent(latestMeaningful.text);
-  const latestInboundIntent = detectIntent(latestInbound?.text || "");
-  const latestOutboundIntent = detectIntent(latestOutbound?.text || "");
-  const mentionedCurrentUser = Boolean(
-    latestInbound?.mentionedCurrentUser || latestMeaningful?.mentionedCurrentUser
-  );
-  const addressedToCurrentUser = Boolean(
-    latestInbound?.addressedToCurrentUser ||
-      latestMeaningful?.addressedToCurrentUser ||
-      conversation?.sourceMetadata?.directRecipient ||
-      conversation?.sourceMetadata?.isDirect ||
-      conversation?.sourceMetadata?.assignedToCurrentUser
-  );
-  const userExpectedToAct = inferUserExpectedToAct(conversation, latestInbound);
-  const userRepliedAfterLatestInbound = Boolean(
-    latestInbound && latestOutbound && latestOutbound.timestamp > latestInbound.timestamp
-  );
-  const priorOutboundRequestedAction = Boolean(
-    latestOutbound &&
-      latestInbound &&
-      latestOutbound.timestamp < latestInbound.timestamp &&
-      (
-        latestOutboundIntent.hasApproval ||
-        latestOutboundIntent.hasQuestion ||
-        latestOutboundIntent.hasRequest ||
-        latestOutboundIntent.hasFollowUp
-      )
-  );
-  const latestInboundTakesOwnership = Boolean(
-    latestInbound &&
-      latestMeaningful &&
-      latestMeaningful.id === latestInbound.id &&
-      latestInbound.direction === "inbound" &&
-      latestInboundIntent.hasPromise &&
-      !latestInboundIntent.hasQuestion &&
-      !latestInboundIntent.hasRequest &&
-      priorOutboundRequestedAction
-  );
-
   const latestInboundAgeHours = hoursSince(latestInbound?.timestamp, nowMs);
   const latestOutboundAgeHours = hoursSince(latestOutbound?.timestamp, nowMs);
   const latestNoiseText = normalizeLower(latestMeaningful.text || latestMeaningful.previewText || "");
+  const responsibilityAgeHours = hoursSince(responsibilityMessage?.timestamp, nowMs);
+  const promisedFollowUp = Boolean(
+    responsibilityReason === "promised_follow_up" &&
+      latestOutbound &&
+      responsibilityMessage?.id === latestOutbound.id &&
+      latestOutboundAgeHours !== null &&
+      latestOutboundAgeHours >= thresholds.promiseFollowUpHours
+  );
+  const latestInboundNeedsReply = Boolean(
+    currentActor === "current_user" &&
+      responsibilityMessage?.direction === "inbound" &&
+      responsibilityMessage?.id === latestInbound?.id &&
+      hasActionIntent(latestInboundIntent) &&
+      !userRepliedAfterLatestInbound
+  );
+
+  const basePayload = {
+    conversation,
+    latestMeaningful,
+    latestInbound,
+    latestOutbound,
+    latestMeaningfulIntent,
+    latestInboundIntent,
+    latestOutboundIntent,
+    responsibilityIntent,
+    responsibilityReason,
+    addressedToCurrentUser,
+    mentionedCurrentUser,
+    userExpectedToAct,
+    userRepliedAfterLatestInbound,
+    responsibilityShifted,
+    currentActor,
+  };
+  const conversationResolved = Boolean(
+    latestMeaningfulIntent.looksResolved ||
+      responsibilityIntent.resolvesPreviousRequest ||
+      responsibilityReason === "resolved_reply" ||
+      responsibilityReason === "resolved"
+  );
 
   const excludedReason = conversation?.sourceMetadata?.excludedReason || "";
   if (excludedReason) {
     return buildNoActionState(
       conversation,
       {
-        latestMeaningful,
-        latestInbound,
-        latestOutbound,
-        latestInboundIntent,
-        latestMeaningfulIntent,
-        addressedToCurrentUser,
-        mentionedCurrentUser,
-        userRepliedAfterLatestInbound,
+        ...basePayload,
         excludedReason,
       },
       nowMs
@@ -419,14 +876,7 @@ function classifyConversation(conversation, options = {}) {
     return buildNoActionState(
       conversation,
       {
-        latestMeaningful,
-        latestInbound,
-        latestOutbound,
-        latestInboundIntent,
-        latestMeaningfulIntent,
-        addressedToCurrentUser,
-        mentionedCurrentUser,
-        userRepliedAfterLatestInbound,
+        ...basePayload,
         excludedReason: "This looks like a login or verification message and does not require action.",
       },
       nowMs
@@ -437,14 +887,7 @@ function classifyConversation(conversation, options = {}) {
     return buildNoActionState(
       conversation,
       {
-        latestMeaningful,
-        latestInbound,
-        latestOutbound,
-        latestInboundIntent,
-        latestMeaningfulIntent,
-        addressedToCurrentUser,
-        mentionedCurrentUser,
-        userRepliedAfterLatestInbound,
+        ...basePayload,
         excludedReason: "This looks like broadcast or announcement traffic with no action expected from you.",
       },
       nowMs
@@ -467,40 +910,32 @@ function classifyConversation(conversation, options = {}) {
     return buildNoActionState(
       conversation,
       {
-        latestMeaningful,
-        latestInbound,
-        latestOutbound,
-        latestInboundIntent,
-        latestMeaningfulIntent,
-        addressedToCurrentUser,
-        mentionedCurrentUser,
-        userRepliedAfterLatestInbound,
+        ...basePayload,
         excludedReason: "This looks automated and does not require action.",
       },
       nowMs
     );
   }
 
-  if (latestMeaningfulIntent.looksResolved) {
+  if (conversationResolved) {
     return buildNoActionState(
       conversation,
       {
-        latestMeaningful,
-        latestInbound,
-        latestOutbound,
-        latestInboundIntent,
-        latestMeaningfulIntent,
-        addressedToCurrentUser,
-        mentionedCurrentUser,
-        userRepliedAfterLatestInbound,
-        excludedReason: "This conversation looks resolved and does not require action.",
+        ...basePayload,
+        excludedReason: buildResolvedReason({
+          ...basePayload,
+          latestMeaningfulIntent,
+          responsibilityIntent,
+          responsibilityReason,
+        }),
       },
       nowMs
     );
   }
 
   if (
-    latestInbound &&
+    currentActor === "current_user" &&
+    responsibilityMessage?.direction === "inbound" &&
     latestInboundIntent.hasApproval &&
     !latestInboundTakesOwnership &&
     !userRepliedAfterLatestInbound &&
@@ -508,154 +943,26 @@ function classifyConversation(conversation, options = {}) {
     latestInboundAgeHours !== null &&
     latestInboundAgeHours <= thresholds.approvalWindowHours
   ) {
-    const confidence = computeConfidence(ACTION_STATES.NEEDS_APPROVAL, {
+    return buildClassifiedState(
       conversation,
-      latestInbound,
-      latestInboundIntent,
-      latestMeaningfulIntent,
-      addressedToCurrentUser,
-      mentionedCurrentUser,
-      userExpectedToAct,
-    });
-
-    return {
-      id: `comm:${conversation.sourceType}:${conversation.conversationId}`,
-      sourceType: conversation.sourceType,
-      conversationId: conversation.conversationId,
-      conversationTitle: conversation.conversationTitle || "Conversation",
-      threadId: conversation.threadId || null,
-      latestMessageTimestamp: latestMeaningful.timestamp,
-      latestInboundTimestamp: latestInbound.timestamp,
-      latestOutboundTimestamp: latestOutbound?.timestamp || null,
-      latestSenderType: latestMeaningful.senderType || "unknown",
-      latestDirection: latestMeaningful.direction || "unknown",
-      addressedToCurrentUser,
-      userRepliedAfterLatestInbound,
-      hasDirectQuestion: Boolean(latestInboundIntent.hasQuestion),
-      hasApprovalIntent: true,
-      hasFollowUpIntent: Boolean(latestInboundIntent.hasFollowUp),
-      hasMentionOfCurrentUser: mentionedCurrentUser,
-      actionState: ACTION_STATES.NEEDS_APPROVAL,
-      actionStateLabel: ACTION_STATE_META[ACTION_STATES.NEEDS_APPROVAL].label,
-      actionReason: buildActionReason(ACTION_STATES.NEEDS_APPROVAL, {
-        latestInboundIntent,
-        latestMeaningfulIntent,
-        latestInbound,
-        mentionedCurrentUser,
-      }),
-      confidence,
-      confidenceBand: buildConfidenceBand(confidence),
-      priorityBoost: computePriorityBoost(ACTION_STATES.NEEDS_APPROVAL, {
-        nowMs,
-        latestInboundTimestamp: latestInbound.timestamp,
-        latestMessageTimestamp: latestMeaningful.timestamp,
-        latestInboundIntent,
-        latestMeaningfulIntent,
-        mentionedCurrentUser,
-        conversation,
-      }),
-      excludedReason: "",
-      participantLabel:
-        conversation.participantLabel ||
-        conversation.sourceMetadata?.participantLabel ||
-        "",
-      previewText:
-        conversation.previewText ||
-        latestInbound.text ||
-        latestMeaningful.text ||
-        "",
-      sourceMetadata: conversation.sourceMetadata || {},
-      platformMetadata: conversation.platformMetadata || {},
-      openContext: conversation.openContext || {},
-      generatedAt: new Date(nowMs).toISOString(),
-    };
+      ACTION_STATES.NEEDS_APPROVAL,
+      basePayload,
+      nowMs
+    );
   }
-
-  const latestInboundNeedsReply = Boolean(
-    latestInbound &&
-      !latestInboundTakesOwnership &&
-      !userRepliedAfterLatestInbound &&
-      userExpectedToAct &&
-      (latestInboundIntent.hasQuestion ||
-        latestInboundIntent.hasRequest ||
-        latestInboundIntent.hasFollowUp)
-  );
 
   if (
     latestInboundNeedsReply &&
     latestInboundAgeHours !== null &&
     latestInboundAgeHours <= thresholds.replyWindowHours
   ) {
-    const confidence = computeConfidence(ACTION_STATES.WAITING_ON_YOUR_REPLY, {
+    return buildClassifiedState(
       conversation,
-      latestInbound,
-      latestInboundIntent,
-      latestMeaningfulIntent,
-      addressedToCurrentUser,
-      mentionedCurrentUser,
-      userExpectedToAct,
-    });
-
-    return {
-      id: `comm:${conversation.sourceType}:${conversation.conversationId}`,
-      sourceType: conversation.sourceType,
-      conversationId: conversation.conversationId,
-      conversationTitle: conversation.conversationTitle || "Conversation",
-      threadId: conversation.threadId || null,
-      latestMessageTimestamp: latestMeaningful.timestamp,
-      latestInboundTimestamp: latestInbound.timestamp,
-      latestOutboundTimestamp: latestOutbound?.timestamp || null,
-      latestSenderType: latestMeaningful.senderType || "unknown",
-      latestDirection: latestMeaningful.direction || "unknown",
-      addressedToCurrentUser,
-      userRepliedAfterLatestInbound,
-      hasDirectQuestion: Boolean(latestInboundIntent.hasQuestion),
-      hasApprovalIntent: Boolean(latestInboundIntent.hasApproval),
-      hasFollowUpIntent: Boolean(latestInboundIntent.hasFollowUp),
-      hasMentionOfCurrentUser: mentionedCurrentUser,
-      actionState: ACTION_STATES.WAITING_ON_YOUR_REPLY,
-      actionStateLabel: ACTION_STATE_META[ACTION_STATES.WAITING_ON_YOUR_REPLY].label,
-      actionReason: buildActionReason(ACTION_STATES.WAITING_ON_YOUR_REPLY, {
-        latestInboundIntent,
-        latestMeaningfulIntent,
-        latestInbound,
-        mentionedCurrentUser,
-      }),
-      confidence,
-      confidenceBand: buildConfidenceBand(confidence),
-      priorityBoost: computePriorityBoost(ACTION_STATES.WAITING_ON_YOUR_REPLY, {
-        nowMs,
-        latestInboundTimestamp: latestInbound.timestamp,
-        latestMessageTimestamp: latestMeaningful.timestamp,
-        latestInboundIntent,
-        latestMeaningfulIntent,
-        mentionedCurrentUser,
-        conversation,
-      }),
-      excludedReason: "",
-      participantLabel:
-        conversation.participantLabel ||
-        conversation.sourceMetadata?.participantLabel ||
-        "",
-      previewText:
-        conversation.previewText ||
-        latestInbound.text ||
-        latestMeaningful.text ||
-        "",
-      sourceMetadata: conversation.sourceMetadata || {},
-      platformMetadata: conversation.platformMetadata || {},
-      openContext: conversation.openContext || {},
-      generatedAt: new Date(nowMs).toISOString(),
-    };
+      ACTION_STATES.WAITING_ON_YOUR_REPLY,
+      basePayload,
+      nowMs
+    );
   }
-
-  const promisedFollowUp = Boolean(
-    latestOutbound &&
-      latestOutboundIntent.hasPromise &&
-      latestOutboundAgeHours !== null &&
-      latestOutboundAgeHours >= thresholds.promiseFollowUpHours &&
-      (!latestInbound || latestOutbound.timestamp >= latestInbound.timestamp)
-  );
 
   if (
     (latestInboundNeedsReply &&
@@ -663,163 +970,34 @@ function classifyConversation(conversation, options = {}) {
       latestInboundAgeHours <= thresholds.followUpWindowHours) ||
     promisedFollowUp
   ) {
-    const confidence = computeConfidence(ACTION_STATES.NEEDS_FOLLOW_UP, {
+    return buildClassifiedState(
       conversation,
-      latestInbound,
-      latestInboundIntent,
-      latestMeaningfulIntent: latestOutboundIntent,
-      addressedToCurrentUser,
-      mentionedCurrentUser,
-      userExpectedToAct,
-      latestMeaningfulIntent,
-    });
-
-    return {
-      id: `comm:${conversation.sourceType}:${conversation.conversationId}`,
-      sourceType: conversation.sourceType,
-      conversationId: conversation.conversationId,
-      conversationTitle: conversation.conversationTitle || "Conversation",
-      threadId: conversation.threadId || null,
-      latestMessageTimestamp: latestMeaningful.timestamp,
-      latestInboundTimestamp: latestInbound?.timestamp || null,
-      latestOutboundTimestamp: latestOutbound?.timestamp || null,
-      latestSenderType: latestMeaningful.senderType || "unknown",
-      latestDirection: latestMeaningful.direction || "unknown",
-      addressedToCurrentUser,
-      userRepliedAfterLatestInbound,
-      hasDirectQuestion: Boolean(latestInboundIntent.hasQuestion),
-      hasApprovalIntent: Boolean(latestInboundIntent.hasApproval),
-      hasFollowUpIntent: Boolean(latestInboundIntent.hasFollowUp || promisedFollowUp),
-      hasMentionOfCurrentUser: mentionedCurrentUser,
-      actionState: ACTION_STATES.NEEDS_FOLLOW_UP,
-      actionStateLabel: ACTION_STATE_META[ACTION_STATES.NEEDS_FOLLOW_UP].label,
-      actionReason: buildActionReason(ACTION_STATES.NEEDS_FOLLOW_UP, {
-        latestInboundIntent,
-        latestMeaningfulIntent: latestOutboundIntent,
-        latestInbound,
+      ACTION_STATES.NEEDS_FOLLOW_UP,
+      {
+        ...basePayload,
         promisedFollowUp,
-      }),
-      confidence,
-      confidenceBand: buildConfidenceBand(confidence),
-      priorityBoost: computePriorityBoost(ACTION_STATES.NEEDS_FOLLOW_UP, {
-        nowMs,
-        latestInboundTimestamp: latestInbound?.timestamp || latestOutbound?.timestamp || null,
-        latestMessageTimestamp: latestMeaningful.timestamp,
-        latestInboundIntent,
-        latestMeaningfulIntent: latestOutboundIntent,
-        mentionedCurrentUser,
-        conversation,
-      }),
-      excludedReason: "",
-      participantLabel:
-        conversation.participantLabel ||
-        conversation.sourceMetadata?.participantLabel ||
-        "",
-      previewText:
-        conversation.previewText ||
-        latestInbound?.text ||
-        latestOutbound?.text ||
-        latestMeaningful.text ||
-        "",
-      sourceMetadata: conversation.sourceMetadata || {},
-      platformMetadata: conversation.platformMetadata || {},
-      openContext: conversation.openContext || {},
-      generatedAt: new Date(nowMs).toISOString(),
-    };
+      },
+      nowMs
+    );
   }
 
-  const latestOutboundAsksForSomething = Boolean(
-    latestMeaningful.direction === "outbound" &&
-      (latestMeaningfulIntent.hasQuestion ||
-        latestMeaningfulIntent.hasRequest ||
-        latestMeaningfulIntent.hasApproval)
-  );
-
   if (
-    latestInboundTakesOwnership ||
-    userRepliedAfterLatestInbound ||
-    (latestOutboundAsksForSomething &&
-      latestOutboundAgeHours !== null &&
-      latestOutboundAgeHours <= thresholds.waitingOnOthersWindowHours)
+    currentActor === "other" &&
+    responsibilityAgeHours !== null &&
+    responsibilityAgeHours <= thresholds.waitingOnOthersWindowHours
   ) {
-    const confidence = computeConfidence(ACTION_STATES.WAITING_ON_OTHERS, {
+    return buildClassifiedState(
       conversation,
-      latestInbound,
-      latestInboundIntent,
-      latestMeaningfulIntent,
-      addressedToCurrentUser,
-      mentionedCurrentUser,
-      userExpectedToAct,
-      userRepliedAfterLatestInbound,
-    });
-
-    return {
-      id: `comm:${conversation.sourceType}:${conversation.conversationId}`,
-      sourceType: conversation.sourceType,
-      conversationId: conversation.conversationId,
-      conversationTitle: conversation.conversationTitle || "Conversation",
-      threadId: conversation.threadId || null,
-      latestMessageTimestamp: latestMeaningful.timestamp,
-      latestInboundTimestamp: latestInbound?.timestamp || null,
-      latestOutboundTimestamp: latestOutbound?.timestamp || null,
-      latestSenderType: latestMeaningful.senderType || "unknown",
-      latestDirection: latestMeaningful.direction || "unknown",
-      addressedToCurrentUser,
-      userRepliedAfterLatestInbound,
-      hasDirectQuestion: Boolean(latestInboundIntent.hasQuestion || latestMeaningfulIntent.hasQuestion),
-      hasApprovalIntent: Boolean(latestInboundIntent.hasApproval || latestMeaningfulIntent.hasApproval),
-      hasFollowUpIntent: Boolean(latestInboundIntent.hasFollowUp),
-      hasMentionOfCurrentUser: mentionedCurrentUser,
-      actionState: ACTION_STATES.WAITING_ON_OTHERS,
-      actionStateLabel: ACTION_STATE_META[ACTION_STATES.WAITING_ON_OTHERS].label,
-      actionReason: buildActionReason(ACTION_STATES.WAITING_ON_OTHERS, {
-        latestInboundIntent,
-        latestMeaningfulIntent,
-        latestInbound,
-        responsibilityShifted: latestInboundTakesOwnership,
-        userRepliedAfterLatestInbound,
-        userExpectedToAct,
-      }),
-      confidence,
-      confidenceBand: buildConfidenceBand(confidence),
-      priorityBoost: computePriorityBoost(ACTION_STATES.WAITING_ON_OTHERS, {
-        nowMs,
-        latestInboundTimestamp: latestInbound?.timestamp || latestOutbound?.timestamp || null,
-        latestMessageTimestamp: latestMeaningful.timestamp,
-        latestInboundIntent,
-        latestMeaningfulIntent,
-        mentionedCurrentUser,
-        conversation,
-      }),
-      excludedReason: "",
-      participantLabel:
-        conversation.participantLabel ||
-        conversation.sourceMetadata?.participantLabel ||
-        "",
-      previewText:
-        conversation.previewText ||
-        latestMeaningful.text ||
-        latestInbound?.text ||
-        "",
-      sourceMetadata: conversation.sourceMetadata || {},
-      platformMetadata: conversation.platformMetadata || {},
-      openContext: conversation.openContext || {},
-      generatedAt: new Date(nowMs).toISOString(),
-    };
+      ACTION_STATES.WAITING_ON_OTHERS,
+      basePayload,
+      nowMs
+    );
   }
 
   return buildNoActionState(
     conversation,
     {
-      conversation,
-      latestMeaningful,
-      latestInbound,
-      latestOutbound,
-      latestInboundIntent,
-      latestMeaningfulIntent,
-      addressedToCurrentUser,
-      mentionedCurrentUser,
-      userRepliedAfterLatestInbound,
+      ...basePayload,
       excludedReason:
         userExpectedToAct || latestInboundIntent.isInformational
           ? ""
@@ -864,9 +1042,11 @@ module.exports = {
   clamp,
   normalizeText,
   normalizeLower,
+  stripQuotedReplyText,
   toTimestamp,
   hoursSince,
   detectIntent,
+  buildResponsibilityAnalysis,
   classifyConversation,
   summarizeActionStates,
   resolveThresholds,

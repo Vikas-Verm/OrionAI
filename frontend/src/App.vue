@@ -15,7 +15,7 @@
 
         <!-- ── Integration settings (inside main, sidebar stays visible) ── -->
         <IntegrationsPage v-if="showingIntegrations" :key="`integrations-${store.user?.username || 'anon'}`" @close="showingIntegrations = false; activeModule = null"
-          @connected="sidebarRef?.refreshConnected?.()" @openModule="onOpenModuleFromSettings" />
+          @connected="sidebarRef?.refreshConnected?.($event)" @openModule="onOpenModuleFromSettings" />
 
         <!-- ── Module pages (inside main, sidebar stays visible) ── -->
         <TelegramPage v-else-if="activeModule === 'telegram'" @close="closeModule" />

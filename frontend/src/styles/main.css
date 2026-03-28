@@ -573,8 +573,11 @@
      align-items: center;
      height: auto;
      min-height: 100%;
+     width: 100%;
+     align-self: stretch;
      padding: 0 24px 28px;
      box-sizing: border-box;
+     background: var(--bg-base);
    }
    
    .empty-state--workspace {

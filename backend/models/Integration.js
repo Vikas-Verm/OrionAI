@@ -80,6 +80,9 @@ const integrationSchema = new mongoose.Schema({
   // ── Telegram MTProto ───────────────────────────────────────────────────────
   telegram: {
     sessionString: { type: String, default: "" },
+    pendingSessionString: { type: String, default: "" },
+    phoneCodeHash: { type: String, default: "" },
+    pendingPhone: { type: String, default: "" },
     phone: { type: String, default: "" },
     username: { type: String, default: "" },
     firstName: { type: String, default: "" },

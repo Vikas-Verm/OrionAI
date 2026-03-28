@@ -1170,6 +1170,7 @@ const selectedProject = ref('')
 const activeSprint   = ref(null)
 const boardScope     = ref('all')
 const overdueOnly    = ref(false)
+const blockedOnly    = ref(false)
 const priorityBucket = ref('')
 
 // Filters
@@ -1276,6 +1277,19 @@ const sprintNames = computed(() => {
   const s = new Set(allTickets.value.map(t => t.sprint).filter(Boolean))
   return [...s].sort()
 })
+
+function isBlockedJiraTicket(ticket = {}) {
+  const haystack = [
+    ticket.status,
+    ...(ticket.labels || []),
+    ticket.title,
+  ]
+    .join(' ')
+    .toLowerCase()
+
+  return /blocked|waiting|dependency|stuck/.test(haystack)
+}
+
 const filteredTickets = computed(() => {
   let list = allTickets.value
   if (searchQ.value) {
@@ -1290,6 +1304,7 @@ const filteredTickets = computed(() => {
   if (filterType.value.length)     list = list.filter(t => filterType.value.includes(t.type))
   if (filterAssignee.value.length) list = list.filter(t => filterAssignee.value.includes(t.assignee))
   if (filterSprint.value)          list = list.filter(t => t.sprint === filterSprint.value)
+  if (blockedOnly.value)           list = list.filter(isBlockedJiraTicket)
   return list
 })
 
@@ -1561,6 +1576,7 @@ function applyBriefingContext() {
 
   boardScope.value = context.scope || 'all'
   overdueOnly.value = Boolean(context.overdueOnly)
+  blockedOnly.value = Boolean(context.blockedOnly)
   priorityBucket.value = context.priorityBucket || ''
   activeTab.value = context.activeTab || 'list'
   searchQ.value = context.searchQuery || ''

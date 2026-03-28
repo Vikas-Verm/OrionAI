@@ -567,7 +567,7 @@ async function toolGetMyTickets(params, ctx) {
   /* -------------------------------------------------- */
   const issues = res.data?.issues || [];
   const tickets = issues.map(formatTicket);
-  const count = tickets.length;
+  const count = Number(res.data?.total) || tickets.length;
 
   if (!count) {
     return {

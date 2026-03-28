@@ -7,6 +7,8 @@ const axios = require("axios");
 const Integration = require("../models/Integration");
 const { getOAuthConfig } = require("../services/googleOAuthConfig");
 const { buildKolkataMonthBounds } = require("../services/calendarWindowUtils");
+const { resolveCalendarAttendees } = require("../services/calendarAttendeeResolver");
+const { refreshUsersSignals } = require("../services/liveSignalRefresh");
 
 async function getCalendarClient(userId) {
   const doc = await Integration.findOne({
@@ -27,13 +29,16 @@ async function getCalendarClient(userId) {
     clientSecret: oauth.clientSecret,
   };
   const accessToken = await refreshAccessToken(cfg);
-  return axios.create({
-    baseURL: "https://www.googleapis.com/calendar/v3",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-  });
+  return {
+    client: axios.create({
+      baseURL: "https://www.googleapis.com/calendar/v3",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    }),
+    integration: doc,
+  };
 }
 
 async function refreshAccessToken(cfg) {
@@ -84,7 +89,7 @@ function formatEvent(ev) {
 // GET /api/calendar/events?month=3&year=2026
 exports.getEvents = async (req, res) => {
   try {
-    const cal = await getCalendarClient(req.user?.username);
+    const { client: cal } = await getCalendarClient(req.user?.username);
     const month = parseInt(req.query.month) || new Date().getMonth() + 1;
     const year = parseInt(req.query.year) || new Date().getFullYear();
     const monthBounds = buildKolkataMonthBounds(year, month);
@@ -177,7 +182,9 @@ function googleColorId(hex) {
 // POST /api/calendar/events — body: { title, start, end, meet?, attendees? }
 exports.createEvent = async (req, res) => {
   try {
-    const cal = await getCalendarClient(req.user?.username);
+    const { client: cal, integration } = await getCalendarClient(
+      req.user?.username
+    );
     const {
       title,
       start,
@@ -206,12 +213,10 @@ exports.createEvent = async (req, res) => {
       ? { date: end }
       : { dateTime: end, timeZone: tz };
 
-    // attendees can be either strings ("a@b.com") or objects ({ email, name })
-    const attendeeObjs = attendees.map((e) =>
-      typeof e === "string"
-        ? { email: e }
-        : { email: e.email, ...(e.name ? { displayName: e.name } : {}) }
-    );
+    const attendeeResolution = await resolveCalendarAttendees(attendees, {
+      selfEmail: integration?.googleCalendar?.userEmail || "",
+    });
+    const attendeeObjs = attendeeResolution.attendees;
     const body = {
       summary: title,
       start: startObj,
@@ -228,9 +233,13 @@ exports.createEvent = async (req, res) => {
       };
       params.conferenceDataVersion = 1;
     }
-    if (attendees.length) params.sendUpdates = "all";
+    if (attendeeObjs.length) params.sendUpdates = "all";
 
     const r = await cal.post("/calendars/primary/events", body, { params });
+    await refreshUsersSignals([
+      req.user?.username,
+      ...attendeeResolution.resolvedUserIds,
+    ]);
     res.json({ event: formatEvent(r.data), success: true });
   } catch (err) {
     console.error("Calendar create error:", err.message);
@@ -241,7 +250,7 @@ exports.createEvent = async (req, res) => {
 // DELETE /api/calendar/events/:eventId
 exports.deleteEvent = async (req, res) => {
   try {
-    const cal = await getCalendarClient(req.user?.username);
+    const { client: cal } = await getCalendarClient(req.user?.username);
     await cal.delete(`/calendars/primary/events/${req.params.eventId}`);
     res.json({ success: true });
   } catch (err) {

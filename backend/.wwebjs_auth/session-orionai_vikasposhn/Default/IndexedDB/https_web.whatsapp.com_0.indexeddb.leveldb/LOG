@@ -1,0 +1,14 @@
+2026/03/28-09:40:07.475 25221 Creating DB /Users/apple/Desktop/ai-knowledge-assistant/backend/.wwebjs_auth/session-orionai_vikasposhn/Default/IndexedDB/https_web.whatsapp.com_0.indexeddb.leveldb since it was missing.
+2026/03/28-09:40:07.479 25221 Reusing MANIFEST /Users/apple/Desktop/ai-knowledge-assistant/backend/.wwebjs_auth/session-orionai_vikasposhn/Default/IndexedDB/https_web.whatsapp.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/03/28-10:57:43.817 25223 Level-0 table #5: started
+2026/03/28-10:57:43.855 25223 Level-0 table #5: 1129000 bytes OK
+2026/03/28-10:57:43.860 25223 Delete type=0 #3
+2026/03/28-13:40:57.795 25223 Level-0 table #7: started
+2026/03/28-13:40:57.844 25223 Level-0 table #7: 825369 bytes OK
+2026/03/28-13:40:57.848 25223 Delete type=0 #4
+2026/03/28-13:41:43.700 25223 Compacting 1@1 + 1@2 files
+2026/03/28-13:41:43.724 25223 Generated table #8@1: 10151 keys, 802565 bytes
+2026/03/28-13:41:43.724 25223 Compacted 1@1 + 1@2 files => 802565 bytes
+2026/03/28-13:41:43.726 25223 compacted to: files[ 0 0 1 0 0 0 0 ]
+2026/03/28-13:41:43.727 25223 Delete type=2 #7
+2026/03/28-13:41:43.727 25223 Delete type=2 #5

@@ -455,7 +455,7 @@
           <button class="tg-auth-btn" @click="submitCode" :disabled="authLoading">
             <span v-if="authLoading" class="tg-spin-sm"></span><span v-else>Verify →</span>
           </button>
-          <button class="tg-auth-back" @click="authStep='phone'">← Change number</button>
+          <button class="tg-auth-back" @click="resetTelegramAuthFlow()">← Change number</button>
           <div v-if="authError" class="tg-auth-err">{{ authError }}</div>
         </div>
 
@@ -582,9 +582,6 @@
               <div class="tg-dlg-top">
                 <span class="tg-dlg-name">{{ d.name }}</span>
                 <div class="tg-dlg-meta">
-                  <span v-if="telegramActionState(d.id)" class="tg-action-chip" :class="`state-${telegramActionState(d.id).actionState}`">
-                    {{ telegramActionState(d.id).actionStateLabel }}
-                  </span>
                   <span class="tg-dlg-date">{{ fmtDate(d.lastDate) }}</span>
                 </div>
               </div>
@@ -992,6 +989,38 @@ import { store, setModuleContext } from '../stores/app'
 const authStep = ref('loading')
 const authPhone = ref(''), authCode = ref(''), authPwd = ref('')
 const authLoading = ref(false), authError = ref('')
+const TELEGRAM_PENDING_AUTH_KEY = 'telegramPendingAuth'
+
+function loadPendingTelegramAuth() {
+  try {
+    const raw = sessionStorage.getItem(TELEGRAM_PENDING_AUTH_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+function savePendingTelegramAuth(payload) {
+  try {
+    if (!payload) {
+      sessionStorage.removeItem(TELEGRAM_PENDING_AUTH_KEY)
+      return
+    }
+    sessionStorage.setItem(TELEGRAM_PENDING_AUTH_KEY, JSON.stringify(payload))
+  } catch {}
+}
+
+function resetTelegramAuthFlow() {
+  savePendingTelegramAuth(null)
+  authCode.value = ''
+  authPwd.value = ''
+  authError.value = ''
+  authStep.value = 'phone'
+}
+
+function notifyIntegrationsUpdated() {
+  window.dispatchEvent(new CustomEvent('orion:integrations-updated'))
+}
 
 // ── Core data ──────────────────────────────────────────────────────────
 const me = ref(null)
@@ -1186,10 +1215,6 @@ function applyLiveUnreadBadges() {
   })
 }
 
-function telegramActionState(conversationId) {
-  return telegramActionMap.value[String(conversationId)] || null
-}
-
 async function applyModuleContext() {
   const context = store.moduleContext
   if (!context || context.module !== 'telegram') return
@@ -1211,6 +1236,8 @@ onMounted(async () => {
   try {
     const r = await api.get('/api/telegram/me')
     if (r.data?.authorized) {
+      savePendingTelegramAuth(null)
+      notifyIntegrationsUpdated()
       me.value = r.data
       authStep.value = 'done'
       await loadDlgs()
@@ -1218,8 +1245,16 @@ onMounted(async () => {
       await applyModuleContext()
       startPolling()
     }
-    else authStep.value = 'phone'
-  } catch { authStep.value = 'phone' }
+    else {
+      const pending = loadPendingTelegramAuth()
+      authPhone.value = pending?.phoneNumber || authPhone.value
+      authStep.value = pending?.pendingAuthToken ? 'code' : 'phone'
+    }
+  } catch {
+    const pending = loadPendingTelegramAuth()
+    authPhone.value = pending?.phoneNumber || authPhone.value
+    authStep.value = pending?.pendingAuthToken ? 'code' : 'phone'
+  }
 
   document.addEventListener('click', docClick)
 })
@@ -1285,28 +1320,61 @@ function applyAccent(a) {
 // ── Auth ──────────────────────────────────────────────────────────────
 async function submitPhone() {
   authError.value = ''; authLoading.value = true
-  try { await api.post('/api/telegram/auth/phone', { phoneNumber: authPhone.value }); authStep.value = 'code' }
+  try {
+    const r = await api.post('/api/telegram/auth/phone', { phoneNumber: authPhone.value })
+    savePendingTelegramAuth({
+      phoneNumber: r.data?.pendingPhone || authPhone.value,
+      pendingAuthToken: r.data?.pendingAuthToken || '',
+    })
+    authStep.value = 'code'
+  }
   catch (e) { authError.value = e.response?.data?.error || 'Failed to send code' }
   finally { authLoading.value = false }
 }
 async function submitCode() {
   authError.value = ''; authLoading.value = true
   try {
-    const r = await api.post('/api/telegram/auth/code', { code: authCode.value })
-    if (r.data.needsPassword) authStep.value = 'password'
+    const pending = loadPendingTelegramAuth()
+    const r = await api.post('/api/telegram/auth/code', {
+      code: authCode.value,
+      phoneNumber: pending?.phoneNumber || authPhone.value,
+      pendingAuthToken: pending?.pendingAuthToken || '',
+    })
+    if (r.data.needsPassword) {
+      savePendingTelegramAuth(null)
+      authStep.value = 'password'
+    }
     else {
+      savePendingTelegramAuth(null)
+      notifyIntegrationsUpdated()
       me.value = r.data
       authStep.value = 'done'
       await loadDlgs()
       await refreshTelegramActions()
     }
-  } catch (e) { authError.value = e.response?.data?.error || 'Invalid code' }
+  } catch (e) {
+    const rawMsg = e.response?.data?.error || 'Invalid code'
+    if (/PHONE_CODE_EXPIRED/i.test(rawMsg)) {
+      savePendingTelegramAuth(null)
+      authCode.value = ''
+      authError.value = 'Code expired. Please request a new Telegram code.'
+      authStep.value = 'phone'
+      return
+    }
+    const msg = rawMsg
+    authError.value = msg
+    if (/re-enter your phone number/i.test(msg)) {
+      resetTelegramAuthFlow()
+    }
+  }
   finally { authLoading.value = false }
 }
 async function submitPassword() {
   authError.value = ''; authLoading.value = true
   try {
     const r = await api.post('/api/telegram/auth/password', { password: authPwd.value })
+    savePendingTelegramAuth(null)
+    notifyIntegrationsUpdated()
     me.value = r.data
     authStep.value = 'done'
     await loadDlgs()
@@ -1318,7 +1386,9 @@ async function submitPassword() {
 async function logout() {
   closeModal(); showDrawer.value = false; showMore.value = false
   try { await api.delete('/api/telegram/session') } catch {}
-  me.value = null; dialogs.value = []; msgs.value = []; selDlg.value = null; authStep.value = 'phone'
+  notifyIntegrationsUpdated()
+  resetTelegramAuthFlow()
+  me.value = null; dialogs.value = []; msgs.value = []; selDlg.value = null
 }
 
 // ── Contacts ──────────────────────────────────────────────────────────
@@ -2356,18 +2426,6 @@ function fIconCol(n = '') { return EX[(n.split('.').pop() || '').toLowerCase()] 
 .tg-dlg-name { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tg-dlg-date { font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
 .tg-dlg-prev { font-size: 12.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tg-action-chip {
-  display: inline-flex; align-items: center; justify-content: center;
-  padding: 3px 7px; border-radius: 999px;
-  font-size: 9px; font-weight: 700;
-  background: rgba(148,163,184,.16);
-  color: var(--text-secondary);
-}
-.tg-action-chip.state-waiting_on_your_reply { background: rgba(245,158,11,.14); color: #b45309; }
-.tg-action-chip.state-needs_approval { background: rgba(239,68,68,.14); color: #b91c1c; }
-.tg-action-chip.state-needs_follow_up { background: rgba(14,165,233,.14); color: #0369a1; }
-.tg-action-chip.state-waiting_on_others { background: rgba(16,185,129,.14); color: #047857; }
-
 /* ── CHAT PANE ── */
 .tg-chat-pane { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--bg-base); }
 .tg-empty-chat { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; }

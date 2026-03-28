@@ -23,9 +23,13 @@ router.post("/auth/phone", authenticate, async (req, res) => {
 
 router.post("/auth/code", authenticate, async (req, res) => {
   try {
-    const { code } = req.body;
+    const { code, phoneNumber, phoneCodeHash, pendingAuthToken } = req.body;
     if (!code) return res.status(400).json({ error: "code is required" });
-    const result = await tg.verifyPhoneCode(req.user?.username, code);
+    const result = await tg.verifyPhoneCode(req.user?.username, code, {
+      phoneNumber,
+      phoneCodeHash,
+      pendingAuthToken,
+    });
     res.json(result);
   } catch (err) {
     console.error("TG auth/code:", err.message);

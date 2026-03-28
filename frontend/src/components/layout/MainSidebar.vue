@@ -318,6 +318,7 @@ const connectedApps = computed(() =>
       ...a,
       unread: unreadByApp[a.id]?.displayCount ?? unreadByApp[a.id]?.count ?? 0,
     }))
+    .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }))
 )
 
 const totalUnread = computed(() =>
@@ -340,6 +341,13 @@ function openApp(appId) {
   emit('openIntegration', appId)
 }
 
+function applyConnectedIntegrations(integrations = []) {
+  Object.keys(connectedMap).forEach(k => delete connectedMap[k])
+  for (const int of integrations) {
+    if (hasConnectedState(int)) connectedMap[int.type] = true
+  }
+}
+
 function hasConnectedState(int) {
   if (!int?.type) return false
   if (int.type === 'gmail') return Boolean(int.gmail?.refreshToken || int.gmail?.accessToken || int.gmail?.userEmail)
@@ -355,16 +363,22 @@ function hasConnectedState(int) {
   return int.enabled !== false
 }
 
-async function loadConnected() {
+async function loadConnected(integrations) {
+  if (Array.isArray(integrations)) {
+    applyConnectedIntegrations(integrations)
+    return
+  }
+
   try {
     const res = await api.get('/api/integrations')
-    Object.keys(connectedMap).forEach(k => delete connectedMap[k])
-    for (const int of res.data) {
-      if (hasConnectedState(int)) connectedMap[int.type] = true
-    }
+    applyConnectedIntegrations(res.data)
   } catch (e) {
     console.error('Sidebar: failed to load integrations', e)
   }
+}
+
+function handleIntegrationsUpdated(event) {
+  refreshConnected(event?.detail?.integrations)
 }
 
 function removeApp(id) {
@@ -418,22 +432,28 @@ function bellMeta(notification) {
   return parts.join(' · ')
 }
 
-const { getStatus, getErrorMessage, startAutoCheck, stopAutoCheck } = useIntegrationHealth()
+const { getStatus, getErrorMessage, startAutoCheck, stopAutoCheck, checkHealth } = useIntegrationHealth()
+
+async function refreshConnected(integrations) {
+  await loadConnected(integrations)
+  await checkHealth(true)
+}
+
 onMounted(async () => {
   document.addEventListener('click', onOutsideClick)
-  window.addEventListener('orion:integrations-updated', loadConnected)
+  window.addEventListener('orion:integrations-updated', handleIntegrationsUpdated)
   await loadConnected()
   startPolling()
   startAutoCheck()
 })
 onUnmounted(() => {
   document.removeEventListener('click', onOutsideClick)
-  window.removeEventListener('orion:integrations-updated', loadConnected)
+  window.removeEventListener('orion:integrations-updated', handleIntegrationsUpdated)
   stopPolling()
   stopAutoCheck()
 })
 
-defineExpose({ searchInputRef, refreshConnected: loadConnected })
+defineExpose({ searchInputRef, refreshConnected })
 </script>
 
 <style scoped>

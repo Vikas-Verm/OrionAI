@@ -2,6 +2,8 @@ const { google } = require("googleapis");
 const Integration = require("../../models/Integration");
 const Fuse = require("fuse.js");
 const { getOAuthConfig } = require("../googleOAuthConfig");
+const { resolveCalendarAttendees } = require("../calendarAttendeeResolver");
+const { refreshUsersSignals } = require("../liveSignalRefresh");
 const {
   buildKolkataDayBounds,
   APP_TIMEZONE,
@@ -209,7 +211,7 @@ async function calendarGetEvents(params, ctx) {
 
 // ── TOOL 4: calendar_create ───────────────────────────────────────────────────
 async function calendarCreate(params, ctx) {
-  const { calendar } = await getCalendarClient(ctx.userId);
+  const { calendar, int } = await getCalendarClient(ctx.userId);
   const {
     title,
     startDateTime,
@@ -225,12 +227,10 @@ async function calendarCreate(params, ctx) {
     ? new Date(endDateTime)
     : new Date(start.getTime() + durationMinutes * 60000);
 
-  // Safety net: extract emails from raw attendees if strings
-  const attendeeObjs = attendees
-    .map((a) =>
-      typeof a === "string" ? { email: a } : { email: a.email || a }
-    )
-    .filter((a) => a.email && a.email.includes("@"));
+  const attendeeResolution = await resolveCalendarAttendees(attendees, {
+    selfEmail: int?.googleCalendar?.userEmail || "",
+  });
+  const attendeeObjs = attendeeResolution.attendees;
 
   const event = {
     summary: title,
@@ -255,6 +255,7 @@ async function calendarCreate(params, ctx) {
   });
 
   const created = fmtEvent(res.data);
+  await refreshUsersSignals([ctx.userId, ...attendeeResolution.resolvedUserIds]);
   return {
     ...created,
     summary: `✅ Created "${created.title}" on ${created.date} at ${
@@ -263,13 +264,17 @@ async function calendarCreate(params, ctx) {
       attendeeObjs.length
         ? ` · Invited ${attendeeObjs.map((a) => a.email).join(", ")}`
         : ""
+    }${
+      attendeeResolution.unresolved.length
+        ? ` · Could not resolve ${attendeeResolution.unresolved.join(", ")}`
+        : ""
     }`,
   };
 }
 
 // ── TOOL 5: calendar_update ───────────────────────────────────────────────────
 async function calendarUpdate(params, ctx) {
-  const { calendar } = await getCalendarClient(ctx.userId);
+  const { calendar, int } = await getCalendarClient(ctx.userId);
   const { eventId, title, startDateTime, endDateTime, attendees } = params;
 
   let targetId = eventId;
@@ -305,7 +310,13 @@ async function calendarUpdate(params, ctx) {
       dateTime: new Date(endDateTime).toISOString(),
       timeZone: APP_TIMEZONE,
     };
-  if (attendees) patch.attendees = attendees.map((e) => ({ email: e }));
+  let attendeeResolution = null;
+  if (attendees) {
+    attendeeResolution = await resolveCalendarAttendees(attendees, {
+      selfEmail: int?.googleCalendar?.userEmail || "",
+    });
+    patch.attendees = attendeeResolution.attendees;
+  }
 
   const updated = await calendar.events.update({
     calendarId: "primary",
@@ -313,7 +324,18 @@ async function calendarUpdate(params, ctx) {
     resource: patch,
   });
   const evt = fmtEvent(updated.data);
-  return { ...evt, summary: `✅ Updated "${evt.title}"` };
+  await refreshUsersSignals([
+    ctx.userId,
+    ...(attendeeResolution?.resolvedUserIds || []),
+  ]);
+  return {
+    ...evt,
+    summary: `✅ Updated "${evt.title}"${
+      attendeeResolution?.unresolved?.length
+        ? ` · Could not resolve ${attendeeResolution.unresolved.join(", ")}`
+        : ""
+    }`,
+  };
 }
 function normalizeTitle(title) {
   if (!title) return title;

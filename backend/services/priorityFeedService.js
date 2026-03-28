@@ -176,6 +176,45 @@ function sortByPriority(items = []) {
   });
 }
 
+function countItemsForFilter(items = [], filterId = "all") {
+  if (filterId === "all") return items.length;
+  if (filterId === "urgent") {
+    return items.filter((item) => item.priority === "High").length;
+  }
+  if (filterId === "communication") {
+    return items.filter((item) => item.category === "communication").length;
+  }
+  if (
+    [
+      ACTION_STATES.WAITING_ON_YOUR_REPLY,
+      ACTION_STATES.NEEDS_APPROVAL,
+      ACTION_STATES.NEEDS_FOLLOW_UP,
+      ACTION_STATES.WAITING_ON_OTHERS,
+    ].includes(filterId)
+  ) {
+    return items.filter((item) => item.actionState === filterId).length;
+  }
+  return items.filter((item) => item.category === filterId).length;
+}
+
+function buildPriorityFeedFilters(items = []) {
+  const definitions = [
+    { id: "all", label: "All" },
+    { id: "urgent", label: "Urgent" },
+    { id: "communication", label: "Comms" },
+    { id: ACTION_STATES.WAITING_ON_YOUR_REPLY, label: "Replies" },
+    { id: ACTION_STATES.NEEDS_APPROVAL, label: "Approvals" },
+    { id: ACTION_STATES.NEEDS_FOLLOW_UP, label: "Follow-ups" },
+    { id: "meetings", label: "Meetings" },
+    { id: "tasks", label: "Tasks" },
+  ];
+
+  return definitions.map((definition) => ({
+    ...definition,
+    count: countItemsForFilter(items, definition.id),
+  }));
+}
+
 function isItemReactivatedSinceAction(item, latestAction) {
   const latestRelevant =
     item?.meta?.latestMessageAt ||
@@ -431,6 +470,10 @@ async function buildJiraWorkspaceSignals(userId) {
     myTicketsResult.status === "fulfilled" && myTicketsResult.value?.success !== false
       ? myTicketsResult.value?.tickets || []
       : [];
+  const myTotalCount =
+    myTicketsResult.status === "fulfilled" && myTicketsResult.value?.success !== false
+      ? Number(myTicketsResult.value?.count || myTickets.length)
+      : myTickets.length;
   const overdueInfo =
     overdueResult.status === "fulfilled" ? overdueResult.value || null : null;
 
@@ -472,44 +515,12 @@ async function buildJiraWorkspaceSignals(userId) {
     personalItems,
     insight: overdueInfo
       ? {
+          myTotalCount,
           myOverdueCount: overdueInfo.myCount || 0,
           orgOverdueCount: overdueInfo.count || 0,
           blockedOverdueCount,
           highPriorityOverdueCount,
           definition: "Using the existing Jira due-date overdue logic in your current integration.",
-          quickActions: [
-            {
-              id: "jira-my-overdue",
-              label: "View my overdue tickets",
-              action: createModuleAction("View my overdue tickets", "jira", {
-                scope: "mine",
-                overdueOnly: true,
-                activeTab: "list",
-                focus: "my-overdue",
-              }),
-            },
-            {
-              id: "jira-org-overdue",
-              label: "View org overdue tickets",
-              action: createModuleAction("View org overdue tickets", "jira", {
-                scope: "all",
-                overdueOnly: true,
-                activeTab: "list",
-                focus: "org-overdue",
-              }),
-            },
-            {
-              id: "jira-critical-overdue",
-              label: "Show critical overdue only",
-              action: createModuleAction("Show critical overdue only", "jira", {
-                scope: "mine",
-                overdueOnly: true,
-                priorityBucket: "high",
-                activeTab: "list",
-                focus: "critical-overdue",
-              }),
-            },
-          ],
         }
       : null,
   };
@@ -844,16 +855,7 @@ async function getHomeDashboard(userId) {
     priorityFeed: {
       title: "Priority Feed",
       items: activeItems,
-      filters: [
-        { id: "all", label: "All" },
-        { id: "urgent", label: "Urgent" },
-        { id: "communication", label: "Comms" },
-        { id: ACTION_STATES.WAITING_ON_YOUR_REPLY, label: "Replies" },
-        { id: ACTION_STATES.NEEDS_APPROVAL, label: "Approvals" },
-        { id: ACTION_STATES.NEEDS_FOLLOW_UP, label: "Follow-ups" },
-        { id: "meetings", label: "Meetings" },
-        { id: "tasks", label: "Tasks" },
-      ],
+      filters: buildPriorityFeedFilters(activeItems),
       auditTrail: recentActions.map(mapAuditEntry),
       emptyState: {
         title: "You're clear right now.",
@@ -902,4 +904,8 @@ async function recordPriorityFeedAction(userId, payload = {}) {
 module.exports = {
   getHomeDashboard,
   recordPriorityFeedAction,
+  __test: {
+    buildPriorityFeedFilters,
+    countItemsForFilter,
+  },
 };

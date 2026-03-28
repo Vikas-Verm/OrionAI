@@ -14,6 +14,7 @@ export function useCommunicationActions(source) {
   const loading = ref(false)
   const payload = ref(null)
   const items = ref([])
+  const allItems = ref([])
 
   const groups = computed(() => payload.value?.groups || [])
   const counts = computed(() => payload.value?.counts || {})
@@ -23,9 +24,11 @@ export function useCommunicationActions(source) {
   )
   const stateByConversationId = computed(() => {
     const map = {}
-    actionableItems.value.forEach((item) => {
-      map[String(item.conversationId)] = item
-    })
+    actionableItems.value
+      .filter((item) => item.actionState !== 'waiting_on_others')
+      .forEach((item) => {
+        map[String(item.conversationId)] = item
+      })
     return map
   })
 
@@ -37,6 +40,7 @@ export function useCommunicationActions(source) {
       })
       payload.value = data
       items.value = Array.isArray(data.states) ? data.states : []
+      allItems.value = Array.isArray(data.allStates) ? data.allStates : items.value
     } catch (err) {
       console.debug(`Communication actions unavailable for ${source}:`, err.message)
     } finally {
@@ -65,6 +69,7 @@ export function useCommunicationActions(source) {
     loading,
     payload,
     items,
+    allItems,
     groups,
     counts,
     summaryText,

@@ -128,7 +128,7 @@ const SENSITIVE_FIELDS = {
   gmail: ["accessToken", "refreshToken", "clientSecret"],
   google_calendar: ["accessToken", "refreshToken", "clientSecret"],
   slack: ["userToken", "botToken", "accessToken", "clientSecret"],
-  telegram: ["sessionString", "apiHash"],
+  telegram: ["sessionString", "pendingSessionString", "apiHash"],
   whatsapp: ["sessionData"],
   jira: ["apiToken"],
   notion: ["apiToken"],

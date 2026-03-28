@@ -192,9 +192,9 @@ const primaryText = computed(() => {
 
 const secondaryText = computed(() => {
   if (props.loading) return 'Checking for reply, approval, and follow-up signals.'
-  if (!actionableCount.value) {
-    return '0 waiting • 0 approvals • 0 follow-ups'
-  }
+  // if (!actionableCount.value) {
+  //   return '0 waiting • 0 approvals • 0 follow-ups'
+  // }
   if (countSummary.value) return countSummary.value
   if (props.summaryText) return props.summaryText
   return ''

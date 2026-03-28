@@ -71,36 +71,74 @@
 
       <div class="jira-insight-grid">
         <article class="jira-insight-card primary">
-          <span class="jira-insight-label">Your overdue tickets</span>
-          <strong>{{ jiraInsight.myOverdueCount }}</strong>
-          <p>Personally assigned Jira work that is already overdue.</p>
+          <span class="jira-insight-label">Your tickets</span>
+          <div class="jira-insight-stat-stack">
+            <div class="jira-insight-stat-row">
+              <span class="jira-insight-stat-copy">Total Tickets</span>
+              <button
+                v-if="isInteractiveJiraCount(jiraInsight.myTotalCount)"
+                type="button"
+                class="jira-insight-count clickable"
+                @click="openJiraInsightFilter({ scope: 'mine', focus: 'my-tickets' })"
+              >
+                {{ jiraInsight.myTotalCount }}
+              </button>
+              <strong v-else class="jira-insight-count">{{ jiraInsight.myTotalCount }}</strong>
+            </div>
+            <div class="jira-insight-stat-row">
+              <span class="jira-insight-stat-copy">Overdue Tickets</span>
+              <button
+                v-if="isInteractiveJiraCount(jiraInsight.myOverdueCount)"
+                type="button"
+                class="jira-insight-count clickable"
+                @click="openJiraInsightFilter({ scope: 'mine', overdueOnly: true, focus: 'my-overdue' })"
+              >
+                {{ jiraInsight.myOverdueCount }}
+              </button>
+              <strong v-else class="jira-insight-count">{{ jiraInsight.myOverdueCount }}</strong>
+            </div>
+          </div>
+          <p>Personally assigned Jira work, with overdue tickets called out separately.</p>
         </article>
         <article class="jira-insight-card org">
           <span class="jira-insight-label">Org overdue tickets</span>
-          <strong>{{ jiraInsight.orgOverdueCount }}</strong>
+          <button
+            v-if="isInteractiveJiraCount(jiraInsight.orgOverdueCount)"
+            type="button"
+            class="jira-insight-count clickable"
+            @click="openJiraInsightFilter({ scope: 'all', overdueOnly: true, focus: 'org-overdue' })"
+          >
+            {{ jiraInsight.orgOverdueCount }}
+          </button>
+          <strong v-else class="jira-insight-count">{{ jiraInsight.orgOverdueCount }}</strong>
           <p>Overall overdue count in the connected Jira workspace scope.</p>
         </article>
         <article class="jira-insight-card compact blocked">
           <span class="jira-insight-label">Blocked overdue</span>
-          <strong>{{ jiraInsight.blockedOverdueCount }}</strong>
+          <button
+            v-if="isInteractiveJiraCount(jiraInsight.blockedOverdueCount)"
+            type="button"
+            class="jira-insight-count clickable"
+            @click="openJiraInsightFilter({ scope: 'all', overdueOnly: true, blockedOnly: true, focus: 'blocked-overdue' })"
+          >
+            {{ jiraInsight.blockedOverdueCount }}
+          </button>
+          <strong v-else class="jira-insight-count">{{ jiraInsight.blockedOverdueCount }}</strong>
           <p>Overdue tickets that also look blocked or stuck.</p>
         </article>
         <article class="jira-insight-card compact high-priority">
           <span class="jira-insight-label">High-priority overdue</span>
-          <strong>{{ jiraInsight.highPriorityOverdueCount }}</strong>
+          <button
+            v-if="isInteractiveJiraCount(jiraInsight.highPriorityOverdueCount)"
+            type="button"
+            class="jira-insight-count clickable"
+            @click="openJiraInsightFilter({ scope: 'all', overdueOnly: true, priorityBucket: 'high', focus: 'high-priority-overdue' })"
+          >
+            {{ jiraInsight.highPriorityOverdueCount }}
+          </button>
+          <strong v-else class="jira-insight-count">{{ jiraInsight.highPriorityOverdueCount }}</strong>
           <p>Overdue tickets already marked high or highest priority.</p>
         </article>
-      </div>
-
-      <div class="jira-insight-actions">
-        <button
-          v-for="action in jiraInsight.quickActions || []"
-          :key="action.id"
-          class="briefing-suggestion jira-insight-action"
-          @click="triggerAction(action.action)"
-        >
-          <span class="briefing-suggestion-label">{{ action.label }}</span>
-        </button>
       </div>
     </section>
 
@@ -124,7 +162,10 @@
           :class="{ active: activeFilter === filter.id }"
           @click="activeFilter = filter.id"
         >
-          {{ filter.label }}
+          <span>{{ filter.label }}</span>
+          <span v-if="Number(filter.count || 0) > 0" class="priority-filter-count">
+            {{ filterCountLabel(filter.count) }}
+          </span>
         </button>
       </div>
 
@@ -236,14 +277,14 @@ const fallbackSuggestions = [
 
 const dailyBriefing = computed(() => dashboard.value?.dailyBriefing || {})
 const filters = computed(() => dashboard.value?.priorityFeed?.filters || [
-  { id: 'all', label: 'All' },
-  { id: 'urgent', label: 'Urgent' },
-  { id: 'communication', label: 'Comms' },
-  { id: 'waiting_on_your_reply', label: 'Replies' },
-  { id: 'needs_approval', label: 'Approvals' },
-  { id: 'needs_follow_up', label: 'Follow-ups' },
-  { id: 'meetings', label: 'Meetings' },
-  { id: 'tasks', label: 'Tasks' },
+  { id: 'all', label: 'All', count: 0 },
+  { id: 'urgent', label: 'Urgent', count: 0 },
+  { id: 'communication', label: 'Comms', count: 0 },
+  { id: 'waiting_on_your_reply', label: 'Replies', count: 0 },
+  { id: 'needs_approval', label: 'Approvals', count: 0 },
+  { id: 'needs_follow_up', label: 'Follow-ups', count: 0 },
+  { id: 'meetings', label: 'Meetings', count: 0 },
+  { id: 'tasks', label: 'Tasks', count: 0 },
 ])
 
 const briefingTitle = computed(() => dailyBriefing.value.title || props.fallbackTitle)
@@ -339,12 +380,37 @@ function triggerAction(action) {
   emit('usePrompt', { prompt: action.prompt || '', mode: action.mode || 'agent' })
 }
 
+function isInteractiveJiraCount(value) {
+  return Number(value || 0) > 0
+}
+
+function buildJiraInsightAction(context = {}) {
+  return {
+    kind: 'module',
+    module: 'jira',
+    context: {
+      activeTab: 'list',
+      ...context,
+    },
+  }
+}
+
+function openJiraInsightFilter(context = {}) {
+  triggerAction(buildJiraInsightAction(context))
+}
+
 function runPrimaryAction(item) {
   triggerAction(item.action)
 }
 
 function runSecondaryAction(item) {
   triggerAction(item.secondaryAction)
+}
+
+function filterCountLabel(value) {
+  const count = Number(value || 0)
+  if (count <= 0) return ''
+  return count > 9 ? '9+' : String(count)
 }
 
 function applyActionResult(itemId, entry) {
@@ -727,7 +793,8 @@ onUnmounted(() => {
 }
 
 .priority-summary-card strong,
-.jira-insight-card strong {
+.jira-insight-card strong,
+.jira-insight-count {
   font-size: 30px;
   line-height: 1;
 }
@@ -782,19 +849,55 @@ onUnmounted(() => {
   color: rgba(191, 219, 254, 0.78);
 }
 
-.jira-insight-card p {
-  color: rgba(226, 232, 240, 0.76);
-  line-height: 1.55;
-}
-
-.jira-insight-actions {
+.jira-insight-stat-stack {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 10px;
 }
 
-.jira-insight-action {
-  min-width: auto;
+.jira-insight-stat-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.jira-insight-stat-copy {
+  color: rgba(226, 232, 240, 0.76);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.jira-insight-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-weight: 700;
+  text-align: right;
+}
+
+.jira-insight-count.clickable {
+  cursor: pointer;
+  transition: transform 160ms ease, opacity 160ms ease;
+}
+
+.jira-insight-count.clickable:hover {
+  transform: translateY(-1px);
+  opacity: 0.86;
+}
+
+.jira-insight-count.clickable:active {
+  transform: translateY(0);
+}
+
+.jira-insight-card p {
+  color: rgba(226, 232, 240, 0.76);
+  line-height: 1.55;
 }
 
 .priority-summary-label {
@@ -839,6 +942,9 @@ onUnmounted(() => {
 }
 
 .priority-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   min-height: 36px;
   padding: 0 14px;
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -852,6 +958,24 @@ onUnmounted(() => {
   border-color: rgba(99, 102, 241, 0.24);
   background: rgba(99, 102, 241, 0.16);
   color: #eef2ff;
+}
+
+.priority-filter-count {
+  min-width: 14px;
+  height: 14px;
+  padding: 0 2px;
+  border-radius: 7px;
+  background: #6366f1;
+  color: #fff;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  border: 1.5px solid var(--bg-surface, #0f1117);
+}
+
+.priority-filter-chip.active .priority-filter-count {
+  background: #6366f1;
 }
 
 .priority-feed-grid,
@@ -968,7 +1092,8 @@ onUnmounted(() => {
 :global([data-theme="light"]) .briefing-section-head h3,
 :global([data-theme="light"]) .priority-empty strong,
 :global([data-theme="light"]) .audit-trail-item strong,
-:global([data-theme="light"]) .jira-insight-card strong {
+:global([data-theme="light"]) .jira-insight-card strong,
+:global([data-theme="light"]) .jira-insight-count {
   color: #0f172a;
 }
 
@@ -979,6 +1104,7 @@ onUnmounted(() => {
 }
 
 :global([data-theme="light"]) .jira-insight-label,
+:global([data-theme="light"]) .jira-insight-stat-copy,
 :global([data-theme="light"]) .priority-summary-label,
 :global([data-theme="light"]) .briefing-suggestion-label,
 :global([data-theme="light"]) .audit-trail-badge,
@@ -1091,7 +1217,8 @@ onUnmounted(() => {
   :global([data-theme="system"]) .briefing-section-head h3,
   :global([data-theme="system"]) .priority-empty strong,
   :global([data-theme="system"]) .audit-trail-item strong,
-  :global([data-theme="system"]) .jira-insight-card strong {
+  :global([data-theme="system"]) .jira-insight-card strong,
+  :global([data-theme="system"]) .jira-insight-count {
     color: #0f172a;
   }
 
@@ -1102,6 +1229,7 @@ onUnmounted(() => {
   }
 
   :global([data-theme="system"]) .jira-insight-label,
+  :global([data-theme="system"]) .jira-insight-stat-copy,
   :global([data-theme="system"]) .priority-summary-label,
   :global([data-theme="system"]) .briefing-suggestion-label,
   :global([data-theme="system"]) .audit-trail-badge,

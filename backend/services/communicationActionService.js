@@ -13,6 +13,7 @@ const {
   summarizeActionStates,
   normalizeText,
   normalizeLower,
+  stripQuotedReplyText,
   toTimestamp,
   clamp,
 } = require("./communicationActionClassifier");
@@ -107,6 +108,46 @@ function splitEmails(value = "") {
     .filter(Boolean);
 }
 
+function gmailB64(data) {
+  if (!data) return "";
+  return Buffer.from(
+    String(data).replace(/-/g, "+").replace(/_/g, "/"),
+    "base64"
+  ).toString("utf-8");
+}
+
+function extractGmailBody(payload, mime) {
+  if (!payload) return "";
+  if (payload.mimeType === mime && payload.body?.data) {
+    return gmailB64(payload.body.data);
+  }
+  if (payload.parts) {
+    const hit = payload.parts.find((part) => part.mimeType === mime);
+    if (hit?.body?.data) return gmailB64(hit.body.data);
+    for (const part of payload.parts) {
+      const nested = extractGmailBody(part, mime);
+      if (nested) return nested;
+    }
+  }
+  return "";
+}
+
+function getNormalizedGmailMessageText(message, threadFallback = "") {
+  const plainText = extractGmailBody(message?.payload, "text/plain");
+  const htmlText = extractGmailBody(message?.payload, "text/html")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const rawText =
+    plainText ||
+    htmlText ||
+    message?.snippet ||
+    threadFallback ||
+    "";
+  const cleanedText = stripQuotedReplyText(rawText, "gmail");
+  return cleanedText || normalizeText(message?.snippet || threadFallback || "");
+}
+
 function isAutomatedEmail(headers = [], fromValue = "") {
   const haystack = normalizeLower(
     [
@@ -129,6 +170,41 @@ function matchesAny(text, patterns = []) {
   return patterns.some((pattern) => pattern.test(text));
 }
 
+function walkPayloadParts(payload, visitor) {
+  if (!payload) return;
+  visitor(payload);
+  if (Array.isArray(payload.parts)) {
+    payload.parts.forEach((part) => walkPayloadParts(part, visitor));
+  }
+}
+
+function buildGmailThreadHaystack(thread) {
+  const fragments = [thread?.snippet || ""];
+
+  for (const message of thread?.messages || []) {
+    const headers = message?.payload?.headers || [];
+    fragments.push(
+      getHeader(headers, "Subject"),
+      getHeader(headers, "From"),
+      getHeader(headers, "To"),
+      getHeader(headers, "Cc"),
+      getHeader(headers, "Reply-To"),
+      getHeader(headers, "Content-Class"),
+      getHeader(headers, "List-Unsubscribe"),
+      message?.snippet || ""
+    );
+
+    walkPayloadParts(message?.payload, (part) => {
+      fragments.push(
+        part?.mimeType || "",
+        part?.filename || ""
+      );
+    });
+  }
+
+  return normalizeLower(fragments.filter(Boolean).join(" "));
+}
+
 function determineSlackSenderType(message = {}) {
   if (message.bot_id || message.subtype === "bot_message") return "bot";
   if (message.subtype && message.subtype !== "thread_broadcast") return "system";
@@ -139,16 +215,8 @@ function determineSlackSenderType(message = {}) {
 function looksLikeBulkEmail(thread) {
   const messages = thread.messages || [];
   const latest = messages[messages.length - 1];
-  const headers = latest?.payload?.headers || [];
   const labels = new Set(messages.flatMap((message) => message.labelIds || []));
-  const haystack = normalizeLower(
-    [
-      getHeader(headers, "Subject"),
-      thread.snippet,
-      getHeader(headers, "Content-Class"),
-      getHeader(headers, "List-Unsubscribe"),
-    ].join(" ")
-  );
+  const haystack = buildGmailThreadHaystack(thread);
 
   if (
     labels.has("CATEGORY_PROMOTIONS") ||
@@ -187,6 +255,129 @@ function containsNameMention(text = "", handles = []) {
       if (!escaped) return false;
       return new RegExp(`(^|\\s|@)${escaped}(\\b|[:,])`).test(normalized);
     });
+}
+
+async function slackApiGet(token, method, params = {}) {
+  const res = await axios.get(`https://slack.com/api/${method}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    params,
+  });
+  if (!res.data.ok) {
+    throw new Error(`Slack API [${method}]: ${res.data.error || "unknown_error"}`);
+  }
+  return res.data;
+}
+
+function slackMessageMentionsCurrentUser(message = {}, currentUser = {}) {
+  const rawText = String(message.text || "");
+  const normalizedText = normalizeSlackText(rawText);
+  return (
+    rawText.includes(`<@${currentUser.id}>`) ||
+    containsNameMention(normalizedText, currentUser.handles)
+  );
+}
+
+function normalizeSlackMessages(rawMessages = [], channel, currentUser = {}) {
+  const sortedMessages = [...rawMessages]
+    .filter((message) => toTimestamp(message.ts))
+    .sort((a, b) => toTimestamp(a.ts) - toTimestamp(b.ts));
+
+  return sortedMessages.map((message, index) => {
+    const text = normalizeSlackText(message.text || "");
+    const direction = message.user === currentUser.id ? "outbound" : "inbound";
+    const mentionedCurrentUser = slackMessageMentionsCurrentUser(
+      message,
+      currentUser
+    );
+    const previousMessage = index > 0 ? sortedMessages[index - 1] : null;
+    const inReplyToCurrentUser = Boolean(
+      previousMessage && previousMessage.user === currentUser.id && message.user !== currentUser.id
+    );
+
+    return {
+      id: message.ts,
+      timestamp: toTimestamp(message.ts),
+      text,
+      previewText: text,
+      direction,
+      senderType: determineSlackSenderType(message),
+      senderId: message.user || message.bot_id || "",
+      senderName: message.username || message.user || message.bot_id || "Slack",
+      mentionedCurrentUser,
+      addressedToCurrentUser:
+        Boolean(channel.is_im) ||
+        mentionedCurrentUser ||
+        containsNameMention(text, currentUser.handles) ||
+        inReplyToCurrentUser,
+      inReplyToCurrentUser,
+      hasAttachments: Boolean((message.files || []).length),
+    };
+  });
+}
+
+function pickSlackConversationMessages({
+  channel,
+  historyMessages = [],
+  threadMessagesByRoot = new Map(),
+  currentUser = {},
+}) {
+  const chronologicalHistory = [...historyMessages]
+    .filter((message) => toTimestamp(message.ts))
+    .sort((a, b) => toTimestamp(a.ts) - toTimestamp(b.ts));
+
+  if (channel.is_im || channel.is_mpim) {
+    return {
+      messages: chronologicalHistory,
+      threadTs: null,
+      scope: channel.is_im ? "dm" : "group_dm",
+    };
+  }
+
+  const threadCandidates = chronologicalHistory
+    .filter((message) => threadMessagesByRoot.has(message.ts))
+    .map((rootMessage) => {
+      const threadMessages = threadMessagesByRoot.get(rootMessage.ts) || [];
+      const normalizedThread = normalizeSlackMessages(
+        threadMessages,
+        channel,
+        currentUser
+      );
+      const hasRelevantSignal = normalizedThread.some(
+        (message) =>
+          message.direction === "outbound" ||
+          message.mentionedCurrentUser ||
+          message.addressedToCurrentUser ||
+          message.inReplyToCurrentUser
+      );
+
+      return {
+        hasRelevantSignal,
+        latestTimestamp:
+          normalizedThread[normalizedThread.length - 1]?.timestamp || 0,
+        messages: threadMessages,
+        threadTs: rootMessage.ts,
+      };
+    })
+    .filter((candidate) => candidate.hasRelevantSignal)
+    .sort((a, b) => b.latestTimestamp - a.latestTimestamp);
+
+  if (threadCandidates.length) {
+    return {
+      messages: threadCandidates[0].messages,
+      threadTs: threadCandidates[0].threadTs,
+      scope: "thread",
+    };
+  }
+
+  return {
+    messages: chronologicalHistory,
+    threadTs: null,
+    scope: "channel",
+  };
+}
+
+function filterSurfaceStates(states = []) {
+  return states.filter((state) => state?.surfaceEligible);
 }
 
 function summarizeSource(sourceType, summary) {
@@ -317,8 +508,7 @@ async function fetchGmailStates(userId, options = {}) {
         .get({
           userId: "me",
           id: thread.id,
-          format: "metadata",
-          metadataHeaders: GMAIL_HEADERS,
+          format: "full",
         })
         .then((result) => result.data)
         .catch(() => null)
@@ -355,7 +545,7 @@ function normalizeGmailThread(thread, selfEmail) {
       const senderEmail = extractEmailAddress(from);
       const to = getHeader(headers, "To");
       const cc = getHeader(headers, "Cc");
-      const text = normalizeText(message.snippet || thread.snippet || "");
+      const text = getNormalizedGmailMessageText(message, thread.snippet || "");
       const direction = senderEmail === selfEmail ? "outbound" : "inbound";
       const automated = isAutomatedEmail(headers, from);
       const toList = splitEmails(to);
@@ -388,7 +578,10 @@ function normalizeGmailThread(thread, selfEmail) {
     threadId: thread.id,
     conversationTitle: normalizeText(subject),
     participantLabel: extractSenderName(getHeader(latestHeaders, "From") || getHeader(firstHeaders, "From")),
-    previewText: normalizeText(thread.snippet || ""),
+    previewText:
+      messages[messages.length - 1]?.text ||
+      stripQuotedReplyText(thread.snippet || "", "gmail") ||
+      normalizeText(thread.snippet || ""),
     sourceMetadata: {
       directRecipient,
       ccOnlyRecipient,
@@ -429,16 +622,13 @@ async function fetchSlackStates(userId) {
     ],
   };
 
-  const listRes = await axios.get("https://slack.com/api/conversations.list", {
-    headers: { Authorization: `Bearer ${token}` },
-    params: {
-      types: "im,mpim,public_channel,private_channel",
-      limit: 120,
-      exclude_archived: true,
-    },
+  const listRes = await slackApiGet(token, "conversations.list", {
+    types: "im,mpim,public_channel,private_channel",
+    limit: 120,
+    exclude_archived: true,
   });
 
-  const conversations = (listRes.data.channels || [])
+  const conversations = (listRes.channels || [])
     .filter((channel) => channel.is_im || channel.is_mpim || channel.is_channel || channel.is_group)
     .sort((a, b) => {
       if (Boolean(b.is_im) !== Boolean(a.is_im)) return Number(b.is_im) - Number(a.is_im);
@@ -449,83 +639,92 @@ async function fetchSlackStates(userId) {
   const normalized = await Promise.all(
     conversations.map(async (channel) => {
       try {
-        const historyRes = await axios.get(
-          "https://slack.com/api/conversations.history",
-          {
-            headers: { Authorization: `Bearer ${token}` },
-            params: {
-              channel: channel.id,
-              limit: SOURCE_THRESHOLDS.slack.messageLimit,
-            },
-          }
-        );
-
-        if (!historyRes.data.ok) return null;
+        const historyRes = await slackApiGet(token, "conversations.history", {
+          channel: channel.id,
+          limit: SOURCE_THRESHOLDS.slack.messageLimit,
+        });
 
         let participantLabel = channel.name || channel.id;
         if (channel.is_im && channel.user) {
           try {
-            const userRes = await axios.get("https://slack.com/api/users.info", {
-              headers: { Authorization: `Bearer ${token}` },
-              params: { user: channel.user },
+            const userRes = await slackApiGet(token, "users.info", {
+              user: channel.user,
             });
             participantLabel =
-              userRes.data.user?.profile?.display_name ||
-              userRes.data.user?.profile?.real_name ||
-              userRes.data.user?.name ||
+              userRes.user?.profile?.display_name ||
+              userRes.user?.profile?.real_name ||
+              userRes.user?.name ||
               participantLabel;
           } catch {}
         } else if (channel.is_channel || channel.is_group) {
           participantLabel = `#${channel.name}`;
         }
 
-        const messages = (historyRes.data.messages || [])
-          .slice()
-          .reverse()
-          .map((message) => {
-            const text = normalizeSlackText(message.text || "");
-            const direction = message.user === currentUser.id ? "outbound" : "inbound";
-            const mentionedCurrentUser = text.includes(`@mention`) && String(message.text || "").includes(`<@${currentUser.id}>`);
+        const historyMessages = historyRes.messages || [];
+        const threadRoots = historyMessages
+          .filter((message) => Number(message.reply_count || 0) > 0)
+          .sort((a, b) => toTimestamp(b.ts) - toTimestamp(a.ts))
+          .slice(0, SOURCE_THRESHOLDS.slack.threadLimit || 4);
+        const threadResults = await Promise.all(
+          threadRoots.map((rootMessage) =>
+            slackApiGet(token, "conversations.replies", {
+              channel: channel.id,
+              ts: rootMessage.ts,
+              limit: SOURCE_THRESHOLDS.slack.messageLimit,
+            }).catch(() => null)
+          )
+        );
+        const threadMessagesByRoot = new Map();
+        threadResults.forEach((thread, index) => {
+          if (thread?.messages?.length) {
+            threadMessagesByRoot.set(threadRoots[index].ts, thread.messages);
+          }
+        });
 
-            return {
-              id: message.ts,
-              timestamp: toTimestamp(message.ts),
-              text,
-              previewText: text,
-              direction,
-              senderType: determineSlackSenderType(message),
-              senderId: message.user || message.bot_id || "",
-              senderName: message.username || message.user || message.bot_id || "Slack",
-              mentionedCurrentUser,
-              addressedToCurrentUser:
-                Boolean(channel.is_im) ||
-                mentionedCurrentUser ||
-                containsNameMention(text, currentUser.handles),
-              hasAttachments: Boolean((message.files || []).length),
-            };
-          });
+        const selectedConversation = pickSlackConversationMessages({
+          channel,
+          historyMessages,
+          threadMessagesByRoot,
+          currentUser,
+        });
+        const messages = normalizeSlackMessages(
+          selectedConversation.messages,
+          channel,
+          currentUser
+        );
 
         const latestPreview = messages[messages.length - 1]?.text || "";
         return {
           sourceType: "slack",
           conversationId: channel.id,
-          threadId: null,
+          threadId: selectedConversation.threadTs || null,
           conversationTitle: participantLabel,
           participantLabel,
           previewText: latestPreview,
           sourceMetadata: {
             isDirect: Boolean(channel.is_im),
             isGroup: !channel.is_im,
-            isBroadcast: Boolean(channel.is_channel) && !Number(channel.unread_count || 0),
+            isBroadcast:
+              Boolean(channel.is_channel) &&
+              selectedConversation.scope === "channel" &&
+              !Number(channel.unread_count || 0),
             unreadCount: Number(channel.unread_count || 0),
             participantLabel,
+            recentMentionOfCurrentUser: messages.some(
+              (message) =>
+                message.mentionedCurrentUser ||
+                message.addressedToCurrentUser ||
+                message.inReplyToCurrentUser
+            ),
           },
           platformMetadata: {
             channelType: channel.is_im ? "dm" : channel.is_mpim ? "group" : "channel",
             unreadCount: Number(channel.unread_count || 0),
+            threadTs: selectedConversation.threadTs || null,
           },
           openContext: {
             channelId: channel.id,
+            threadTs: selectedConversation.threadTs || null,
           },
           messages,
         };
@@ -594,6 +793,9 @@ async function fetchTelegramStates(userId) {
           const mentionedCurrentUser =
             containsNameMention(text, currentUserHandles) ||
             (me.username ? normalizeLower(text).includes(`@${String(me.username).toLowerCase()}`) : false);
+          const replyToCurrentUser = Boolean(
+            message.replyTo && outboundIds.has(String(message.replyTo))
+          );
 
           return {
             id: message.id,
@@ -608,7 +810,8 @@ async function fetchTelegramStates(userId) {
             addressedToCurrentUser:
               dialog.type === "user" ||
               mentionedCurrentUser ||
-              Boolean(message.replyTo && outboundIds.has(String(message.replyTo))),
+              replyToCurrentUser,
+            replyToCurrentUser,
             hasAttachments: Boolean(message.media),
           };
         });
@@ -684,7 +887,12 @@ async function fetchWhatsAppStates(userId) {
           text: normalizeText(message.body || ""),
           previewText: normalizeText(message.body || ""),
           direction: message.fromMe ? "outbound" : "inbound",
-          senderType: message.type === "chat" ? "human" : "unknown",
+          senderType:
+            message.type === "chat"
+              ? "human"
+              : chat.isReadOnly
+                ? "system"
+                : "unknown",
           senderId: message.from || "",
           senderName: message.fromMe ? "You" : message._data?.notifyName || chat.name,
           mentionedCurrentUser: false,
@@ -775,7 +983,8 @@ async function getCommunicationActionStates(userId, options = {}) {
       result.status === "fulfilled" ? result.value || [] : []
     )
   );
-  const activeStates = sortStates(filterSuppressedStates(states, latestActionsByItem));
+  const visibleStates = sortStates(filterSuppressedStates(states, latestActionsByItem));
+  const activeStates = sortStates(filterSurfaceStates(visibleStates));
   const summary = summarizeActionStates(activeStates);
 
   return {
@@ -783,6 +992,7 @@ async function getCommunicationActionStates(userId, options = {}) {
     source,
     sources,
     states: activeStates,
+    allStates: visibleStates,
     groups: buildActionGroups(activeStates),
     counts: summary,
     summaryText:
@@ -840,21 +1050,55 @@ function buildCommunicationSuggestedAction(state) {
 
 function buildCommunicationPrompt(state) {
   const sourceLabel = getAppMeta(state.sourceType).label;
-  const conversationTitle = state.conversationTitle || "conversation";
-  const reason = state.actionReason || "Tell me what needs action.";
+  const conversationTitle = normalizeText(state.conversationTitle || "conversation");
+  const participantLabel = normalizeText(state.participantLabel || "");
+  const latestMessage = normalizeText(state.previewText || "");
+  const reason = normalizeText(state.actionReason || "Tell me what needs action.");
+  const contextLines = [
+    `You are drafting a reply for me to send in a ${sourceLabel} conversation.`,
+    `Conversation: "${conversationTitle}".`,
+    participantLabel && participantLabel !== conversationTitle
+      ? `Other participant: ${participantLabel}.`
+      : "",
+    latestMessage ? `Latest message: "${latestMessage}".` : "",
+    `Why this needs attention: ${reason}`,
+  ].filter(Boolean);
 
   if (state.actionState === ACTION_STATES.NEEDS_APPROVAL) {
-    return `Summarize the approval request in this ${sourceLabel} conversation "${conversationTitle}" and draft the clearest approval or decline response. Reason: ${reason}`;
+    return [
+      ...contextLines,
+      "",
+      "Write the exact approval or decline reply I should send next.",
+      "Return ONLY the reply text.",
+      "Do NOT explain the ask, add commentary, use placeholders, brackets, or template language.",
+      "Do NOT send the message or call any tools.",
+    ].join("\n");
   }
 
   if (
     state.actionState === ACTION_STATES.WAITING_ON_YOUR_REPLY ||
     state.actionState === ACTION_STATES.NEEDS_FOLLOW_UP
   ) {
-    return `Draft a concise reply for the ${sourceLabel} conversation "${conversationTitle}". Explain the ask, the right response, and any follow-up that should be sent next. Reason: ${reason}`;
+    return [
+      ...contextLines,
+      "",
+      "Write the exact reply text I should send next.",
+      latestMessage
+        ? "If the latest message is vague, ask one short clarifying question instead of inventing details."
+        : "If context is limited, draft a short clarifying reply that politely asks what they need.",
+      "Return ONLY the reply text.",
+      "Do NOT explain the ask, add commentary, use placeholders, brackets, or template language.",
+      "Do NOT send the message or call any tools.",
+    ].join("\n");
   }
 
-  return `Summarize the latest status of the ${sourceLabel} conversation "${conversationTitle}" and tell me whether I should do anything next. Reason: ${reason}`;
+  return [
+    ...contextLines,
+    "",
+    "Summarize the latest status in one or two short sentences.",
+    "Then say whether I should do anything next.",
+    "Do NOT send the message or call any tools.",
+  ].join("\n");
 }
 
 function mapActionStateToPriorityItem(state) {
@@ -889,6 +1133,7 @@ function mapActionStateToPriorityItem(state) {
         : createPromptAction({
             label: actionLabel,
             prompt: buildCommunicationPrompt(state),
+            mode: "chat",
           }),
     secondaryAction: createModuleAction("Open conversation", module, baseContext),
     canClearQuickly:
@@ -931,4 +1176,12 @@ module.exports = {
   getCommunicationActionStates,
   getCommunicationPriorityItems,
   mapActionStateToPriorityItem,
+  __test: {
+    filterSurfaceStates,
+    buildGmailThreadHaystack,
+    getNormalizedGmailMessageText,
+    normalizeGmailThread,
+    normalizeSlackMessages,
+    pickSlackConversationMessages,
+  },
 };

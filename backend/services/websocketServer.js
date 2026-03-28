@@ -182,6 +182,12 @@ async function pollUser(userId, isFirstRun = false) {
   }
 }
 
+async function refreshUserSignals(userId) {
+  if (!userId) return false;
+  await pollUser(userId, false);
+  return true;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // GMAIL — message ID tracking with full debug logging
 // ─────────────────────────────────────────────────────────────────────────────
@@ -432,20 +438,32 @@ async function checkWhatsApp(userId) {
 // TELEGRAM REAL-TIME LISTENER
 // ─────────────────────────────────────────────────────────────────────────────
 async function startTelegramListener(userId) {
-  if (telegramListeners.get(userId) === "active") return;
-  telegramListeners.set(userId, "starting");
+  let client = null;
 
   try {
     const { getClient } = require("./tools/toolTelegramMTProto");
-    const client = await getClient(userId);
+    client = await getClient(userId);
     if (!client) {
       telegramListeners.delete(userId);
       return;
     }
 
+    const existingListener = telegramListeners.get(userId);
+    if (
+      existingListener?.client === client &&
+      (existingListener.status === "starting" ||
+        existingListener.status === "active")
+    ) {
+      return;
+    }
+
+    telegramListeners.set(userId, { status: "starting", client });
+
     const authorized = await client.isUserAuthorized().catch(() => false);
     if (!authorized) {
-      telegramListeners.delete(userId);
+      if (telegramListeners.get(userId)?.client === client) {
+        telegramListeners.delete(userId);
+      }
       return;
     }
 
@@ -504,10 +522,12 @@ async function startTelegramListener(userId) {
       } catch {}
     }, new NewMessage({}));
 
-    telegramListeners.set(userId, "active");
+    telegramListeners.set(userId, { status: "active", client });
     console.log(`✅ Telegram real-time listener active for ${userId}`);
   } catch (err) {
-    telegramListeners.delete(userId);
+    if (!client || telegramListeners.get(userId)?.client === client) {
+      telegramListeners.delete(userId);
+    }
     console.warn(`[Telegram] Listener failed for ${userId}:`, err.message);
   }
 }
@@ -756,6 +776,7 @@ module.exports = {
   init,
   pushToUser,
   broadcast,
+  refreshUserSignals,
   handleGmailWebhook,
   handleSlackWebhook,
 };

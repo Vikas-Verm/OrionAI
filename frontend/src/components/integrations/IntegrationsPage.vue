@@ -809,9 +809,16 @@ function applyAutofillGuards() {
     })
 }
 
+function getIntegrationSnapshot() {
+    return Object.values(connected)
+}
+
 function notifyIntegrationsUpdated() {
-    window.dispatchEvent(new CustomEvent('orion:integrations-updated'))
-    emit('connected')
+    const integrations = getIntegrationSnapshot()
+    window.dispatchEvent(new CustomEvent('orion:integrations-updated', {
+        detail: { integrations },
+    }))
+    emit('connected', integrations)
 }
 
 async function loadIntegrations() {
