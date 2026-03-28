@@ -1001,7 +1001,7 @@ const ALL_SKILLS = [
     category: "document",
     enabled: true,
     description:
-      "Fetch a business document (invoice, bill, purchase order, credit note, debit note, payment request, proof of delivery) from the database by number, or get the latest one.",
+      "Fetch a business document artifact from OrionAI collections for delivery workflows like sharing, emailing, or generating a PDF. Do not use this for generic reporting or connected-database lookups.",
     params: [
       {
         name: "collection",
@@ -1025,7 +1025,7 @@ const ALL_SKILLS = [
       },
     ],
     promptExample: {
-      userSays: "Get the latest invoice",
+      userSays: "Send the latest invoice",
       output:
         '{"tool":"fetch_document","params":{"collection":"Invoices","fallbackToLatest":true}}',
     },

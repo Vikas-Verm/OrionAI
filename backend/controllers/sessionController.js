@@ -9,6 +9,9 @@ const {
 const {
   getActivityLog: fetchActivityLog,
 } = require("../services/conversationService");
+const {
+  buildActiveConversationQuery,
+} = require("../services/conversationService");
 const Conversation = require("../models/conversation");
 
 async function getSessions(req, res) {
@@ -28,8 +31,12 @@ async function createNewSession(req, res) {
 
 async function getSessionMessages(req, res) {
   const { sessionId } = req.params;
-  const messages = await loadConversation(sessionId);
-  const session = await Conversation.findOne({ sessionId }, { mode: 1 });
+  const userId = req.user.username;
+  const messages = await loadConversation(sessionId, userId);
+  const session = await Conversation.findOne(
+    buildActiveConversationQuery({ sessionId, userId }),
+    { mode: 1 }
+  );
   res.json({
     messages,
     mode: session?.mode || "chat",
@@ -51,7 +58,8 @@ async function removeSession(req, res) {
 
 async function getActivityLog(req, res) {
   const { sessionId } = req.params;
-  const log = await fetchActivityLog(sessionId);
+  const userId = req.user.username;
+  const log = await fetchActivityLog(buildActiveConversationQuery({ sessionId, userId }));
   res.json(log);
 }
 
@@ -70,9 +78,7 @@ async function setMessageFeedback(req, res) {
   }
 
   const conversation = await Conversation.findOne({
-    sessionId,
-    userId,
-    isDeleted: false,
+    ...buildActiveConversationQuery({ sessionId, userId }),
   });
 
   if (!conversation) {
@@ -113,9 +119,7 @@ async function exportSession(req, res) {
   const userId = req.user.username;
 
   const conversation = await Conversation.findOne({
-    sessionId,
-    userId,
-    isDeleted: false,
+    ...buildActiveConversationQuery({ sessionId, userId }),
   }).lean();
 
   if (!conversation) {

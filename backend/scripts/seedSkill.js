@@ -54,7 +54,7 @@ const SKILLS = [
     ],
     params: [
       {
-        name: "assignee",
+        name: "assigneeName",
         type: "string",
         required: false,
         description: "Person name or leave empty for current user",
@@ -71,7 +71,7 @@ const SKILLS = [
     },
     promptExample: {
       userSays: "Show tickets for Ashish",
-      output: '{"tool":"jira_my_tickets","params":{"assignee":"Ashish"}}',
+      output: '{"tool":"jira_my_tickets","params":{"assigneeName":"Ashish"}}',
     },
   },
   {
@@ -754,8 +754,8 @@ const SKILLS = [
     label: "Fetch document",
     category: "document",
     description:
-      "Fetch a business document (invoice, bill, purchase order, credit note, debit note, payment request, proof of delivery) from the database by number, or get the latest one.",
-    triggers: ["send invoice", "fetch document", "get bill", "latest invoice"],
+      "Fetch a business document artifact from OrionAI collections for delivery workflows like sharing, emailing, or generating a PDF. Do not use this for generic reporting or connected-database lookups.",
+    triggers: ["send invoice", "share invoice", "email invoice", "generate invoice pdf"],
     params: [
       {
         name: "collection",

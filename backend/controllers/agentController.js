@@ -363,6 +363,12 @@ async function runPlan(req, res) {
           await Conversation.findOneAndUpdate(
             { sessionId, userId },
             {
+              $setOnInsert: {
+                sessionId,
+                userId,
+                mode: "agent",
+                title: initialAgentTitle || "New Chat",
+              },
               $push: {
                 messages: {
                   $each: [
@@ -431,7 +437,7 @@ async function runPlan(req, res) {
             // ── Jira ─────────────────────────────────────────────────────────
             richTickets: extractRichTickets(progress.tool, r),
             byAssignee: r?.byAssignee || null,
-            jiraDomain: process.env.JIRA_DOMAIN || null,
+            jiraDomain: r?.jiraDomain || process.env.JIRA_DOMAIN || null,
             sprintName: r?.sprintName || null,
             notifications: r?.notifications || null,
 
@@ -533,7 +539,8 @@ async function runPlan(req, res) {
               // Jira
               richTickets: extractRichTickets(r.tool, r.result),
               byAssignee: r.result?.byAssignee || null,
-              jiraDomain: process.env.JIRA_DOMAIN || null,
+              jiraDomain:
+                r.result?.jiraDomain || process.env.JIRA_DOMAIN || null,
               sprintName: r.result?.sprintName || null,
               notifications: r.result?.notifications || null,
 
@@ -622,6 +629,12 @@ async function runPlan(req, res) {
         await Conversation.findOneAndUpdate(
           { sessionId, userId },
           {
+            $setOnInsert: {
+              sessionId,
+              userId,
+              mode: "agent",
+              title: initialAgentTitle || "New Chat",
+            },
             $push: {
               messages: {
                 $each: [

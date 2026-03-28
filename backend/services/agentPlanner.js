@@ -12,6 +12,11 @@ const Skill = require("../models/skill");
 const { chatCompleteNoSystem } = require("./llmService");
 const { getMemoryContext } = require("../services/memoryService");
 
+const DOCUMENT_LOOKUP_RE =
+  /\b(invoice|invoices|bill|bills|purchase order|purchase orders|credit note|credit notes|debit note|debit notes|payment request|payment requests|proof of delivery|proof of deliveries|pod|pods|\bpo\b)\b/i;
+const DOCUMENT_DELIVERY_RE =
+  /\b(send|share|email|mail|whatsapp|slack|telegram|pdf|download|export|attach|attachment|forward|dispatch|print)\b/i;
+
 const BUILTIN_TOOLS = [
   {
     name: "database_query",
@@ -81,6 +86,54 @@ function formatTools(tools) {
     .join("\n\n");
 }
 
+function buildConnectedDatabasePlan(userMessage, existingPlan = {}) {
+  return {
+    isAgentTask: true,
+    confidence: Math.max(Number(existingPlan?.confidence) || 0, 0.85),
+    intent:
+      existingPlan?.intent ||
+      "Query the connected database for the requested business data",
+    steps: [{ tool: "database_query", params: { question: userMessage } }],
+  };
+}
+
+function shouldUseConnectedDatabase(userMessage = "", plan = {}) {
+  const message = String(userMessage || "").trim();
+  const steps = Array.isArray(plan?.steps) ? plan.steps.filter(Boolean) : [];
+
+  if (!DOCUMENT_LOOKUP_RE.test(message)) return false;
+  if (DOCUMENT_DELIVERY_RE.test(message)) return false;
+
+  if (
+    steps.some((step) =>
+      ["generate_pdf", "send_email", "send_whatsapp", "send_slack"].includes(
+        step?.tool
+      )
+    )
+  ) {
+    return false;
+  }
+
+  if (!steps.length) return true;
+
+  return steps.every((step) => step.tool === "fetch_document");
+}
+
+function normalizePlannedSteps(userMessage = "", plan = {}) {
+  const normalizedPlan = {
+    isAgentTask: Boolean(plan?.isAgentTask),
+    confidence: Number(plan?.confidence) || 0,
+    intent: plan?.intent || "",
+    steps: Array.isArray(plan?.steps) ? plan.steps.filter((step) => step?.tool) : [],
+  };
+
+  if (shouldUseConnectedDatabase(userMessage, normalizedPlan)) {
+    return buildConnectedDatabasePlan(userMessage, normalizedPlan);
+  }
+
+  return normalizedPlan;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // PARSE AGENT INTENT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -116,7 +169,9 @@ async function parseAgentIntent(userMessage, history = [], userId = null) {
       `   - "today" = ${today}`,
       `   - Use calendar_get_events with dateFrom+dateTo, NOT query`,
       `4. SLACK/TELEGRAM DMs: Use person's first name in lowercase as channel/contact (e.g. "hari", "rahul")`,
-      `5. General questions, coding help, maths, or casual chat are NOT agent tasks.`,
+      `5. CONNECTED DATABASE: Use database_query for read-only business data questions such as "show latest bill", "latest invoice details", "list unpaid bills", or "find PO details".`,
+      `6. fetch_document is ONLY for document-delivery workflows where the user wants to send, share, attach, export, or generate a PDF from a document.`,
+      `7. General questions, coding help, maths, or casual chat are NOT agent tasks.`,
       ``,
       `USER REQUEST: "${userMessage}"`,
       ``,
@@ -139,13 +194,23 @@ async function parseAgentIntent(userMessage, history = [], userId = null) {
     const match = clean.match(/\{[\s\S]*\}/);
     if (!match) throw new Error("No JSON in LLM response");
 
-    const plan = JSON.parse(match[0]);
+    const plan = normalizePlannedSteps(userMessage, JSON.parse(match[0]));
     console.log("🧠 Agent plan:", JSON.stringify(plan, null, 2));
     return plan;
   } catch (err) {
     console.error("parseAgentIntent failed:", err.message);
+    if (shouldUseConnectedDatabase(userMessage)) {
+      return buildConnectedDatabasePlan(userMessage);
+    }
     return { isAgentTask: false, confidence: 0, intent: "", steps: [] };
   }
 }
 
-module.exports = { parseAgentIntent };
+module.exports = {
+  parseAgentIntent,
+  __test: {
+    buildConnectedDatabasePlan,
+    shouldUseConnectedDatabase,
+    normalizePlannedSteps,
+  },
+};

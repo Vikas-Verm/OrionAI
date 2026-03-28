@@ -1,10 +1,14 @@
 const Conversation = require("../models/conversation");
+const { buildActiveConversationQuery } = require("./conversationRetention");
 
-async function loadConversation(sessionId) {
-  const conversation = await Conversation.findOne({
-    sessionId,
-    isDeleted: false,
-  });
+async function loadConversation(sessionId, userIdOrQuery = null) {
+  const query =
+    userIdOrQuery && typeof userIdOrQuery === "object"
+      ? { sessionId, ...userIdOrQuery }
+      : userIdOrQuery
+      ? { sessionId, userId: userIdOrQuery }
+      : { sessionId };
+  const conversation = await Conversation.findOne(buildActiveConversationQuery(query));
   if (!conversation) return [];
   return conversation.messages;
 }
@@ -18,7 +22,7 @@ async function saveConversation(sessionId, messages) {
 }
 
 async function getAllSessions(userId, search = "") {
-  const query = { userId, isDeleted: false };
+  const query = buildActiveConversationQuery({ userId });
   if (search) query.title = { $regex: search, $options: "i" };
 
   return await Conversation.find(
@@ -61,9 +65,13 @@ async function appendActivityLog(sessionId, activity) {
   );
 }
 
-async function getActivityLog(sessionId) {
+async function getActivityLog(sessionLookup) {
+  const query =
+    typeof sessionLookup === "string"
+      ? buildActiveConversationQuery({ sessionId: sessionLookup })
+      : buildActiveConversationQuery(sessionLookup || {});
   const conversation = await Conversation.findOne(
-    { sessionId },
+    query,
     { activityLog: 1 }
   );
   return conversation?.activityLog || [];
@@ -77,4 +85,5 @@ module.exports = {
   deleteSession,
   appendActivityLog,
   getActivityLog,
+  buildActiveConversationQuery,
 };

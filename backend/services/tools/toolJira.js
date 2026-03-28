@@ -135,6 +135,58 @@ async function resolveJiraUser(client, name) {
   }
 }
 
+function pickRequestedAssignee(params = {}) {
+  const value =
+    params.assigneeName || params.assignee || params.person || params.user;
+  const normalized = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!normalized) return null;
+
+  const lower = normalized.toLowerCase();
+  if (["me", "myself", "my", "current user", "currentuser"].includes(lower)) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function escapeJqlValue(value = "") {
+  return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function buildMyTicketsJql(
+  projectKey,
+  { showAll = false, resolvedUser = null, status = null } = {}
+) {
+  const clauses = [`project = ${projectKey}`];
+
+  if (showAll) {
+    clauses.push("assignee is not EMPTY");
+  } else if (resolvedUser?.accountId) {
+    clauses.push(`assignee = "${escapeJqlValue(resolvedUser.accountId)}"`);
+  } else {
+    clauses.push("assignee = currentUser()");
+  }
+
+  const normalizedStatus = String(status || "").trim();
+  const lowerStatus = normalizedStatus.toLowerCase();
+
+  if (!normalizedStatus || ["open", "unresolved", "active"].includes(lowerStatus)) {
+    clauses.push("statusCategory != Done");
+  } else if (["closed", "done", "resolved", "completed"].includes(lowerStatus)) {
+    clauses.push("statusCategory = Done");
+  } else {
+    clauses.push(`status = "${escapeJqlValue(normalizedStatus)}"`);
+  }
+
+  return `
+    ${clauses.join("\n    AND ")}
+    ORDER BY duedate ASC
+  `;
+}
+
 async function safeJira(fn, retries = 2) {
   try {
     return await fn();
@@ -452,11 +504,18 @@ async function toolGetMyTickets(params, ctx) {
   const {
     projectKey: overrideKey,
     maxResults = 100,
-    assignee = null,
     showAll = false,
+    status = null,
   } = params;
 
-  const { client, projectKey } = await getJiraClient(ctx.userId);
+  const requestedAssignee = pickRequestedAssignee(params);
+  const showEveryone =
+    showAll ||
+    ["all", "everyone", "everybody", "team"].includes(
+      String(requestedAssignee || "").toLowerCase()
+    );
+
+  const { client, projectKey, domain } = await getJiraClient(ctx.userId);
   const key = overrideKey || projectKey;
 
   /* -------------------------------------------------- */
@@ -487,34 +546,32 @@ async function toolGetMyTickets(params, ctx) {
   /* -------------------------------------------------- */
   /* 2️⃣ BUILD ASSIGNEE FILTER */
   /* -------------------------------------------------- */
-  let assigneeFilter = "assignee = currentUser()";
   let label = "Your";
+  let resolvedUser = null;
 
-  if (showAll || assignee === "all" || assignee === "everyone") {
-    assigneeFilter = "assignee is not EMPTY";
+  if (showEveryone) {
     label = "All users";
-  } else if (assignee) {
-    const resolvedUser = await resolveJiraUser(client, assignee);
+  } else if (requestedAssignee) {
+    resolvedUser = await resolveJiraUser(client, requestedAssignee);
 
     if (!resolvedUser) {
       return {
         success: true,
         tickets: [],
         count: 0,
-        summary: `❌ No Jira user found matching "${assignee}"`,
+        jiraDomain: domain,
+        summary: `❌ No Jira user found matching "${requestedAssignee}"`,
       };
     }
 
-    assigneeFilter = `assignee = ${resolvedUser.accountId}`;
     label = resolvedUser.displayName;
   }
 
-  const jql = `
-    project = ${key}
-    AND ${assigneeFilter}
-    AND statusCategory != Done
-    ORDER BY duedate ASC
-  `;
+  const jql = buildMyTicketsJql(key, {
+    showAll: showEveryone,
+    resolvedUser,
+    status,
+  });
 
   /* -------------------------------------------------- */
   /* 3️⃣ FETCH TICKETS SAFELY */
@@ -574,6 +631,7 @@ async function toolGetMyTickets(params, ctx) {
       success: true,
       tickets: [],
       count: 0,
+      jiraDomain: domain,
       summary: `✅ No open tickets for ${label} in ${key}!`,
     };
   }
@@ -583,7 +641,7 @@ async function toolGetMyTickets(params, ctx) {
   /* -------------------------------------------------- */
   /* 5️⃣ GROUP BY ASSIGNEE (SHOW ALL MODE) */
   /* -------------------------------------------------- */
-  if (showAll || assignee === "all" || assignee === "everyone") {
+  if (showEveryone) {
     const byAssignee = {};
 
     for (const t of tickets) {
@@ -625,6 +683,7 @@ async function toolGetMyTickets(params, ctx) {
       tickets,
       count,
       byAssignee,
+      jiraDomain: domain,
       summary: lines.join("\n"),
     };
   }
@@ -655,6 +714,7 @@ async function toolGetMyTickets(params, ctx) {
     success: true,
     tickets,
     count,
+    jiraDomain: domain,
     summary: lines.join("\n"),
   };
 }
@@ -1543,4 +1603,8 @@ module.exports = {
   toolSearchTickets, // ← NEW
   toolNotifyOverdue, // ← NEW
   toolLinkTicket,
+  __test: {
+    buildMyTicketsJql,
+    pickRequestedAssignee,
+  },
 };

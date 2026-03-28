@@ -11,6 +11,75 @@ const SUPPORTED_DATABASE_VENDORS = ["mongodb", "postgres", "mysql", "sqlite"];
 const MAX_RESULT_ROWS = 200;
 const schemaCache = new Map();
 const SCHEMA_METADATA_LIMIT = 5000;
+const QUESTION_STOP_WORDS = new Set([
+  "a",
+  "about",
+  "all",
+  "an",
+  "and",
+  "for",
+  "from",
+  "get",
+  "give",
+  "latest",
+  "last",
+  "list",
+  "me",
+  "newest",
+  "of",
+  "recent",
+  "record",
+  "records",
+  "row",
+  "rows",
+  "show",
+  "the",
+  "view",
+]);
+const ENTITY_DEFINITIONS = [
+  {
+    key: "bill",
+    patterns: [/\bbills?\b/i],
+    aliases: ["bill", "bills", "billnumber", "billdate", "vendorbill"],
+    conflicts: ["invoice", "invc"],
+  },
+  {
+    key: "invoice",
+    patterns: [/\binvoices?\b/i, /\binvc\b/i],
+    aliases: ["invoice", "invoices", "invc", "invoicenumber", "invoicedate"],
+    conflicts: ["bill", "bills"],
+  },
+  {
+    key: "purchase_order",
+    patterns: [/\bpurchase orders?\b/i, /\bpo\b/i],
+    aliases: ["purchaseorder", "purchaseorders", "po", "ponumber", "podate"],
+    conflicts: [],
+  },
+  {
+    key: "credit_note",
+    patterns: [/\bcredit notes?\b/i, /\bcn\b/i],
+    aliases: ["creditnote", "creditnotes", "cn"],
+    conflicts: ["debitnote", "debitnotes", "dn"],
+  },
+  {
+    key: "debit_note",
+    patterns: [/\bdebit notes?\b/i, /\bdn\b/i],
+    aliases: ["debitnote", "debitnotes", "dn"],
+    conflicts: ["creditnote", "creditnotes", "cn"],
+  },
+  {
+    key: "payment_request",
+    patterns: [/\bpayment requests?\b/i, /\bpayouts?\b/i, /\bpayments?\b/i],
+    aliases: ["paymentrequest", "paymentrequests", "payment", "payments"],
+    conflicts: [],
+  },
+  {
+    key: "proof_of_delivery",
+    patterns: [/\bproof of deliveries\b/i, /\bproof of delivery\b/i, /\bpods?\b/i],
+    aliases: ["proofofdelivery", "proofofdeliveries", "pod", "pods"],
+    conflicts: [],
+  },
+];
 
 function normalizeVendor(vendor) {
   const value = String(vendor || "")
@@ -585,7 +654,7 @@ async function getSchemaTableCounts(
 }
 
 function schemaToPrompt(schema) {
-  const tables = (schema.tables || []).slice(0, 30);
+  const tables = rankSchemaTables(schema).slice(0, 30);
   if (!tables.length) {
     return "No tables or collections were discovered.";
   }
@@ -598,6 +667,110 @@ function schemaToPrompt(schema) {
           ? ` | approx rows: ${table.estimatedRows}`
           : "";
       return `- ${table.name}: ${columns || "no sampled columns"}${rowHint}`;
+    })
+    .join("\n");
+}
+
+function normalizeSearchToken(value = "") {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function tokenizeQuestion(question = "") {
+  return String(question || "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .map((token) => token.trim())
+    .filter((token) => token && !QUESTION_STOP_WORDS.has(token));
+}
+
+function inferRequestedEntity(question = "") {
+  return (
+    ENTITY_DEFINITIONS.find((entity) =>
+      entity.patterns.some((pattern) => pattern.test(question))
+    ) || null
+  );
+}
+
+function scoreTableForEntity(table = {}, entity = null) {
+  if (!entity) return 0;
+
+  const name = normalizeSearchToken(table.name);
+  const fields = getTableFieldNames(table).map(normalizeSearchToken);
+  let score = 0;
+
+  for (const alias of entity.aliases || []) {
+    const normalizedAlias = normalizeSearchToken(alias);
+    if (!normalizedAlias) continue;
+
+    if (name === normalizedAlias || name === `${normalizedAlias}s`) {
+      score += 160;
+    } else if (name.startsWith(normalizedAlias) || name.includes(normalizedAlias)) {
+      score += 110;
+    }
+
+    if (fields.some((field) => field === normalizedAlias)) {
+      score += 30;
+    } else if (fields.some((field) => field.includes(normalizedAlias))) {
+      score += 12;
+    }
+  }
+
+  for (const conflict of entity.conflicts || []) {
+    const normalizedConflict = normalizeSearchToken(conflict);
+    if (normalizedConflict && name.includes(normalizedConflict)) {
+      score -= 140;
+    }
+  }
+
+  return score;
+}
+
+function scoreTableForQuestion(table = {}, question = "") {
+  const entity = inferRequestedEntity(question);
+  const tokens = tokenizeQuestion(question);
+  const corpus = [
+    normalizeSearchToken(table.name),
+    ...getTableFieldNames(table).map(normalizeSearchToken),
+  ];
+
+  let score = scoreTableForEntity(table, entity);
+
+  for (const token of tokens) {
+    if (corpus.some((entry) => entry === token)) {
+      score += 18;
+      continue;
+    }
+    if (corpus.some((entry) => entry.includes(token))) {
+      score += 6;
+    }
+  }
+
+  return score;
+}
+
+function rankSchemaTables(schema, question = "") {
+  const tables = Array.isArray(schema?.tables) ? schema.tables : [];
+
+  return [...tables]
+    .map((table, index) => ({
+      table,
+      index,
+      score: scoreTableForQuestion(table, question),
+    }))
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map((entry) => entry.table);
+}
+
+function buildRelevantSchemaSection(schema, question = "") {
+  const ranked = rankSchemaTables(schema, question).slice(0, 8);
+  if (!ranked.length) return "No clear relevant tables were detected.";
+
+  return ranked
+    .map((table) => {
+      const columns = getTableFieldNames(table).slice(0, 8).join(", ");
+      return `- ${table.name}: ${columns || "no sampled columns"}`;
     })
     .join("\n");
 }
@@ -617,7 +790,12 @@ function buildMongoPrompt(question, schema) {
     "You convert natural language into read-only MongoDB query plans.",
     "Return only valid JSON.",
     "Allowed operations: find, aggregate, count.",
-    `Schema:\n${schemaToPrompt(schema)}`,
+    `Most relevant collections for this question:\n${buildRelevantSchemaSection(
+      schema,
+      question
+    )}`,
+    "",
+    `Schema:\n${schemaToPrompt({ tables: rankSchemaTables(schema, question) })}`,
     "",
     `User question: "${question}"`,
     "",
@@ -638,6 +816,8 @@ function buildMongoPrompt(question, schema) {
     "- Use only collections shown in the schema.",
     "- Keep limit between 1 and 200.",
     "- Never write, update, delete, drop, or rename anything.",
+    "- Use the exact business entity requested by the user. bill != invoice, invoice != bill, PO != invoice.",
+    '- If the user explicitly asks for a bill, choose a bill-like collection/table rather than an invoice-like one whenever both exist.',
   ].join("\n");
 }
 
@@ -645,7 +825,12 @@ function buildSqlPrompt(question, schema, vendor) {
   return [
     `You convert natural language into safe read-only ${vendor} SQL.`,
     "Return only valid JSON.",
-    `Schema:\n${schemaToPrompt(schema)}`,
+    `Most relevant tables for this question:\n${buildRelevantSchemaSection(
+      schema,
+      question
+    )}`,
+    "",
+    `Schema:\n${schemaToPrompt({ tables: rankSchemaTables(schema, question) })}`,
     "",
     `User question: "${question}"`,
     "",
@@ -661,6 +846,8 @@ function buildSqlPrompt(question, schema, vendor) {
     "- Never write, update, delete, drop, alter, truncate, create, grant, or revoke.",
     "- Always cap results with LIMIT 200 or less.",
     "- Use exact table and column names from the schema.",
+    "- Use the exact business entity requested by the user. bill != invoice, invoice != bill, PO != invoice.",
+    '- If the user explicitly asks for a bill, choose a bill-like table rather than an invoice-like one whenever both exist.',
   ].join("\n");
 }
 
@@ -693,7 +880,115 @@ function ensureSqlLimit(sql) {
   return `${statement} LIMIT ${MAX_RESULT_ROWS}`;
 }
 
+function isSimpleLatestLookup(question = "", entity = null) {
+  const source = String(question || "").trim();
+  const lower = source.toLowerCase();
+
+  if (!entity) return false;
+  if (!/\b(latest|last|recent|newest)\b/.test(lower)) return false;
+  if (
+    /\b(count|how many|sum|total|average|avg|min|max|group|per|between|before|after|from|for|where|with|paid|unpaid|pending|active|cancelled|buyer|seller|customer|vendor)\b/.test(
+      lower
+    )
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function pickLatestSortField(table = {}, entity = null) {
+  const fields = getTableFieldNames(table).map((name) => ({
+    name,
+    key: normalizeSearchToken(name),
+  }));
+  const primaryKeys = getTablePrimaryKeys(table);
+  const entitySpecificCandidates = {
+    bill: ["billdate", "duedate"],
+    invoice: ["invoicedate", "invcdate"],
+    purchase_order: ["podate", "orderdate"],
+    credit_note: ["creditnotedate", "date"],
+    debit_note: ["debitnotedate", "date"],
+    payment_request: ["paymentdate", "processedpaymentdate", "date"],
+    proof_of_delivery: ["deliverydate", "date"],
+  };
+  const candidates = [
+    ...(entitySpecificCandidates[entity?.key] || []),
+    "updatedat",
+    "updateddate",
+    "modifiedat",
+    "modifieddate",
+    "createdat",
+    "createddate",
+    "timestamp",
+    "date",
+    "id",
+    "_id",
+  ];
+
+  for (const candidate of candidates) {
+    const match =
+      fields.find((field) => field.key === candidate) ||
+      fields.find((field) => field.key.endsWith(candidate)) ||
+      fields.find((field) => field.key.includes(candidate));
+    if (match?.name) return match.name;
+  }
+
+  if (primaryKeys.length) return primaryKeys[0];
+  return fields[0]?.name || null;
+}
+
+function buildDeterministicLatestPlan(question, config, schema) {
+  const entity = inferRequestedEntity(question);
+  if (!isSimpleLatestLookup(question, entity)) return null;
+
+  const [table] = rankSchemaTables(schema, question);
+  if (!table || scoreTableForEntity(table, entity) <= 0) {
+    return null;
+  }
+
+  const sortField = pickLatestSortField(table, entity);
+  if (!sortField) return null;
+
+  const explanation = `Fetch the latest ${entity.key.replace(/_/g, " ")} from ${table.name}.`;
+
+  if (config.vendor === "mongodb") {
+    return {
+      kind: "mongo",
+      operation: "find",
+      collection: table.name,
+      query: {},
+      projection: {},
+      sort: { [sortField]: -1 },
+      limit: 1,
+      pipeline: [],
+      explanation,
+    };
+  }
+
+  const quotedTarget = quoteQualifiedName(config.vendor, table.name);
+  if (!quotedTarget) return null;
+
+  return {
+    kind: "sql",
+    sql: `SELECT * FROM ${quotedTarget} ORDER BY ${quoteIdentifierPart(
+      config.vendor,
+      sortField
+    )} DESC LIMIT 1`,
+    explanation,
+  };
+}
+
 async function buildDatabasePlan(question, config, schema) {
+  const deterministicPlan = buildDeterministicLatestPlan(
+    question,
+    config,
+    schema
+  );
+  if (deterministicPlan) {
+    return deterministicPlan;
+  }
+
   const prompt =
     config.vendor === "mongodb"
       ? buildMongoPrompt(question, schema)
@@ -1673,4 +1968,10 @@ module.exports = {
   mutateConnectedDatabase,
   runRawConnectedDatabaseQuery,
   testDatabaseConnection,
+  __test: {
+    inferRequestedEntity,
+    rankSchemaTables,
+    buildDeterministicLatestPlan,
+    pickLatestSortField,
+  },
 };
