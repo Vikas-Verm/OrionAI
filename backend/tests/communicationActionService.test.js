@@ -8,6 +8,8 @@ const {
   mapActionStateToPriorityItem,
   __test: {
     filterSurfaceStates,
+    filterBriefingStates,
+    filterPriorityFeedStates,
     getNormalizedGmailMessageText,
     normalizeGmailThread,
     buildGmailThreadHaystack,
@@ -26,6 +28,28 @@ test("filterSurfaceStates keeps only current-user action items for active AI sur
 
   assert.deepEqual(
     filtered.map((state) => state.id),
+    ["reply", "approval"]
+  );
+});
+
+test("surface filters keep waiting-on-others in briefing but not in insight or priority feed surfaces", () => {
+  const states = [
+    { id: "reply", actionState: ACTION_STATES.WAITING_ON_YOUR_REPLY, eligibleForInsights: true, eligibleForBriefing: true, eligibleForPriorityFeed: true },
+    { id: "approval", actionState: ACTION_STATES.NEEDS_APPROVAL, eligibleForInsights: true, eligibleForBriefing: true, eligibleForPriorityFeed: true },
+    { id: "waiting", actionState: ACTION_STATES.WAITING_ON_OTHERS, eligibleForInsights: false, eligibleForBriefing: true, eligibleForPriorityFeed: false },
+    { id: "resolved", actionState: ACTION_STATES.RESOLVED, eligibleForInsights: false, eligibleForBriefing: false, eligibleForPriorityFeed: false },
+  ];
+
+  assert.deepEqual(
+    filterSurfaceStates(states).map((state) => state.id),
+    ["reply", "approval"]
+  );
+  assert.deepEqual(
+    filterBriefingStates(states).map((state) => state.id),
+    ["reply", "approval", "waiting"]
+  );
+  assert.deepEqual(
+    filterPriorityFeedStates(states).map((state) => state.id),
     ["reply", "approval"]
   );
 });

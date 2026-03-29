@@ -582,6 +582,13 @@
               <div class="tg-dlg-top">
                 <span class="tg-dlg-name">{{ d.name }}</span>
                 <div class="tg-dlg-meta">
+                  <span
+                    v-if="telegramActionState(d.id)"
+                    class="tg-action-chip"
+                    :class="`state-${telegramActionState(d.id).actionState}`"
+                  >
+                    {{ telegramActionState(d.id).actionStateLabel }}
+                  </span>
                   <span class="tg-dlg-date">{{ fmtDate(d.lastDate) }}</span>
                 </div>
               </div>
@@ -1042,6 +1049,10 @@ const {
   refresh: refreshTelegramActions,
   recordAction: recordTelegramAction,
 } = useCommunicationActions('telegram')
+
+function telegramActionState(dialogId) {
+  return telegramActionMap.value[String(dialogId)] || null
+}
 
 // ── Modal & Drawer state ──────────────────────────────────────────────
 const showDrawer = ref(false)
@@ -2424,6 +2435,20 @@ function fIconCol(n = '') { return EX[(n.split('.').pop() || '').toLowerCase()] 
 .tg-dlg-top { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 2px; gap: 8px; }
 .tg-dlg-meta { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .tg-dlg-name { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tg-action-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+.tg-action-chip.state-waiting_on_your_reply { background: rgba(245, 158, 11, 0.14); color: #b45309; }
+.tg-action-chip.state-needs_approval { background: rgba(239, 68, 68, 0.14); color: #b91c1c; }
+.tg-action-chip.state-needs_follow_up { background: rgba(14, 165, 233, 0.14); color: #0369a1; }
+.tg-action-chip.state-waiting_on_others { background: rgba(16, 185, 129, 0.14); color: #047857; }
 .tg-dlg-date { font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
 .tg-dlg-prev { font-size: 12.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* ── CHAT PANE ── */

@@ -6,8 +6,8 @@
           <span>{{ item.sourceIcon }}</span>
           <span>{{ item.sourceLabel }}</span>
         </span>
-        <span v-if="item.actionStateLabel" class="priority-state-chip">{{ item.actionStateLabel }}</span>
-        <span class="priority-level" :class="`level-${priorityTone}`">{{ item.priority }}</span>
+        <span v-if="showStatusChips && item.actionStateLabel" class="priority-state-chip">{{ item.actionStateLabel }}</span>
+        <span v-if="showStatusChips" class="priority-level" :class="`level-${priorityTone}`">{{ item.priority }}</span>
       </div>
 
       <div class="priority-card-headline">
@@ -111,6 +111,9 @@ const snoozeOptions = [
 ]
 
 const priorityTone = computed(() => String(props.item.priority || 'low').toLowerCase())
+const showStatusChips = computed(() =>
+  props.item?.sourceApp !== 'google_calendar' && props.item?.category !== 'meetings'
+)
 const approveLabel = computed(() =>
   props.item?.actionState === 'needs_approval' ? 'Handled' : 'Mark done'
 )

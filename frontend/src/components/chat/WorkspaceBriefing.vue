@@ -239,9 +239,10 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import api from '../../services/api'
 import PriorityFeedCard from '../home/PriorityFeedCard.vue'
+import { useWebSocket } from '../../composables/useWebSocket'
 
 const props = defineProps({
   fallbackTitle: { type: String, default: 'Daily Briefing' },
@@ -258,7 +259,10 @@ const pendingItemId = ref(null)
 const pendingDashboard = ref(null)
 const briefingUpdateLabel = ref('')
 const pendingUpdateCount = ref(0)
+const { unreadByApp } = useWebSocket()
 let refreshTimer = null
+let liveRefreshTimer = null
+let latestLoadRequestId = 0
 
 const fallbackSuggestions = [
   {
@@ -279,8 +283,7 @@ const dailyBriefing = computed(() => dashboard.value?.dailyBriefing || {})
 const filters = computed(() => dashboard.value?.priorityFeed?.filters || [
   { id: 'all', label: 'All', count: 0 },
   { id: 'urgent', label: 'Urgent', count: 0 },
-  { id: 'communication', label: 'Comms', count: 0 },
-  { id: 'waiting_on_your_reply', label: 'Replies', count: 0 },
+  { id: 'communication', label: 'Communication', count: 0 },
   { id: 'needs_approval', label: 'Approvals', count: 0 },
   { id: 'needs_follow_up', label: 'Follow-ups', count: 0 },
   { id: 'meetings', label: 'Meetings', count: 0 },
@@ -327,12 +330,25 @@ const emptyStateDescription = computed(() => dashboard.value?.priorityFeed?.empt
 
 const filteredItems = computed(() => {
   if (activeFilter.value === 'all') return items.value
-  if (activeFilter.value === 'urgent') return items.value.filter((item) => item.priority === 'High')
+  if (activeFilter.value === 'urgent') {
+    return items.value.filter(
+      (item) => item.priority === 'High' && item.category !== 'meetings'
+    )
+  }
   if (['waiting_on_your_reply', 'needs_approval', 'needs_follow_up', 'waiting_on_others'].includes(activeFilter.value)) {
     return items.value.filter((item) => item.actionState === activeFilter.value)
   }
   return items.value.filter((item) => item.category === activeFilter.value)
 })
+
+watch(
+  filters,
+  (nextFilters) => {
+    if (nextFilters.some((filter) => filter.id === activeFilter.value)) return
+    activeFilter.value = 'all'
+  },
+  { immediate: true }
+)
 
 const suggestedActions = computed(() => {
   if (!items.value.length) return fallbackSuggestions
@@ -413,6 +429,41 @@ function filterCountLabel(value) {
   return count > 9 ? '9+' : String(count)
 }
 
+function itemIdentity(item = {}) {
+  return String(
+    item?.latestMessageId ||
+    item?.messageId ||
+    item?.eventId ||
+    item?.threadId ||
+    item?.chatId ||
+    item?.id ||
+    item?.ts ||
+    item?.start ||
+    item?.title ||
+    item?.name ||
+    ''
+  )
+}
+
+const liveSignalFingerprint = computed(() =>
+  Object.entries(unreadByApp)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([app, entry]) => {
+      const previews = Array.isArray(entry?.items)
+        ? entry.items.slice(0, 3).map((item) => itemIdentity(item)).join(',')
+        : ''
+
+      return [
+        app,
+        Number(entry?.rawCount ?? entry?.count ?? 0) || 0,
+        Number(entry?.displayCount ?? 0) || 0,
+        String(entry?.summary || ''),
+        previews,
+      ].join('::')
+    })
+    .join('||')
+)
+
 function applyActionResult(itemId, entry) {
   items.value = items.value.filter((item) => item.id !== itemId)
   auditTrail.value = [entry, ...auditTrail.value].slice(0, 8)
@@ -476,9 +527,11 @@ function approveEditedItem({ item, note }) {
 }
 
 async function loadDashboard({ silent = false, mode = 'replace' } = {}) {
+  const requestId = ++latestLoadRequestId
   if (!silent) loading.value = true
   try {
     const { data } = await api.get('/api/briefing/home')
+    if (requestId !== latestLoadRequestId) return
     if (mode === 'pending') {
       const nextItems = Array.isArray(data.priorityFeed?.items) ? data.priorityFeed.items : []
       const currentIds = new Set(items.value.map((item) => item.id))
@@ -501,9 +554,10 @@ async function loadDashboard({ silent = false, mode = 'replace' } = {}) {
     applyDashboardSnapshot(data)
     clearPendingDashboard()
   } catch (err) {
+    if (requestId !== latestLoadRequestId) return
     console.debug('Workspace briefing unavailable:', err.message)
   } finally {
-    if (!silent) loading.value = false
+    if (!silent && requestId === latestLoadRequestId) loading.value = false
   }
 }
 
@@ -514,15 +568,17 @@ function schedulePendingRefresh() {
   }, 350)
 }
 
+function scheduleLiveRefresh() {
+  clearTimeout(liveRefreshTimer)
+  liveRefreshTimer = setTimeout(() => {
+    loadDashboard({ silent: true, mode: 'replace' })
+  }, 180)
+}
+
 function onPriorityRefreshNeeded(event) {
   const reason = event.detail?.reason || ''
-  const sourceApp = event.detail?.sourceApp || ''
   if (reason === 'incoming_high_signal') {
-    if (['slack', 'telegram', 'google_calendar'].includes(sourceApp)) {
-      loadDashboard({ silent: true, mode: 'replace' })
-      return
-    }
-    schedulePendingRefresh()
+    scheduleLiveRefresh()
     return
   }
 
@@ -536,6 +592,15 @@ function onPriorityRefreshNeeded(event) {
   }
 }
 
+watch(
+  liveSignalFingerprint,
+  (nextValue, previousValue) => {
+    if (!nextValue || nextValue === previousValue) return
+    if (loading.value && !dashboard.value) return
+    scheduleLiveRefresh()
+  }
+)
+
 onMounted(() => {
   loadDashboard()
   document.addEventListener('orion:priority-refresh-needed', onPriorityRefreshNeeded)
@@ -543,6 +608,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   clearTimeout(refreshTimer)
+  clearTimeout(liveRefreshTimer)
   document.removeEventListener('orion:priority-refresh-needed', onPriorityRefreshNeeded)
 })
 </script>
@@ -933,7 +999,7 @@ onUnmounted(() => {
 .briefing-suggestions {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
 }
 
 .priority-filter-chip,
@@ -961,15 +1027,15 @@ onUnmounted(() => {
 }
 
 .priority-filter-count {
-  min-width: 14px;
-  height: 14px;
-  padding: 0 2px;
-  border-radius: 7px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 999px;
   background: #6366f1;
   color: #fff;
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 700;
-  line-height: 14px;
+  line-height: 20px;
   text-align: center;
   border: 1.5px solid var(--bg-surface, #0f1117);
 }

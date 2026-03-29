@@ -31,6 +31,51 @@ async function getCalendarClient(userId) {
 }
 
 // ── Helper: format event for rich card ───────────────────────────────────────
+function extractMeetLink(event = {}) {
+  const entryPoints = Array.isArray(event.conferenceData?.entryPoints)
+    ? event.conferenceData.entryPoints
+    : [];
+
+  const meetEntryPoint = entryPoints.find((entryPoint) =>
+    String(entryPoint?.uri || "").includes("meet.google.com")
+  )?.uri;
+  if (meetEntryPoint) return meetEntryPoint;
+
+  const directEntryPoint = entryPoints.find(
+    (entryPoint) => entryPoint.entryPointType === "video"
+  )?.uri;
+  if (directEntryPoint) return directEntryPoint;
+
+  if (event.hangoutLink) return event.hangoutLink;
+
+  const conferenceId = String(event.conferenceData?.conferenceId || "").trim();
+  const conferenceType = String(
+    event.conferenceData?.conferenceSolution?.key?.type ||
+      event.conferenceData?.conferenceSolution?.name ||
+      ""
+  ).toLowerCase();
+  if (
+    conferenceId &&
+    (conferenceType.includes("hangoutsmeet") ||
+      conferenceType.includes("google meet"))
+  ) {
+    return `https://meet.google.com/${conferenceId}`;
+  }
+
+  const textSources = [event.location, event.description]
+    .map((value) => String(value || ""))
+    .filter(Boolean);
+
+  for (const source of textSources) {
+    const match = source.match(
+      /https:\/\/meet\.google\.com\/[a-z0-9-]+(?:[/?][^\s<>"')\]]*)?/i
+    );
+    if (match) return match[0];
+  }
+
+  return null;
+}
+
 function fmtEvent(e) {
   const start = e.start?.dateTime || e.start?.date || "";
   const end = e.end?.dateTime || e.end?.date || "";
@@ -58,9 +103,7 @@ function fmtEvent(e) {
           })
         : "All day",
     location: e.location || null,
-    meet:
-      e.conferenceData?.entryPoints?.find((p) => p.entryPointType === "video")
-        ?.uri || null,
+    meet: extractMeetLink(e),
     attendees: (e.attendees || []).map((a) => ({
       email: a.email,
       name: a.displayName || a.email,
@@ -95,6 +138,7 @@ async function calendarGetToday(params, ctx) {
 
   const res = await calendar.events.list({
     calendarId: "primary",
+    conferenceDataVersion: 1,
     timeMin: useUpcomingWindow ? now.toISOString() : bounds.timeMin,
     timeMax: useUpcomingWindow ? end.toISOString() : bounds.timeMax,
     singleEvents: true,
@@ -134,6 +178,7 @@ async function calendarGetWeek(params, ctx) {
 
   const res = await calendar.events.list({
     calendarId: "primary",
+    conferenceDataVersion: 1,
     timeMin: mon.toISOString(),
     timeMax: sun.toISOString(),
     singleEvents: true,
@@ -188,13 +233,14 @@ async function calendarGetEvents(params, ctx) {
 
   const listParams = {
     calendarId: "primary",
+    conferenceDataVersion: 1,
     timeMin,
     singleEvents: true,
     orderBy: "startTime",
     maxResults,
   };
   if (timeMax) listParams.timeMax = timeMax;
-  if (query && !dateFrom) listParams.q = query; // only text-search when no date given
+  if (query) listParams.q = query;
 
   const res = await calendar.events.list(listParams);
   const events = (res.data.items || []).map(fmtEvent);
@@ -282,6 +328,7 @@ async function calendarUpdate(params, ctx) {
     // Find by title
     const res = await calendar.events.list({
       calendarId: "primary",
+      conferenceDataVersion: 1,
       q: title,
       timeMin: new Date().toISOString(),
       singleEvents: true,
@@ -297,6 +344,7 @@ async function calendarUpdate(params, ctx) {
   const existing = await calendar.events.get({
     calendarId: "primary",
     eventId: targetId,
+    conferenceDataVersion: 1,
   });
   const patch = { ...existing.data };
   if (title) patch.summary = title;
@@ -321,6 +369,7 @@ async function calendarUpdate(params, ctx) {
   const updated = await calendar.events.update({
     calendarId: "primary",
     eventId: targetId,
+    conferenceDataVersion: 1,
     resource: patch,
   });
   const evt = fmtEvent(updated.data);
@@ -370,6 +419,7 @@ async function calendarDelete(params, ctx) {
 
     const res = await calendar.events.list({
       calendarId: "primary",
+      conferenceDataVersion: 1,
       timeMin: new Date().toISOString(),
       singleEvents: true,
       maxResults: 20,
@@ -418,6 +468,7 @@ async function calendarGetInvites(params, ctx) {
 
   const res = await calendar.events.list({
     calendarId: "primary",
+    conferenceDataVersion: 1,
     timeMin: new Date().toISOString(),
     singleEvents: true,
     orderBy: "startTime",
@@ -457,6 +508,7 @@ async function calendarRespond(params, ctx) {
   if (!targetId && title) {
     const res = await calendar.events.list({
       calendarId: "primary",
+      conferenceDataVersion: 1,
       q: title,
       timeMin: new Date().toISOString(),
       singleEvents: true,
@@ -472,6 +524,7 @@ async function calendarRespond(params, ctx) {
   const existing = await calendar.events.get({
     calendarId: "primary",
     eventId: targetId,
+    conferenceDataVersion: 1,
   });
   const patch = { ...existing.data };
   const selfIdx = (patch.attendees || []).findIndex((a) => a.self);
@@ -481,6 +534,7 @@ async function calendarRespond(params, ctx) {
   await calendar.events.patch({
     calendarId: "primary",
     eventId: targetId,
+    conferenceDataVersion: 1,
     resource: { attendees: patch.attendees },
     sendUpdates: "all",
   });
@@ -509,4 +563,7 @@ module.exports = {
   calendarRespond,
   filterUpcomingTimedEvents,
   isUpcomingTimedEvent,
+  __test: {
+    extractMeetLink,
+  },
 };

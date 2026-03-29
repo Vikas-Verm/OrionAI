@@ -1,8 +1,12 @@
 "use strict";
 
 const {
+  CONVERSATION_STATES,
+  CONVERSATION_STATE_META,
   ACTION_STATES,
   ACTION_STATE_META,
+  ACTION_STATE_BY_CONVERSATION_STATE,
+  CONVERSATION_STATE_BY_ACTION_STATE,
   SOURCE_THRESHOLDS,
   INTENT_PATTERNS,
 } = require("./communicationActionConfig");
@@ -87,10 +91,115 @@ function hasQuestionSignal(text) {
   return /\?/.test(text) || /\b(any update|what is|what's|when can|who can|should we|can i)\b/.test(text);
 }
 
-function detectIntent(text = "") {
+function mergeSemanticIntent(baseIntent, semanticHints = null) {
+  if (!semanticHints || typeof semanticHints !== "object") {
+    return baseIntent;
+  }
+
+  const merged = {
+    ...baseIntent,
+    signals: [...(baseIntent.signals || [])],
+  };
+  const semanticRole = normalizeLower(
+    semanticHints.semanticRole ||
+      semanticHints.role ||
+      semanticHints.label ||
+      ""
+  );
+  const semanticSignals = [];
+
+  if (semanticHints.isApprovalRequest || semanticRole === "approval_request") {
+    merged.hasApproval = true;
+    merged.hasRequest = true;
+    semanticSignals.push("semantic_approval_request");
+  }
+
+  if (
+    semanticHints.isAsk ||
+    semanticHints.isQuestion ||
+    semanticRole === "ask" ||
+    semanticRole === "question"
+  ) {
+    merged.hasQuestion = true;
+    merged.hasRequest = true;
+    semanticSignals.push("semantic_ask");
+  }
+
+  if (semanticHints.isApprovalDecision || semanticRole === "approval") {
+    merged.hasApprovalDecision = true;
+    merged.resolvesPreviousRequest = true;
+    merged.looksResolved = true;
+    semanticSignals.push("semantic_approval");
+  }
+
+  if (semanticHints.isAnswer || semanticRole === "answer") {
+    merged.resolvesPreviousRequest = true;
+    merged.looksResolved = true;
+    semanticSignals.push("semantic_answer");
+  }
+
+  if (
+    semanticHints.isAcknowledgement ||
+    semanticRole === "acknowledgement"
+  ) {
+    merged.hasAcknowledgement = true;
+    semanticSignals.push("semantic_acknowledgement");
+  }
+
+  if (semanticHints.isCommitment || semanticRole === "commitment") {
+    merged.hasPromise = true;
+    semanticSignals.push("semantic_commitment");
+  }
+
+  if (semanticHints.isFollowUp || semanticRole === "follow_up") {
+    merged.hasFollowUp = true;
+    merged.hasRequest = true;
+    semanticSignals.push("semantic_follow_up");
+  }
+
+  if (
+    semanticHints.isResolved ||
+    semanticRole === "resolved" ||
+    semanticRole === "resolution"
+  ) {
+    merged.looksResolved = true;
+    merged.resolvesPreviousRequest = true;
+    semanticSignals.push("semantic_resolved");
+  }
+
+  if (
+    semanticHints.isInformational ||
+    semanticRole === "informational"
+  ) {
+    merged.isInformational = true;
+    semanticSignals.push("semantic_informational");
+  }
+
+  if (semanticHints.isUrgent) {
+    merged.hasUrgency = true;
+    semanticSignals.push("semantic_urgency");
+  }
+
+  if (semanticRole) {
+    merged.semanticRole = semanticRole;
+  }
+
+  if (semanticHints.source) {
+    merged.semanticSource = semanticHints.source;
+  }
+
+  if (Number.isFinite(Number(semanticHints.confidence))) {
+    merged.semanticConfidence = Number(semanticHints.confidence);
+  }
+
+  merged.signals = [...new Set([...merged.signals, ...semanticSignals])];
+  return merged;
+}
+
+function detectIntent(text = "", semanticHints = null) {
   const normalized = normalizeLower(text);
   if (!normalized) {
-    return {
+      return {
       hasQuestion: false,
       hasRequest: false,
       hasApproval: false,
@@ -153,7 +262,7 @@ function detectIntent(text = "") {
                     ? "informational"
                     : "informational";
 
-  return {
+  return mergeSemanticIntent({
     hasQuestion: questionSignal,
     hasRequest: questionSignal || requestHits.length > 0,
     hasApproval: approvalHits.length > 0,
@@ -189,7 +298,7 @@ function detectIntent(text = "") {
       ...(resolutionHits.length ? ["resolved"] : []),
       ...(informationalHits.length ? ["informational"] : []),
     ],
-  };
+  }, semanticHints);
 }
 
 function isMeaningfulMessage(message = {}) {
@@ -263,12 +372,58 @@ function hasOwnershipSignal(intent = {}) {
   );
 }
 
-function isActionableState(actionState) {
+function toLegacyActionState(state) {
+  return ACTION_STATE_BY_CONVERSATION_STATE[state] || state;
+}
+
+function toConversationState(actionState) {
+  return CONVERSATION_STATE_BY_ACTION_STATE[actionState] || actionState;
+}
+
+function normalizeCurrentActor(value = "nobody") {
+  if (value === "current_user") return "current_user";
+  if (value === "other" || value === "other_party") return "other_party";
+  return "nobody";
+}
+
+function toLegacyCurrentActor(value = "nobody") {
+  if (value === "current_user") return "current_user";
+  if (value === "other_party") return "other";
+  return "none";
+}
+
+function isInsightEligibleState(state) {
   return (
-    actionState === ACTION_STATES.WAITING_ON_YOUR_REPLY ||
-    actionState === ACTION_STATES.NEEDS_APPROVAL ||
-    actionState === ACTION_STATES.NEEDS_FOLLOW_UP
+    state === CONVERSATION_STATES.WAITING_ON_YOU ||
+    state === CONVERSATION_STATES.NEEDS_APPROVAL ||
+    state === CONVERSATION_STATES.NEEDS_FOLLOW_UP
   );
+}
+
+function isBriefingEligibleState(state) {
+  return (
+    isInsightEligibleState(state) ||
+    state === CONVERSATION_STATES.WAITING_ON_OTHERS
+  );
+}
+
+function isPriorityFeedEligibleState(state) {
+  return isInsightEligibleState(state);
+}
+
+function buildSurfaceEligibility(state) {
+  return {
+    insights: isInsightEligibleState(state),
+    briefing: isBriefingEligibleState(state),
+    priorityFeed: isPriorityFeedEligibleState(state),
+  };
+}
+
+function shouldIncludeStateDebug(options = {}) {
+  if (typeof options.includeDebug === "boolean") {
+    return options.includeDebug;
+  }
+  return process.env.NODE_ENV !== "production";
 }
 
 function findPriorMessage(messages = [], startIndex, predicate) {
@@ -284,7 +439,10 @@ function buildResponsibilityAnalysis(conversation, sortedMessages = []) {
   const meaningfulMessages = sortedMessages
     .filter(isMeaningfulMessage)
     .map((message) => {
-      const intent = detectIntent(message.text || message.previewText || "");
+      const intent = detectIntent(
+        message.text || message.previewText || "",
+        message.semanticHints
+      );
       const userExpectedToAct = inferMessageExpectedToAct(conversation, message);
       const addressedToCurrentUser = Boolean(
         message.addressedToCurrentUser ||
@@ -332,7 +490,7 @@ function buildResponsibilityAnalysis(conversation, sortedMessages = []) {
 
   let responsibilityMessage = latestMeaningful;
   let responsibilityReason = latestMeaningful ? "latest_meaningful" : "none";
-  let currentActor = "none";
+  let currentActor = "nobody";
   let responsibilityShifted = false;
   let anchorMessage = null;
 
@@ -370,7 +528,7 @@ function buildResponsibilityAnalysis(conversation, sortedMessages = []) {
     ) {
       responsibilityMessage = message;
       responsibilityReason = "ownership_reply";
-      currentActor = "other";
+      currentActor = "other_party";
       responsibilityShifted = true;
       anchorMessage = priorOutboundAsk;
       break;
@@ -384,7 +542,7 @@ function buildResponsibilityAnalysis(conversation, sortedMessages = []) {
     ) {
       responsibilityMessage = message;
       responsibilityReason = "peer_ownership_reply";
-      currentActor = "other";
+      currentActor = "other_party";
       responsibilityShifted = true;
       anchorMessage = priorInboundAsk;
       break;
@@ -398,7 +556,7 @@ function buildResponsibilityAnalysis(conversation, sortedMessages = []) {
     ) {
       responsibilityMessage = message;
       responsibilityReason = "resolved_reply";
-      currentActor = "none";
+      currentActor = "nobody";
       anchorMessage = priorOutboundAsk;
       break;
     }
@@ -411,7 +569,7 @@ function buildResponsibilityAnalysis(conversation, sortedMessages = []) {
     ) {
       responsibilityMessage = message;
       responsibilityReason = "resolved_reply";
-      currentActor = "none";
+      currentActor = "nobody";
       anchorMessage = priorInboundAsk;
       break;
     }
@@ -427,7 +585,7 @@ function buildResponsibilityAnalysis(conversation, sortedMessages = []) {
     if (message.direction === "outbound" && message.asksOtherParty) {
       responsibilityMessage = message;
       responsibilityReason = "outbound_request";
-      currentActor = "other";
+      currentActor = "other_party";
       anchorMessage = message;
       break;
     }
@@ -439,7 +597,7 @@ function buildResponsibilityAnalysis(conversation, sortedMessages = []) {
     ) {
       responsibilityMessage = message;
       responsibilityReason = "user_replied";
-      currentActor = "other";
+      currentActor = "other_party";
       anchorMessage = priorInboundAsk;
       break;
     }
@@ -460,7 +618,7 @@ function buildResponsibilityAnalysis(conversation, sortedMessages = []) {
       if (message.intent.looksResolved) {
         responsibilityMessage = message;
         responsibilityReason = "resolved_reply";
-        currentActor = "none";
+        currentActor = "nobody";
         anchorMessage = priorOutboundAsk;
         break;
       }
@@ -469,7 +627,7 @@ function buildResponsibilityAnalysis(conversation, sortedMessages = []) {
       responsibilityReason = message.intent.hasAcknowledgement
         ? "acknowledged_reply"
         : "other_replied";
-      currentActor = "other";
+      currentActor = "other_party";
       responsibilityShifted = Boolean(
         message.takesOwnership || message.intent.hasAcknowledgement
       );
@@ -480,7 +638,7 @@ function buildResponsibilityAnalysis(conversation, sortedMessages = []) {
     if (message.intent.looksResolved) {
       responsibilityMessage = message;
       responsibilityReason = "resolved";
-      currentActor = "none";
+      currentActor = "nobody";
       anchorMessage = message;
       break;
     }
@@ -493,7 +651,7 @@ function buildResponsibilityAnalysis(conversation, sortedMessages = []) {
     ) {
       responsibilityMessage = message;
       responsibilityReason = "group_noise";
-      currentActor = "none";
+      currentActor = "nobody";
       anchorMessage = message;
       break;
     }
@@ -555,14 +713,18 @@ function buildActionReason(actionState, details = {}) {
     userExpectedToAct = false,
   } = details;
 
-  if (actionState === ACTION_STATES.NEEDS_APPROVAL) {
+  if (actionState === CONVERSATION_STATES.RESOLVED) {
+    return buildResolvedReason(details);
+  }
+
+  if (actionState === CONVERSATION_STATES.NEEDS_APPROVAL) {
     if (mentionedCurrentUser) {
       return "Latest message asks for your approval directly.";
     }
     return "Latest message asks for your approval.";
   }
 
-  if (actionState === ACTION_STATES.WAITING_ON_YOUR_REPLY) {
+  if (actionState === CONVERSATION_STATES.WAITING_ON_YOU) {
     if (mentionedCurrentUser) {
       return "You were directly asked to respond and have not replied yet.";
     }
@@ -578,7 +740,7 @@ function buildActionReason(actionState, details = {}) {
     return "This conversation is waiting on your reply.";
   }
 
-  if (actionState === ACTION_STATES.NEEDS_FOLLOW_UP) {
+  if (actionState === CONVERSATION_STATES.NEEDS_FOLLOW_UP) {
     if (promisedFollowUp) {
       return "You previously committed to send an update and the follow-up still looks open.";
     }
@@ -588,7 +750,7 @@ function buildActionReason(actionState, details = {}) {
     return "The thread still looks unresolved and likely needs you to re-engage.";
   }
 
-  if (actionState === ACTION_STATES.WAITING_ON_OTHERS) {
+  if (actionState === CONVERSATION_STATES.WAITING_ON_OTHERS) {
     if (responsibilityShifted) {
       return "The other person has acknowledged and is taking the next step.";
     }
@@ -658,9 +820,13 @@ function buildConfidenceBand(value) {
 }
 
 function computeConfidence(actionState, details = {}) {
-  if (actionState === ACTION_STATES.NO_ACTION_NEEDED) {
+  if (actionState === CONVERSATION_STATES.NO_ACTION_NEEDED) {
     const excludeScore = details.excludedReason ? 0.88 : 0.62;
     return clamp(excludeScore, 0.05, 0.99);
+  }
+
+  if (actionState === CONVERSATION_STATES.RESOLVED) {
+    return clamp(0.84, 0.05, 0.99);
   }
 
   let score = 0.38;
@@ -680,7 +846,7 @@ function computeConfidence(actionState, details = {}) {
 }
 
 function computePriorityBoost(actionState, details = {}) {
-  const base = ACTION_STATE_META[actionState]?.priorityWeight || 0;
+  const base = CONVERSATION_STATE_META[actionState]?.priorityWeight || 0;
   const latestTs =
     details.latestInboundTimestamp ||
     details.latestMessageTimestamp ||
@@ -705,19 +871,88 @@ function computePriorityBoost(actionState, details = {}) {
   return clamp(base + recencyBoost + signalBoost, 0, 98);
 }
 
-function buildBaseState(conversation, actionState, payload = {}, nowMs = Date.now()) {
+function buildStateDebug(
+  conversation,
+  conversationState,
+  actionState,
+  payload,
+  confidence,
+  nowMs
+) {
+  const latestMeaningful = payload.latestMeaningful || null;
+  const latestIntent = latestMeaningful?.intent || payload.latestMeaningfulIntent || {};
+  const eligibility = buildSurfaceEligibility(conversationState);
+
+  return {
+    source: conversation.sourceType,
+    conversationId: conversation.conversationId,
+    normalizedLatestMeaningfulMessage: latestMeaningful
+      ? {
+          id: latestMeaningful.id || null,
+          timestamp: latestMeaningful.timestamp
+            ? new Date(latestMeaningful.timestamp).toISOString()
+            : null,
+          direction: latestMeaningful.direction || "unknown",
+          senderType: latestMeaningful.senderType || "unknown",
+          senderName: latestMeaningful.senderName || "",
+          text:
+            latestMeaningful.text ||
+            latestMeaningful.previewText ||
+            "",
+        }
+      : null,
+    computedState: conversationState,
+    legacyActionState: actionState,
+    currentActor: normalizeCurrentActor(payload.currentActor),
+    reason: buildActionReason(conversationState, payload),
+    confidence,
+    confidenceBand: buildConfidenceBand(confidence),
+    eligibleForInsights: eligibility.insights,
+    eligibleForBriefing: eligibility.briefing,
+    eligibleForPriorityFeed: eligibility.priorityFeed,
+    responsibilityReason: payload.responsibilityReason || "",
+    semanticRole: latestIntent.semanticRole || "informational",
+    semanticSource: latestIntent.semanticSource || "rules",
+    semanticConfidence:
+      latestIntent.semanticConfidence !== undefined
+        ? latestIntent.semanticConfidence
+        : null,
+    intentSignals: latestIntent.signals || [],
+    generatedAt: new Date(nowMs).toISOString(),
+  };
+}
+
+function buildBaseState(
+  conversation,
+  conversationState,
+  payload = {},
+  nowMs = Date.now(),
+  options = {}
+) {
   const latestMeaningful = payload.latestMeaningful || null;
   const latestInbound = payload.latestInbound || null;
   const latestOutbound = payload.latestOutbound || null;
-  const confidence = computeConfidence(actionState, payload);
+  const confidence = computeConfidence(conversationState, payload);
+  const actionState = toLegacyActionState(conversationState);
+  const currentActor = normalizeCurrentActor(payload.currentActor);
+  const reason = buildActionReason(conversationState, payload);
+  const surfaceEligibility = buildSurfaceEligibility(conversationState);
+  const latestMeaningfulTimestamp = latestMeaningful?.timestamp
+    ? new Date(latestMeaningful.timestamp).toISOString()
+    : null;
 
   return {
     id: `comm:${conversation.sourceType}:${conversation.conversationId}`,
+    source: conversation.sourceType,
     sourceType: conversation.sourceType,
     conversationId: conversation.conversationId,
     conversationTitle: conversation.conversationTitle || "Conversation",
     threadId: conversation.threadId || null,
+    state: conversationState,
+    stateLabel: CONVERSATION_STATE_META[conversationState]?.label || actionState,
     latestMessageTimestamp: latestMeaningful?.timestamp || null,
+    latestMeaningfulMessageId: latestMeaningful?.id || null,
+    latestMeaningfulTimestamp,
     latestInboundTimestamp: latestInbound?.timestamp || null,
     latestOutboundTimestamp: latestOutbound?.timestamp || null,
     latestSenderType: latestMeaningful?.senderType || "unknown",
@@ -728,18 +963,25 @@ function buildBaseState(conversation, actionState, payload = {}, nowMs = Date.no
     hasApprovalIntent: Boolean(payload.latestInboundIntent?.hasApproval),
     hasFollowUpIntent: Boolean(payload.latestInboundIntent?.hasFollowUp),
     hasMentionOfCurrentUser: Boolean(payload.mentionedCurrentUser),
-    currentActor: payload.currentActor || "none",
+    currentActor,
+    legacyCurrentActor: toLegacyCurrentActor(currentActor),
     responsibilityShifted: Boolean(payload.responsibilityShifted),
-    surfaceEligible: isActionableState(actionState),
+    eligibleForInsights: surfaceEligibility.insights,
+    eligibleForBriefing: surfaceEligibility.briefing,
+    eligibleForPriorityFeed: surfaceEligibility.priorityFeed,
+    surfaceEligibility,
+    surfaceEligible: surfaceEligibility.insights,
     actionState,
     actionStateLabel: ACTION_STATE_META[actionState].label,
-    actionReason: buildActionReason(actionState, payload),
+    reason,
+    actionReason: reason,
     confidence,
     confidenceBand: buildConfidenceBand(confidence),
     priorityBoost:
-      actionState === ACTION_STATES.NO_ACTION_NEEDED
+      conversationState === CONVERSATION_STATES.NO_ACTION_NEEDED ||
+      conversationState === CONVERSATION_STATES.RESOLVED
         ? 0
-        : computePriorityBoost(actionState, {
+        : computePriorityBoost(conversationState, {
             ...payload,
             nowMs,
             latestInboundTimestamp: payload.latestInboundTimestamp || latestInbound?.timestamp || null,
@@ -759,20 +1001,49 @@ function buildBaseState(conversation, actionState, payload = {}, nowMs = Date.no
     platformMetadata: conversation.platformMetadata || {},
     openContext: conversation.openContext || {},
     generatedAt: new Date(nowMs).toISOString(),
+    ...(shouldIncludeStateDebug(options)
+      ? {
+          debug: buildStateDebug(
+            conversation,
+            conversationState,
+            actionState,
+            payload,
+            confidence,
+            nowMs
+          ),
+        }
+      : {}),
   };
 }
 
-function buildNoActionState(conversation, payload = {}, nowMs = Date.now()) {
+function buildNoActionState(conversation, payload = {}, nowMs = Date.now(), options = {}) {
   return buildBaseState(
     conversation,
-    ACTION_STATES.NO_ACTION_NEEDED,
+    CONVERSATION_STATES.NO_ACTION_NEEDED,
     payload,
-    nowMs
+    nowMs,
+    options
   );
 }
 
-function buildClassifiedState(conversation, actionState, payload = {}, nowMs = Date.now()) {
-  return buildBaseState(conversation, actionState, payload, nowMs);
+function buildResolvedState(conversation, payload = {}, nowMs = Date.now(), options = {}) {
+  return buildBaseState(
+    conversation,
+    CONVERSATION_STATES.RESOLVED,
+    payload,
+    nowMs,
+    options
+  );
+}
+
+function buildClassifiedState(
+  conversation,
+  actionState,
+  payload = {},
+  nowMs = Date.now(),
+  options = {}
+) {
+  return buildBaseState(conversation, actionState, payload, nowMs, options);
 }
 
 function classifyConversation(conversation, options = {}) {
@@ -814,7 +1085,12 @@ function classifyConversation(conversation, options = {}) {
   } = analysis;
 
   if (!conversation || !latestMeaningful) {
-    return buildNoActionState(conversation || { sourceType: "other", conversationId: "unknown" }, {}, nowMs);
+    return buildNoActionState(
+      conversation || { sourceType: "other", conversationId: "unknown" },
+      {},
+      nowMs,
+      options
+    );
   }
 
   const latestInboundAgeHours = hoursSince(latestInbound?.timestamp, nowMs);
@@ -868,7 +1144,8 @@ function classifyConversation(conversation, options = {}) {
         ...basePayload,
         excludedReason,
       },
-      nowMs
+      nowMs,
+      options
     );
   }
 
@@ -879,7 +1156,8 @@ function classifyConversation(conversation, options = {}) {
         ...basePayload,
         excludedReason: "This looks like a login or verification message and does not require action.",
       },
-      nowMs
+      nowMs,
+      options
     );
   }
 
@@ -890,7 +1168,8 @@ function classifyConversation(conversation, options = {}) {
         ...basePayload,
         excludedReason: "This looks like broadcast or announcement traffic with no action expected from you.",
       },
-      nowMs
+      nowMs,
+      options
     );
   }
 
@@ -913,12 +1192,13 @@ function classifyConversation(conversation, options = {}) {
         ...basePayload,
         excludedReason: "This looks automated and does not require action.",
       },
-      nowMs
+      nowMs,
+      options
     );
   }
 
   if (conversationResolved) {
-    return buildNoActionState(
+    return buildResolvedState(
       conversation,
       {
         ...basePayload,
@@ -929,7 +1209,8 @@ function classifyConversation(conversation, options = {}) {
           responsibilityReason,
         }),
       },
-      nowMs
+      nowMs,
+      options
     );
   }
 
@@ -945,9 +1226,10 @@ function classifyConversation(conversation, options = {}) {
   ) {
     return buildClassifiedState(
       conversation,
-      ACTION_STATES.NEEDS_APPROVAL,
+      CONVERSATION_STATES.NEEDS_APPROVAL,
       basePayload,
-      nowMs
+      nowMs,
+      options
     );
   }
 
@@ -958,9 +1240,10 @@ function classifyConversation(conversation, options = {}) {
   ) {
     return buildClassifiedState(
       conversation,
-      ACTION_STATES.WAITING_ON_YOUR_REPLY,
+      CONVERSATION_STATES.WAITING_ON_YOU,
       basePayload,
-      nowMs
+      nowMs,
+      options
     );
   }
 
@@ -972,25 +1255,27 @@ function classifyConversation(conversation, options = {}) {
   ) {
     return buildClassifiedState(
       conversation,
-      ACTION_STATES.NEEDS_FOLLOW_UP,
+      CONVERSATION_STATES.NEEDS_FOLLOW_UP,
       {
         ...basePayload,
         promisedFollowUp,
       },
-      nowMs
+      nowMs,
+      options
     );
   }
 
   if (
-    currentActor === "other" &&
+    currentActor === "other_party" &&
     responsibilityAgeHours !== null &&
     responsibilityAgeHours <= thresholds.waitingOnOthersWindowHours
   ) {
     return buildClassifiedState(
       conversation,
-      ACTION_STATES.WAITING_ON_OTHERS,
+      CONVERSATION_STATES.WAITING_ON_OTHERS,
       basePayload,
-      nowMs
+      nowMs,
+      options
     );
   }
 
@@ -1003,40 +1288,90 @@ function classifyConversation(conversation, options = {}) {
           ? ""
           : "Responsibility is unclear, so OrionAI is not surfacing this as your action.",
     },
-    nowMs
+    nowMs,
+    options
   );
 }
 
+function selectStatesForSurface(states = [], surface = "insights") {
+  const field =
+    surface === "briefing"
+      ? "eligibleForBriefing"
+      : surface === "priorityFeed"
+        ? "eligibleForPriorityFeed"
+        : "eligibleForInsights";
+
+  return states.filter((state) => {
+    if (typeof state?.[field] === "boolean") {
+      return state[field];
+    }
+
+    const conversationState = state?.state || toConversationState(state?.actionState);
+    const eligibility = buildSurfaceEligibility(conversationState);
+    if (surface === "briefing") return eligibility.briefing;
+    if (surface === "priorityFeed") return eligibility.priorityFeed;
+    return eligibility.insights;
+  });
+}
+
 function summarizeActionStates(states = []) {
+  const stateCounts = {
+    [CONVERSATION_STATES.WAITING_ON_YOU]: 0,
+    [CONVERSATION_STATES.NEEDS_APPROVAL]: 0,
+    [CONVERSATION_STATES.NEEDS_FOLLOW_UP]: 0,
+    [CONVERSATION_STATES.WAITING_ON_OTHERS]: 0,
+    [CONVERSATION_STATES.RESOLVED]: 0,
+    [CONVERSATION_STATES.NO_ACTION_NEEDED]: 0,
+  };
   const counts = {
     [ACTION_STATES.WAITING_ON_YOUR_REPLY]: 0,
     [ACTION_STATES.NEEDS_APPROVAL]: 0,
     [ACTION_STATES.NEEDS_FOLLOW_UP]: 0,
     [ACTION_STATES.WAITING_ON_OTHERS]: 0,
+    [ACTION_STATES.RESOLVED]: 0,
     [ACTION_STATES.NO_ACTION_NEEDED]: 0,
   };
 
   for (const state of states) {
-    if (counts[state.actionState] !== undefined) {
-      counts[state.actionState] += 1;
+    const conversationState = state?.state || toConversationState(state?.actionState);
+    const legacyActionState = state?.actionState || toLegacyActionState(conversationState);
+
+    if (stateCounts[conversationState] !== undefined) {
+      stateCounts[conversationState] += 1;
+    }
+    if (counts[legacyActionState] !== undefined) {
+      counts[legacyActionState] += 1;
     }
   }
 
+  const insightStates = selectStatesForSurface(states, "insights");
+  const briefingStates = selectStatesForSurface(states, "briefing");
+  const priorityFeedStates = selectStatesForSurface(states, "priorityFeed");
+
   return {
     counts,
-    actionableCount:
-      counts[ACTION_STATES.WAITING_ON_YOUR_REPLY] +
-      counts[ACTION_STATES.NEEDS_APPROVAL] +
-      counts[ACTION_STATES.NEEDS_FOLLOW_UP],
-    replyRequiredCount: counts[ACTION_STATES.WAITING_ON_YOUR_REPLY],
-    approvalCount: counts[ACTION_STATES.NEEDS_APPROVAL],
-    followUpCount: counts[ACTION_STATES.NEEDS_FOLLOW_UP],
-    waitingOnOthersCount: counts[ACTION_STATES.WAITING_ON_OTHERS],
-    noActionCount: counts[ACTION_STATES.NO_ACTION_NEEDED],
+    stateCounts,
+    surfaceCounts: {
+      insights: insightStates.length,
+      briefing: briefingStates.length,
+      priorityFeed: priorityFeedStates.length,
+    },
+    actionableCount: insightStates.length,
+    insightsCount: insightStates.length,
+    briefingCount: briefingStates.length,
+    priorityFeedCount: priorityFeedStates.length,
+    replyRequiredCount: stateCounts[CONVERSATION_STATES.WAITING_ON_YOU],
+    approvalCount: stateCounts[CONVERSATION_STATES.NEEDS_APPROVAL],
+    followUpCount: stateCounts[CONVERSATION_STATES.NEEDS_FOLLOW_UP],
+    waitingOnOthersCount: stateCounts[CONVERSATION_STATES.WAITING_ON_OTHERS],
+    resolvedCount: stateCounts[CONVERSATION_STATES.RESOLVED],
+    noActionCount: stateCounts[CONVERSATION_STATES.NO_ACTION_NEEDED],
   };
 }
 
 module.exports = {
+  CONVERSATION_STATES,
+  CONVERSATION_STATE_META,
   ACTION_STATES,
   ACTION_STATE_META,
   clamp,
@@ -1047,7 +1382,11 @@ module.exports = {
   hoursSince,
   detectIntent,
   buildResponsibilityAnalysis,
+  buildSurfaceEligibility,
   classifyConversation,
+  selectStatesForSurface,
   summarizeActionStates,
+  toLegacyActionState,
+  toConversationState,
   resolveThresholds,
 };

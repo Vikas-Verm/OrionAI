@@ -689,7 +689,7 @@
   const defaultForm = () => ({
     title: '', date: toIso(new Date()), start: '09:00', end: '10:00',
     allDay: false, location: '', description: '',
-    guests: [], addMeet: false, color: '#1a73e8', owner: '',
+    guests: [], addMeet: true, color: '#1a73e8', owner: '',
   })
   const form = ref(defaultForm())
   

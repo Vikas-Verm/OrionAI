@@ -12,10 +12,46 @@
 
 const path        = require("path");
 const Integration = require("../../models/Integration");
+const { filterWhatsAppChats } = require("../agentMessageFilterService");
+const {
+  findBestCommunicationMatch,
+  normalizeDigits,
+} = require("../communicationContactMatcher");
 
 // ── Per-user WhatsApp client instances ───────────────────────────────────────
 // Map: userId → { client, status, qr }
 const clients = new Map();
+
+function buildWhatsAppChatCandidates(chats = []) {
+  return chats.map((chat) => ({
+    record: chat,
+    fields: [
+      chat.name,
+      chat.id?._serialized,
+      chat.id?.user,
+    ],
+  }));
+}
+
+function resolveWhatsAppChat(chats = [], target = "", options = {}) {
+  const includeGroups = Boolean(options.includeGroups);
+  const includeBroadcasts = Boolean(options.includeBroadcasts);
+  const allowedChats = filterWhatsAppChats(chats, {
+    includeGroups,
+    includeBroadcasts,
+  });
+
+  const match = findBestCommunicationMatch(
+    target,
+    buildWhatsAppChatCandidates(allowedChats)
+  );
+  if (match?.item?.record) return match.item.record;
+
+  return includeGroups || includeBroadcasts
+    ? null
+    : findBestCommunicationMatch(target, buildWhatsAppChatCandidates(chats))
+        ?.item?.record || null;
+}
 
 // ── Initialize WhatsApp client for a user ────────────────────────────────────
 async function getOrCreateClient(userId) {
@@ -157,31 +193,47 @@ async function whatsappDisconnect(params, ctx) {
 // ── SEND MESSAGE ──────────────────────────────────────────────────────────────
 async function whatsappSend(params, ctx) {
   const { userId } = ctx;
-  const { to, message, isGroup } = params;
+  const { to, contact, message, isGroup } = params;
 
-  if (!to || !message) throw new Error("to and message are required");
+  if ((!to && !contact) || !message) throw new Error("to/contact and message are required");
 
   const entry = clients.get(userId);
   if (!entry || entry.status !== "connected") {
     throw new Error("WhatsApp not connected. Please connect first.");
   }
 
-  // Format phone number → WhatsApp chat ID
-  // Individual: 919999999999@c.us
-  // Group: use group ID directly
-  let chatId = to;
-  if (!to.includes("@")) {
-    const phone = to.replace(/[^0-9]/g, ""); // strip non-digits
-    chatId = isGroup ? to : `${phone}@c.us`;
+  const target = String(to || contact || "").trim();
+  const digits = normalizeDigits(target);
+  let chatId = target;
+  let targetLabel = target;
+
+  if (!target.includes("@")) {
+    if (digits.length >= 6 && !/[a-z]/i.test(target)) {
+      chatId = isGroup ? target : `${digits}@c.us`;
+      targetLabel = target;
+    } else {
+      const chats = await entry.client.getChats();
+      const resolvedChat = resolveWhatsAppChat(chats, target, {
+        includeGroups: Boolean(isGroup),
+      });
+
+      if (!resolvedChat) {
+        throw new Error(`No WhatsApp chat found for: ${target}`);
+      }
+
+      chatId = resolvedChat.id._serialized;
+      targetLabel = resolvedChat.name || target;
+    }
   }
 
   const sentMsg = await entry.client.sendMessage(chatId, message);
   return {
     ok:      true,
-    to,
+    to:      targetLabel,
+    chatId,
     message,
     msgId:   sentMsg.id._serialized,
-    summary: `WhatsApp sent to ${to}`,
+    summary: `WhatsApp sent to ${targetLabel}`,
   };
 }
 
@@ -189,20 +241,43 @@ async function whatsappSend(params, ctx) {
 async function whatsappGetMessages(params, ctx) {
   const { userId } = ctx;
   const { contact, limit = 20 } = params;
+  const includeGroups = Boolean(params.includeGroups);
+  const includeBroadcasts = Boolean(params.includeBroadcasts);
 
   const entry = clients.get(userId);
   if (!entry || entry.status !== "connected") {
     throw new Error("WhatsApp not connected");
   }
 
-  // Find chat by contact name or number
   const chats = await entry.client.getChats();
-  const chat  = chats.find(c =>
-    c.name?.toLowerCase().includes(contact?.toLowerCase()) ||
-    c.id?.user === contact?.replace(/[^0-9]/g, "")
-  );
+  const target = String(contact || "").trim();
+  const chat = target
+    ? resolveWhatsAppChat(chats, target, {
+        includeGroups,
+        includeBroadcasts,
+      })
+    : filterWhatsAppChats(chats, {
+        includeGroups,
+        includeBroadcasts,
+      })[0] || null;
 
-  if (!chat) throw new Error(`No WhatsApp chat found for: ${contact}`);
+  if (!chat) {
+    if (target) {
+      throw new Error(`No WhatsApp chat found for: ${contact}`);
+    }
+
+    return {
+      ok: false,
+      contact: null,
+      chatName: null,
+      count: 0,
+      messages: [],
+      summary:
+        includeGroups || includeBroadcasts
+          ? "No WhatsApp chats available"
+          : "No relevant direct WhatsApp chats available",
+    };
+  }
 
   const messages = await chat.fetchMessages({ limit });
   const formatted = messages.map(m => ({
@@ -227,13 +302,18 @@ async function whatsappGetMessages(params, ctx) {
 async function whatsappGetUnread(params, ctx) {
   const { userId } = ctx;
   const { limit = 20 } = params;
+  const includeGroups = Boolean(params.includeGroups);
+  const includeBroadcasts = Boolean(params.includeBroadcasts);
 
   const entry = clients.get(userId);
   if (!entry || entry.status !== "connected") return null;
 
   const chats       = await entry.client.getChats();
-  const unreadChats = chats
-    .filter(c => c.unreadCount > 0)
+  const unreadChats = filterWhatsAppChats(chats, {
+    includeGroups,
+    includeBroadcasts,
+    requireUnread: true,
+  })
     .slice(0, limit)
     .map(c => ({
       chatId:      c.id._serialized,
@@ -260,13 +340,18 @@ async function whatsappGetUnread(params, ctx) {
 async function whatsappListChats(params, ctx) {
   const { userId } = ctx;
   const { limit = 30 } = params;
+  const includeGroups = Boolean(params.includeGroups);
+  const includeBroadcasts = Boolean(params.includeBroadcasts);
 
   const entry = clients.get(userId);
   if (!entry || entry.status !== "connected") {
     throw new Error("WhatsApp not connected");
   }
 
-  const chats = (await entry.client.getChats()).slice(0, limit);
+  const chats = filterWhatsAppChats(await entry.client.getChats(), {
+    includeGroups,
+    includeBroadcasts,
+  }).slice(0, limit);
   return {
     ok:    true,
     total: chats.length,

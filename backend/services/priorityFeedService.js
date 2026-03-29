@@ -11,19 +11,25 @@ const {
 } = require("./gmailPriorityRules");
 const {
   ACTION_STATES,
-  getCommunicationPriorityItems,
+  buildCommunicationPriorityItems,
+  getCommunicationActionStates,
 } = require("./communicationActionService");
 const { calendarGetToday } = require("./tools/toolCalendar");
 const {
   toolGetMyTickets,
   toolGetOverdueTickets,
 } = require("./tools/toolJira");
-const { checkSlack, checkTelegram } = require("./inboxSignalsService");
+const {
+  checkSlack,
+  checkTelegram,
+  checkWhatsApp,
+} = require("./inboxSignalsService");
 
 const APP_META = {
   gmail: { label: "Gmail", icon: "📧", module: "gmail" },
   slack: { label: "Slack", icon: "💬", module: "slack" },
   telegram: { label: "Telegram", icon: "✈️", module: "telegram" },
+  whatsapp: { label: "WhatsApp", icon: "🟢", module: "whatsapp" },
   jira: { label: "Jira", icon: "🔷", module: "jira" },
   google_calendar: { label: "Calendar", icon: "📅", module: "google_calendar" },
   database: { label: "Database", icon: "🗄️", module: "database" },
@@ -167,8 +173,90 @@ function dedupeById(items = []) {
   });
 }
 
+function priorityLevelRank(priority = "") {
+  if (priority === "High") return 3;
+  if (priority === "Medium") return 2;
+  if (priority === "Low") return 1;
+  return 0;
+}
+
+function getPriorityItemDedupeKey(item = {}) {
+  if (!item) return null;
+
+  if (item.category === "meetings") {
+    return [
+      "meeting",
+      normalizeText(item.title || "").toLowerCase(),
+      String(item.meta?.startsAt || ""),
+      String(item.meta?.endsAt || ""),
+    ].join("::");
+  }
+
+  if (item.category === "communication" || item.category === "replies") {
+    return [
+      "communication",
+      item.sourceApp || "",
+      String(item.meta?.conversationId || item.id || ""),
+    ].join("::");
+  }
+
+  return item.id || null;
+}
+
+function preferPriorityItem(existing, candidate) {
+  if (!existing) return candidate;
+  if (!candidate) return existing;
+
+  if ((candidate.priorityScore || 0) !== (existing.priorityScore || 0)) {
+    return (candidate.priorityScore || 0) > (existing.priorityScore || 0)
+      ? candidate
+      : existing;
+  }
+
+  if (
+    priorityLevelRank(candidate.priority) !== priorityLevelRank(existing.priority)
+  ) {
+    return priorityLevelRank(candidate.priority) >
+      priorityLevelRank(existing.priority)
+      ? candidate
+      : existing;
+  }
+
+  const existingMetaCount = Object.values(existing.meta || {}).filter(Boolean).length;
+  const candidateMetaCount = Object.values(candidate.meta || {}).filter(Boolean).length;
+  if (candidateMetaCount !== existingMetaCount) {
+    return candidateMetaCount > existingMetaCount ? candidate : existing;
+  }
+
+  return existing;
+}
+
+function dedupePriorityItems(items = []) {
+  const byKey = new Map();
+
+  for (const item of items) {
+    const key = getPriorityItemDedupeKey(item);
+    if (!key) continue;
+    byKey.set(key, preferPriorityItem(byKey.get(key), item));
+  }
+
+  return [...byKey.values()];
+}
+
 function sortByPriority(items = []) {
   return [...items].sort((a, b) => {
+    if (a.category === "meetings" && b.category === "meetings") {
+      const aStart = new Date(a.meta?.startsAt || 0).getTime();
+      const bStart = new Date(b.meta?.startsAt || 0).getTime();
+      if (
+        Number.isFinite(aStart) &&
+        Number.isFinite(bStart) &&
+        aStart !== bStart
+      ) {
+        return aStart - bStart;
+      }
+    }
+
     if ((b.priorityScore || 0) !== (a.priorityScore || 0)) {
       return (b.priorityScore || 0) - (a.priorityScore || 0);
     }
@@ -176,13 +264,18 @@ function sortByPriority(items = []) {
   });
 }
 
-function countItemsForFilter(items = [], filterId = "all") {
+function countItemsForFilter(items = [], filterId = "all", communicationSummary = null) {
   if (filterId === "all") return items.length;
   if (filterId === "urgent") {
-    return items.filter((item) => item.priority === "High").length;
+    return items.filter(
+      (item) => item.priority === "High" && item.category !== "meetings"
+    ).length;
   }
   if (filterId === "communication") {
-    return items.filter((item) => item.category === "communication").length;
+    return Number(
+      communicationSummary?.priorityFeedCount ??
+        items.filter((item) => item.category === "communication").length
+    );
   }
   if (
     [
@@ -192,17 +285,34 @@ function countItemsForFilter(items = [], filterId = "all") {
       ACTION_STATES.WAITING_ON_OTHERS,
     ].includes(filterId)
   ) {
+    if (filterId === ACTION_STATES.WAITING_ON_YOUR_REPLY) {
+      return Number(
+        communicationSummary?.replyRequiredCount ??
+          items.filter((item) => item.actionState === filterId).length
+      );
+    }
+    if (filterId === ACTION_STATES.NEEDS_APPROVAL) {
+      return Number(
+        communicationSummary?.approvalCount ??
+          items.filter((item) => item.actionState === filterId).length
+      );
+    }
+    if (filterId === ACTION_STATES.NEEDS_FOLLOW_UP) {
+      return Number(
+        communicationSummary?.followUpCount ??
+          items.filter((item) => item.actionState === filterId).length
+      );
+    }
     return items.filter((item) => item.actionState === filterId).length;
   }
   return items.filter((item) => item.category === filterId).length;
 }
 
-function buildPriorityFeedFilters(items = []) {
+function buildPriorityFeedFilters(items = [], communicationSummary = null) {
   const definitions = [
     { id: "all", label: "All" },
     { id: "urgent", label: "Urgent" },
-    { id: "communication", label: "Comms" },
-    { id: ACTION_STATES.WAITING_ON_YOUR_REPLY, label: "Replies" },
+    { id: "communication", label: "Communication" },
     { id: ACTION_STATES.NEEDS_APPROVAL, label: "Approvals" },
     { id: ACTION_STATES.NEEDS_FOLLOW_UP, label: "Follow-ups" },
     { id: "meetings", label: "Meetings" },
@@ -211,7 +321,7 @@ function buildPriorityFeedFilters(items = []) {
 
   return definitions.map((definition) => ({
     ...definition,
-    count: countItemsForFilter(items, definition.id),
+    count: countItemsForFilter(items, definition.id, communicationSummary),
   }));
 }
 
@@ -276,6 +386,12 @@ function buildAppShortcutAction(type) {
 
   if (type === "telegram") {
     return createModuleAction("Open Telegram", "telegram", {
+      focus: "unread",
+    });
+  }
+
+  if (type === "whatsapp") {
+    return createModuleAction("Open WhatsApp", "whatsapp", {
       focus: "unread",
     });
   }
@@ -348,7 +464,7 @@ function mapGmailThreadToPriorityItem(thread, selfEmail) {
   return {
     id: `gmail:${classified.id}`,
     title: classified.subject,
-    category: "replies",
+    category: "communication",
     priority,
     priorityScore: classified.priorityScore,
     reason: classified.reasonBits.join(" · "),
@@ -406,7 +522,6 @@ function mapCalendarEventToPriorityItem(event) {
   const attendeeCount = Array.isArray(event.attendees) ? event.attendees.length : 0;
   const missingContext = !event.description;
   const missingJoinInfo = !event.location && !event.meet;
-  const needsRsvp = event.responseStatus === "needsAction";
 
   let score = 22;
   if (minsUntil <= 20) score += 34;
@@ -417,14 +532,12 @@ function mapCalendarEventToPriorityItem(event) {
   else if (attendeeCount >= 4) score += 10;
   if (missingContext) score += 10;
   if (missingJoinInfo) score += 6;
-  if (needsRsvp) score += 8;
   score = clamp(score, 0, 99);
 
   const priority = toPriorityLevel(score);
   const reasons = [`starts in ${formatMinutesWindow(minsUntil)}`];
   if (attendeeCount >= 4) reasons.push(`${attendeeCount} attendees`);
   if (missingContext) reasons.push("no prep context");
-  if (needsRsvp) reasons.push("RSVP pending");
 
   const whyParts = [`This meeting starts in ${formatMinutesWindow(minsUntil)}`];
   if (attendeeCount >= 4) whyParts.push(`has ${attendeeCount} attendees`);
@@ -438,9 +551,8 @@ function mapCalendarEventToPriorityItem(event) {
     priorityScore: score,
     reason: reasons.join(" · "),
     whyThisMatters: `${whyParts.join(", ")}.`,
-    suggestedNextAction: needsRsvp
-      ? "Confirm attendance, gather the context, and walk in prepared."
-      : "Pull together the agenda, attendees, and talking points before the meeting starts.",
+    suggestedNextAction:
+      "Pull together the agenda, attendees, and talking points before the meeting starts.",
     action: createPromptAction({
       label: "Prep meeting",
       prompt: `Prep me for the meeting "${event.title}" starting in ${formatMinutesWindow(minsUntil)}. Summarize what I should know, what I should bring, and what questions I should ask.`,
@@ -448,13 +560,15 @@ function mapCalendarEventToPriorityItem(event) {
     secondaryAction: createModuleAction("Open Calendar", "google_calendar", {
       focus: "today",
     }),
-    canClearQuickly: needsRsvp || (minsUntil > 180 && attendeeCount <= 3),
+    canClearQuickly: minsUntil > 180 && attendeeCount <= 3,
     needsAttentionSoon: minsUntil <= 180,
     meta: {
       startsAt: event.start,
+      endsAt: event.end || null,
       time: event.time,
       date: event.date,
       attendeeCount,
+      responseStatus: event.responseStatus || null,
     },
     ...buildSourceBadge("google_calendar"),
   };
@@ -601,10 +715,17 @@ function mapJiraTicketToPriorityItem(ticket) {
   };
 }
 
-async function buildMessagingPriorityItems(userId) {
-  const [slackResult, telegramResult] = await Promise.allSettled([
-    checkSlack(userId),
-    checkTelegram(userId),
+async function buildMessagingPriorityItems(userId, options = {}) {
+  const includeSources = new Set(
+    Array.isArray(options.includeSources)
+      ? options.includeSources
+      : ["slack", "telegram", "whatsapp"]
+  );
+
+  const [slackResult, telegramResult, whatsappResult] = await Promise.allSettled([
+    includeSources.has("slack") ? checkSlack(userId) : Promise.resolve(null),
+    includeSources.has("telegram") ? checkTelegram(userId) : Promise.resolve(null),
+    includeSources.has("whatsapp") ? checkWhatsApp(userId) : Promise.resolve(null),
   ]);
 
   const items = [];
@@ -615,6 +736,10 @@ async function buildMessagingPriorityItems(userId) {
 
   if (telegramResult.status === "fulfilled" && telegramResult.value?.previews?.length) {
     items.push(...mapMessageSourceToItems("telegram", telegramResult.value.previews));
+  }
+
+  if (whatsappResult.status === "fulfilled" && whatsappResult.value?.previews?.length) {
+    items.push(...mapMessageSourceToItems("whatsapp", whatsappResult.value.previews));
   }
 
   return sortByPriority(items).slice(0, 3);
@@ -632,9 +757,9 @@ function mapMessageSourceToItems(sourceApp, previews = []) {
     score = clamp(score, 0, 80);
 
     return {
-      id: `${sourceApp}:${preview.name || index}`,
+      id: `${sourceApp}:${preview.id || preview.chatId || preview.name || index}`,
       title: preview.name || `${APP_META[sourceApp]?.label || sourceApp} conversation`,
-      category: "replies",
+      category: "communication",
       priority: toPriorityLevel(score),
       priorityScore: score,
       reason: `${unread} unread ${isDirect ? "DM messages" : "messages"}`,
@@ -648,24 +773,42 @@ function mapMessageSourceToItems(sourceApp, previews = []) {
       secondaryAction: null,
       canClearQuickly: unread <= 3,
       needsAttentionSoon: unread >= 6 || isDirect,
-      meta: { unread },
+      meta: {
+        unread,
+        conversationId:
+          preview.id || preview.chatId || preview.username || preview.name || null,
+        previewText: preview.preview || "",
+      },
       ...buildSourceBadge(sourceApp),
     };
   });
 }
 
-function buildPrioritySummary(items = []) {
-  const communicationItems = items.filter((item) => item.category === "communication");
-  const approvals = communicationItems.filter(
-    (item) => item.actionState === ACTION_STATES.NEEDS_APPROVAL
-  ).length;
-  const waitingOnYou = communicationItems.filter(
-    (item) => item.actionState === ACTION_STATES.WAITING_ON_YOUR_REPLY
-  ).length;
-  const followUps = communicationItems.filter(
-    (item) => item.actionState === ACTION_STATES.NEEDS_FOLLOW_UP
+function buildEffectiveCommunicationSummary(communicationSummary = null, items = []) {
+  const communicationCount = items.filter(
+    (item) => item.category === "communication" || item.category === "replies"
   ).length;
 
+  if (!communicationSummary) {
+    if (!communicationCount) return null;
+    return {
+      priorityFeedCount: communicationCount,
+      replyRequiredCount: 0,
+      approvalCount: 0,
+      followUpCount: 0,
+    };
+  }
+
+  return {
+    ...communicationSummary,
+    priorityFeedCount: Math.max(
+      Number(communicationSummary.priorityFeedCount || 0),
+      communicationCount
+    ),
+  };
+}
+
+function buildPrioritySummary(items = [], communicationSummary = null) {
   return {
     urgentCount: items.filter((item) => item.priority === "High").length,
     quickClearCount: items.filter((item) => item.canClearQuickly).length,
@@ -674,13 +817,22 @@ function buildPrioritySummary(items = []) {
         item.category === "meetings" ||
         (item.category === "tasks" && item.needsAttentionSoon)
     ).length,
-    waitingOnYouCount: waitingOnYou,
-    approvalCount: approvals,
-    followUpCount: followUps,
+    waitingOnYouCount: Number(
+      communicationSummary?.replyRequiredCount ??
+        items.filter((item) => item.actionState === ACTION_STATES.WAITING_ON_YOUR_REPLY).length
+    ),
+    approvalCount: Number(
+      communicationSummary?.approvalCount ??
+        items.filter((item) => item.actionState === ACTION_STATES.NEEDS_APPROVAL).length
+    ),
+    followUpCount: Number(
+      communicationSummary?.followUpCount ??
+        items.filter((item) => item.actionState === ACTION_STATES.NEEDS_FOLLOW_UP).length
+    ),
   };
 }
 
-function buildHeadline(items = [], jiraInsight = null) {
+function buildHeadline(items = [], jiraInsight = null, communicationSummary = null) {
   if (!items.length) {
     if (jiraInsight?.myOverdueCount) {
       return `You have ${jiraInsight.myOverdueCount} overdue Jira ticket${jiraInsight.myOverdueCount === 1 ? "" : "s"}, but no urgent replies or meetings were detected right now.`;
@@ -689,9 +841,18 @@ function buildHeadline(items = [], jiraInsight = null) {
   }
 
   const counts = {
-    communication: items.filter((item) => item.category === "communication").length,
-    approvals: items.filter((item) => item.actionState === ACTION_STATES.NEEDS_APPROVAL).length,
-    followUps: items.filter((item) => item.actionState === ACTION_STATES.NEEDS_FOLLOW_UP).length,
+    communication: Number(
+      communicationSummary?.priorityFeedCount ??
+        items.filter((item) => item.category === "communication").length
+    ),
+    approvals: Number(
+      communicationSummary?.approvalCount ??
+        items.filter((item) => item.actionState === ACTION_STATES.NEEDS_APPROVAL).length
+    ),
+    followUps: Number(
+      communicationSummary?.followUpCount ??
+        items.filter((item) => item.actionState === ACTION_STATES.NEEDS_FOLLOW_UP).length
+    ),
     meetings: items.filter((item) => item.category === "meetings").length,
     tasks: items.filter((item) => item.category === "tasks").length,
   };
@@ -812,26 +973,54 @@ async function getHomeDashboard(userId) {
     }));
 
   const [
-    communicationItems,
+    communicationResult,
     calendarItems,
     jiraSignals,
     latestActionsByItem,
     recentActions,
+    gmailFallbackItems,
   ] = await Promise.all([
-    getCommunicationPriorityItems(userId).catch(() => []),
+    getCommunicationActionStates(userId, { source: "all" }).catch(() => null),
     buildCalendarPriorityItems(userId).catch(() => []),
     buildJiraWorkspaceSignals(userId).catch(() => ({ personalItems: [], insight: null })),
     getLatestActionsByItem(userId),
     PriorityFeedAction.find({ userId }).sort({ createdAt: -1 }).limit(8).lean(),
+    buildGmailPriorityItems(userId).catch(() => []),
   ]);
 
-  const allItems = dedupeById([
+  const communicationItems = buildCommunicationPriorityItems(
+    communicationResult?.surfaceStates?.priorityFeed || []
+  );
+  const communicationSources = new Set(
+    communicationItems.map((item) => item.sourceApp).filter(Boolean)
+  );
+  const messagingFallbackItems = await buildMessagingPriorityItems(userId, {
+    includeSources: ["slack", "telegram", "whatsapp"].filter(
+      (source) => !communicationSources.has(source)
+    ),
+  }).catch(() => []);
+  const fallbackCommunicationItems = [
+    ...(communicationSources.has("gmail") ? [] : gmailFallbackItems),
+    ...messagingFallbackItems,
+  ];
+  const effectiveCommunicationSummary = buildEffectiveCommunicationSummary(
+    communicationResult?.counts || null,
+    [...communicationItems, ...fallbackCommunicationItems]
+  );
+
+  const allItems = dedupePriorityItems([
     ...communicationItems,
+    ...fallbackCommunicationItems,
     ...calendarItems,
     ...jiraSignals.personalItems,
   ]);
-  const activeItems = sortByPriority(filterActiveItems(allItems, latestActionsByItem));
-  const summary = buildPrioritySummary(activeItems);
+  const activeItems = sortByPriority(
+    filterActiveItems(allItems, latestActionsByItem)
+  );
+  const summary = buildPrioritySummary(
+    activeItems,
+    effectiveCommunicationSummary
+  );
   const now = new Date();
   const timeOfDay = getTimeOfDay(now);
 
@@ -842,7 +1031,11 @@ async function getHomeDashboard(userId) {
       timeOfDay,
       greeting: buildGreeting(timeOfDay),
       dateLabel: formatDateLabel(now),
-      summary: buildHeadline(activeItems, jiraSignals.insight),
+      summary: buildHeadline(
+        activeItems,
+        jiraSignals.insight,
+        effectiveCommunicationSummary
+      ),
       stats: [
         { label: "Waiting on you", value: String(summary.waitingOnYouCount || 0) },
         { label: "Approvals", value: String(summary.approvalCount || 0) },
@@ -855,7 +1048,10 @@ async function getHomeDashboard(userId) {
     priorityFeed: {
       title: "Priority Feed",
       items: activeItems,
-      filters: buildPriorityFeedFilters(activeItems),
+      filters: buildPriorityFeedFilters(
+        activeItems,
+        effectiveCommunicationSummary
+      ),
       auditTrail: recentActions.map(mapAuditEntry),
       emptyState: {
         title: "You're clear right now.",
@@ -906,6 +1102,12 @@ module.exports = {
   recordPriorityFeedAction,
   __test: {
     buildPriorityFeedFilters,
+    buildPrioritySummary,
+    buildHeadline,
     countItemsForFilter,
+    sortByPriority,
+    mapCalendarEventToPriorityItem,
+    dedupePriorityItems,
+    buildEffectiveCommunicationSummary,
   },
 };

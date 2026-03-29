@@ -25,10 +25,58 @@ const { chatCompleteNoSystem } = require("./llmService");
 const { runAgent } = require("./agentService");
 const Skill = require("../models/skill");
 
+function shouldUseOrchestrator(userMessage = "") {
+  const source = String(userMessage || "").toLowerCase();
+  if (!source.trim()) return false;
+
+  const appPatterns = {
+    slack: /\bslack\b/,
+    gmail: /\b(gmail|email|emails|inbox)\b/,
+    telegram: /\btelegram\b/,
+    whatsapp: /\bwhatsapp\b/,
+    calendar: /\b(calendar|meeting|meetings|events|schedule)\b/,
+    jira: /\b(jira|ticket|tickets|sprint|backlog|bug|bugs)\b/,
+    database: /\b(database|invoice|bill|po|purchase order|credit note|debit note)\b/,
+  };
+
+  const appCount = Object.values(appPatterns).filter((pattern) =>
+    pattern.test(source)
+  ).length;
+
+  const wantsCrossAppDigest =
+    /\b(all my apps|all connected apps|across all apps|across my apps|digest|summary|summarize)\b/.test(
+      source
+    ) && appCount >= 2;
+
+  const wantsParallelReads =
+    appCount >= 3 &&
+    /\b(show|get|check|fetch|read|list|summarize)\b/.test(source) &&
+    /\b(unread|messages|emails|events|tickets|status|today)\b/.test(source);
+
+  const hasWriteIntent =
+    /\b(schedule|create|send|message|notify|reply|draft|update|delete|cancel|assign|move|book)\b/.test(
+      source
+    );
+  const hasDependencyLanguage =
+    /\b(this|it|that|about this|about it|regarding this|acknowledg(?:e|ement))\b/.test(
+      source
+    );
+
+  if (hasWriteIntent && (appCount <= 2 || hasDependencyLanguage)) {
+    return false;
+  }
+
+  return wantsCrossAppDigest || wantsParallelReads;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ORCHESTRATOR — decides whether to use multi-agent or single-agent
 // ─────────────────────────────────────────────────────────────────────────────
 async function orchestrate(userMessage, userId, db, onProgress) {
+  if (!shouldUseOrchestrator(userMessage)) {
+    return null;
+  }
+
   // First check if this needs multi-agent (complex cross-app task)
   const plan = await planOrchestration(userMessage);
 
@@ -251,4 +299,10 @@ async function synthesize(intent, agentResults) {
   }
 }
 
-module.exports = { orchestrate };
+module.exports = {
+  orchestrate,
+  __test: {
+    shouldUseOrchestrator,
+    resolveAgentContext,
+  },
+};

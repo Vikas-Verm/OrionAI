@@ -8,6 +8,9 @@
 
 const axios = require("axios");
 const Integration = require("../../models/Integration");
+const {
+  findBestCommunicationMatch,
+} = require("../communicationContactMatcher");
 
 async function getToken(userId) {
   const integration = await Integration.findOne({ userId, type: "slack" });
@@ -64,7 +67,11 @@ async function resolveUserName(token, userId) {
  *   4. Fallback: treat as raw channel ID if it starts with C/D/G/W
  */
 async function resolveChannelId(token, channelName) {
-  const clean = channelName.replace(/^#/, "").toLowerCase().trim();
+  const raw = String(channelName || "").trim();
+  const clean = raw.replace(/^#/, "").toLowerCase().trim();
+  if (!clean) throw new Error("Slack channel or user name is required");
+
+  if (/^[CDGW]/i.test(raw)) return raw;
 
   // ── Step 1: Search public + private channels by name ──────────────────────
   try {
@@ -73,13 +80,18 @@ async function resolveChannelId(token, channelName) {
       limit: 200,
       exclude_archived: true,
     });
-    const found = (data.channels || []).find(
-      (ch) => ch.name?.toLowerCase() === clean || ch.id?.toLowerCase() === clean
-    );
+    const found = (data.channels || []).find((ch) => {
+      const channelName = ch.name?.toLowerCase() || "";
+      return (
+        channelName === clean ||
+        channelName.startsWith(clean) ||
+        ch.id?.toLowerCase() === clean
+      );
+    });
     if (found) return found.id;
   } catch {}
 
-  // ── Step 2: Search DMs by userId match ────────────────────────────────────
+  // ── Step 2: Search DMs by user profile / userId match ─────────────────────
   let dmChannels = [];
   try {
     const data = await slackAPI(token, "conversations.list", {
@@ -89,58 +101,46 @@ async function resolveChannelId(token, channelName) {
     });
     dmChannels = data.channels || [];
 
-    const foundDM = dmChannels.find(
-      (ch) => ch.id?.toLowerCase() === clean || ch.user?.toLowerCase() === clean
-    );
+    const foundDM = dmChannels.find((ch) => {
+      return ch.id?.toLowerCase() === clean || ch.user?.toLowerCase() === clean;
+    });
     if (foundDM) return foundDM.id;
   } catch {}
 
-  // ── Step 3: ✅ Search DMs by user display_name / real_name ───────────────
-  // This is what fixes "Send Hi to Adi" — look up each DM user's profile
-  if (dmChannels.length) {
-    // Fetch all workspace users once
-    try {
-      const usersData = await slackAPI(token, "users.list", { limit: 500 });
-      const users = usersData.members || [];
+  // ── Step 3: Search DMs by fuzzy user profile match ────────────────────────
+  try {
+    const usersData = await slackAPI(token, "users.list", { limit: 500 });
+    const users = (usersData.members || []).filter((user) => !user.deleted && !user.is_bot);
 
-      // Find user whose name matches the input
-      const matchedUser = users.find((u) => {
-        if (u.deleted || u.is_bot) return false;
-        const displayName = (u.profile?.display_name || "")
-          .toLowerCase()
-          .trim();
-        const realName = (u.profile?.real_name || "").toLowerCase().trim();
-        const name = (u.name || "").toLowerCase().trim();
-        return (
-          displayName === clean ||
-          realName === clean ||
-          name === clean ||
-          displayName.startsWith(clean) ||
-          realName.startsWith(clean) ||
-          // Handle "Adi" matching "Adity" or "Aditya"
-          displayName.split(" ").some((part) => part === clean) ||
-          realName.split(" ").some((part) => part === clean)
-        );
+    const matchedUser = findBestCommunicationMatch(
+      raw,
+      users.map((user) => ({
+        record: user,
+        fields: [
+          user.profile?.display_name,
+          user.profile?.real_name,
+          user.profile?.display_name_normalized,
+          user.profile?.real_name_normalized,
+          user.profile?.email,
+          user.name,
+          user.id,
+        ],
+      }))
+    );
+
+    if (matchedUser?.item?.record) {
+      const user = matchedUser.item.record;
+      const dmWithUser = dmChannels.find((ch) => ch.user === user.id);
+      if (dmWithUser) return dmWithUser.id;
+
+      const opened = await slackPOST(token, "conversations.open", {
+        users: user.id,
       });
-
-      if (matchedUser) {
-        // Find the DM channel with this user
-        const dmWithUser = dmChannels.find((ch) => ch.user === matchedUser.id);
-        if (dmWithUser) return dmWithUser.id;
-
-        // No existing DM open — open one
-        const opened = await slackPOST(token, "conversations.open", {
-          users: matchedUser.id,
-        });
-        if (opened.channel?.id) return opened.channel.id;
-      }
-    } catch (err) {
-      console.warn("Slack user search failed:", err.message);
+      if (opened.channel?.id) return opened.channel.id;
     }
+  } catch (err) {
+    console.warn("Slack user search failed:", err.message);
   }
-
-  // ── Step 4: Treat as raw channel ID ───────────────────────────────────────
-  if (/^[CDGW]/i.test(channelName)) return channelName;
 
   throw new Error(
     `Slack channel/user not found: "${channelName}". ` +
@@ -260,6 +260,7 @@ async function toolSlack(params, ctx) {
       summary: `Message sent to ${channel}`,
       slackSent: true,
       slackChannel: channel,
+      slackChannelId: channelId,
       slackMessage: message.trim(),
     };
   }

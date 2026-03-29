@@ -6,7 +6,7 @@
         <span>Message sent to <strong>{{ step.slackChannel }}</strong></span>
       </div>
       <div class="slk-sent-body">{{ step.slackMessage }}</div>
-      <a href="https://app.slack.com" target="_blank" class="slk-open-btn">Open Slack ↗</a>
+      <button type="button" class="slk-open-btn" @click="openSlack(step)">Open Slack</button>
     </div>
   
     <!-- ── Slack: unread list ──────────────────────────────────── -->
@@ -27,7 +27,7 @@
           <span class="slk-unread-badge">{{ ch.unread }}</span>
         </div>
       </div>
-      <a href="https://app.slack.com" target="_blank" class="slk-open-btn">Open Slack ↗</a>
+      <button type="button" class="slk-open-btn" @click="openSlack(step)">Open Slack</button>
     </div>
   
     <!-- ── Slack: message thread ──────────────────────────────── -->
@@ -50,7 +50,7 @@
           </div>
         </div>
       </div>
-      <a href="https://app.slack.com" target="_blank" class="slk-open-btn">Open Slack ↗</a>
+      <button type="button" class="slk-open-btn" @click="openSlack(step)">Open Slack</button>
     </div>
   
     <!-- ── Slack: channel list ────────────────────────────────── -->
@@ -68,7 +68,7 @@
           <span v-if="ch.unread > 0" class="slk-unread-badge">{{ ch.unread }}</span>
         </div>
       </div>
-      <a href="https://app.slack.com" target="_blank" class="slk-open-btn">Open Slack ↗</a>
+      <button type="button" class="slk-open-btn" @click="openSlack(step)">Open Slack</button>
     </div>
   
     <!-- ── Fallback ───────────────────────────────────────────── -->
@@ -121,6 +121,30 @@
   function fmtTime(iso) {
     if (!iso) return ''
     return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
+  }
+
+  function openSlack(stepData = {}) {
+    const channelId =
+      stepData?.slackChannelId ||
+      stepData?.richSlackMessages?.[0]?.channelId ||
+      stepData?.richSlackUnread?.[0]?.id ||
+      stepData?.richSlackChannels?.[0]?.id ||
+      null
+
+    try {
+      document.dispatchEvent(new CustomEvent('orion:open-module', {
+        bubbles: true,
+        detail: {
+          module: 'slack',
+          context: channelId ? { channelId } : {},
+        },
+      }))
+      return
+    } catch {}
+
+    try {
+      window.location.hash = '#slack'
+    } catch {}
   }
   </script>
   
@@ -194,8 +218,9 @@
   .slk-ch-rname { flex: 1; }
   /* Open button */
   .slk-open-btn {
-    display: block; text-align: center; padding: 8px;
+    display: block; width: 100%; text-align: center; padding: 8px;
     font-size: 12px; color: #36C5F0; text-decoration: none;
+    background: none; border: 0; cursor: pointer; font-family: inherit;
     border-top: 1px solid rgba(255,255,255,0.06);
   }
   .slk-open-btn:hover { background: rgba(54,197,240,0.06); }

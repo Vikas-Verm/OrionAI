@@ -23,8 +23,8 @@
       />
     </transition>
 
-    <!-- Fallback normal message -->
-    <div v-if="!Renderer || !msg.agentDone">
+    <!-- Fallback / synthesized message -->
+    <div v-if="!Renderer || !msg.agentDone || showContentWithRenderer">
       <div v-if="msg.content" class="agent-text">
         {{ msg.content }}
       </div>
@@ -69,6 +69,10 @@ const completedCount = computed(() => {
 
 const Renderer = computed(() => {
   return resolveRenderer(steps.value)
+})
+
+const showContentWithRenderer = computed(() => {
+  return steps.value.some((step) => step.tool === 'meeting_prep')
 })
 
 /* ---------------------------

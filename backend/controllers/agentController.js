@@ -205,6 +205,11 @@ function stepSummary(tool, result) {
     case "database_query":
       return result.summary || `Database query returned ${result.count || 0} row(s)`;
 
+    case "meeting_prep":
+      return result?.event?.title
+        ? `Prepared meeting brief for "${result.event.title}"`
+        : "Prepared meeting brief";
+
     case "razorpay_get_payouts":
       return result.summary || `Found ${result.count || 0} Razorpay payouts`;
 

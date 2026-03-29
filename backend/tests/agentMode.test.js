@@ -11,8 +11,45 @@ const {
   __test: normalizerTest,
 } = require("../services/agentParamNormalizer");
 const {
+  __test: runtimeContextTest,
+} = require("../services/agentRuntimeContext");
+const {
   __test: jiraToolTest,
 } = require("../services/tools/toolJira");
+
+test("meeting prep requests are upgraded from plain calendar lookup to retrieval plus synthesis", () => {
+  const plan = plannerTest.normalizePlannedSteps(
+    `Prep me for the meeting "Testing OrionAI" starting in 16 min. Summarize what I should know, what I should bring, and what questions I should ask.`,
+    {
+      isAgentTask: true,
+      confidence: 0.78,
+      intent: "Find the meeting",
+      steps: [{ tool: "calendar_get_events", params: { query: "Testing OrionAI" } }],
+    }
+  );
+
+  assert.equal(plan.isAgentTask, true);
+  assert.equal(plan.steps[0].tool, "calendar_get_events");
+  assert.equal(plan.steps[1].tool, "meeting_prep");
+  assert.equal(plan.steps[1].params.titleHint, "Testing OrionAI");
+  assert.equal(plan.steps[1].params.relativeStartMinutes, 16);
+});
+
+test("meeting timing lookups stay as calendar lookups when no prep intent exists", () => {
+  const originalPlan = {
+    isAgentTask: true,
+    confidence: 0.9,
+    intent: "Find the meeting timing",
+    steps: [{ tool: "calendar_get_events", params: { query: "Testing OrionAI" } }],
+  };
+
+  const plan = plannerTest.normalizePlannedSteps(
+    `When is my meeting "Testing OrionAI"?`,
+    originalPlan
+  );
+
+  assert.deepEqual(plan, originalPlan);
+});
 
 test("agent planner routes latest bill lookups to connected database", () => {
   const plan = plannerTest.normalizePlannedSteps("show latest bill", {
@@ -97,4 +134,54 @@ test("jira my tickets helpers honor assigneeName skill output", () => {
   assert.match(jql, /project = ENGG/);
   assert.match(jql, /assignee = "712020:rahul-gandhi"/);
   assert.match(jql, /statusCategory != Done/);
+});
+
+test("normalizeStepParams infers calendar details from natural language meeting requests", () => {
+  const normalized = normalizeStepParams(
+    { tool: "calendar_create", params: {} },
+    "Schedule a meeting with vikasverma@poshn.co for testing OrionAI at today 5:30 PM",
+    { baseDate: new Date("2026-03-29T08:00:00+05:30") }
+  );
+
+  assert.equal(normalized.params.title, "testing OrionAI");
+  assert.equal(normalized.params.startDateTime, "2026-03-29T17:30:00+05:30");
+  assert.deepEqual(normalized.params.attendees, ["vikasverma@poshn.co"]);
+  assert.equal(normalized.params.addMeet, true);
+});
+
+test("normalizeStepParams infers Telegram contact from agent phrasing", () => {
+  const normalized = normalizeStepParams(
+    { tool: "telegram_send_message", params: { message: "" } },
+    "Send an acknowledgment about this meeting to Aradhangini on Telegram."
+  );
+
+  assert.equal(normalized.params.contact, "Aradhangini");
+});
+
+test("runtime context auto-fills follow-up Telegram messages from a created meeting", () => {
+  const resolved = runtimeContextTest.resolveRuntimeStep(
+    {
+      tool: "telegram_send_message",
+      params: {
+        contact: "Aradhangini",
+        message: "Send an acknowledgment about this meeting",
+      },
+    },
+    [
+      {
+        tool: "calendar_create",
+        status: "done",
+        result: {
+          title: "testing OrionAI",
+          date: "Sun, 29 Mar 2026",
+          time: "05:30 PM",
+          summary: 'Created "testing OrionAI" on Sun, 29 Mar 2026 at 05:30 PM',
+        },
+      },
+    ],
+    {}
+  );
+
+  assert.match(resolved.params.message, /testing OrionAI/);
+  assert.match(resolved.params.message, /05:30 PM/);
 });

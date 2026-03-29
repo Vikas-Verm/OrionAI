@@ -4,6 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  CONVERSATION_STATES,
   ACTION_STATES,
   classifyConversation,
   summarizeActionStates,
@@ -56,7 +57,12 @@ test("classifies direct inbound question as waiting on your reply", () => {
     })
   );
 
+  assert.equal(state.state, CONVERSATION_STATES.WAITING_ON_YOU);
   assert.equal(state.actionState, ACTION_STATES.WAITING_ON_YOUR_REPLY);
+  assert.equal(state.latestMeaningfulMessageId, "1");
+  assert.equal(state.eligibleForInsights, true);
+  assert.equal(state.eligibleForBriefing, true);
+  assert.equal(state.eligibleForPriorityFeed, true);
   assert.match(state.actionReason, /waiting on your reply|direct question|directly asked/i);
 });
 
@@ -70,6 +76,7 @@ test("classifies approval ask as needs approval", () => {
     })
   );
 
+  assert.equal(state.state, CONVERSATION_STATES.NEEDS_APPROVAL);
   assert.equal(state.actionState, ACTION_STATES.NEEDS_APPROVAL);
   assert.equal(state.hasApprovalIntent, true);
 });
@@ -96,6 +103,7 @@ test("classifies leave request email as needs approval", () => {
     })
   );
 
+  assert.equal(state.state, CONVERSATION_STATES.NEEDS_APPROVAL);
   assert.equal(state.actionState, ACTION_STATES.NEEDS_APPROVAL);
   assert.match(state.actionReason, /approval/i);
 });
@@ -128,9 +136,13 @@ test("marks an approval thread as resolved after the latest reply says approved"
     })
   );
 
-  assert.equal(state.actionState, ACTION_STATES.NO_ACTION_NEEDED);
+  assert.equal(state.state, CONVERSATION_STATES.RESOLVED);
+  assert.equal(state.actionState, ACTION_STATES.RESOLVED);
   assert.equal(state.surfaceEligible, false);
-  assert.equal(state.currentActor, "none");
+  assert.equal(state.eligibleForInsights, false);
+  assert.equal(state.eligibleForBriefing, false);
+  assert.equal(state.eligibleForPriorityFeed, false);
+  assert.equal(state.currentActor, "nobody");
   assert.match(state.actionReason, /approved the request|answered the previous ask|resolved/i);
 });
 
@@ -160,8 +172,9 @@ test("marks a denied request as resolved instead of leaving it active", () => {
     })
   );
 
-  assert.equal(state.actionState, ACTION_STATES.NO_ACTION_NEEDED);
-  assert.equal(state.currentActor, "none");
+  assert.equal(state.state, CONVERSATION_STATES.RESOLVED);
+  assert.equal(state.actionState, ACTION_STATES.RESOLVED);
+  assert.equal(state.currentActor, "nobody");
   assert.match(state.actionReason, /denied|closed|answered/i);
 });
 
@@ -193,8 +206,9 @@ test("latest resolved reply wins even when quoted old ask text is still present"
     })
   );
 
-  assert.equal(state.actionState, ACTION_STATES.NO_ACTION_NEEDED);
-  assert.equal(state.currentActor, "none");
+  assert.equal(state.state, CONVERSATION_STATES.RESOLVED);
+  assert.equal(state.actionState, ACTION_STATES.RESOLVED);
+  assert.equal(state.currentActor, "nobody");
   assert.match(state.actionReason, /approved the request|answered the previous ask/i);
 });
 
@@ -220,6 +234,7 @@ test("classifies direct automated approval ask as needs approval", () => {
     })
   );
 
+  assert.equal(state.state, CONVERSATION_STATES.NEEDS_APPROVAL);
   assert.equal(state.actionState, ACTION_STATES.NEEDS_APPROVAL);
   assert.match(state.actionReason, /approval/i);
 });
@@ -234,6 +249,7 @@ test("classifies stale promise as needs follow-up", () => {
     })
   );
 
+  assert.equal(state.state, CONVERSATION_STATES.NEEDS_FOLLOW_UP);
   assert.equal(state.actionState, ACTION_STATES.NEEDS_FOLLOW_UP);
   assert.match(state.actionReason, /committed|follow-up/i);
 });
@@ -254,6 +270,7 @@ test("classifies direct follow-up thread as needs follow-up after reply window",
     })
   );
 
+  assert.equal(state.state, CONVERSATION_STATES.NEEDS_FOLLOW_UP);
   assert.equal(state.actionState, ACTION_STATES.NEEDS_FOLLOW_UP);
 });
 
@@ -267,8 +284,9 @@ test("classifies replied thread as waiting on others", () => {
     })
   );
 
+  assert.equal(state.state, CONVERSATION_STATES.WAITING_ON_OTHERS);
   assert.equal(state.actionState, ACTION_STATES.WAITING_ON_OTHERS);
-  assert.equal(state.currentActor, "other");
+  assert.equal(state.currentActor, "other_party");
   assert.equal(state.surfaceEligible, false);
 });
 
@@ -300,8 +318,9 @@ test("latest inbound ownership reply clears stale approval state for the origina
     })
   );
 
+  assert.equal(state.state, CONVERSATION_STATES.WAITING_ON_OTHERS);
   assert.equal(state.actionState, ACTION_STATES.WAITING_ON_OTHERS);
-  assert.equal(state.currentActor, "other");
+  assert.equal(state.currentActor, "other_party");
   assert.equal(state.surfaceEligible, false);
   assert.match(state.actionReason, /takes ownership|waiting on someone else|next step/i);
 });
@@ -334,8 +353,9 @@ test("slack teammate takeover clears a direct ask for the original user", () => 
     })
   );
 
+  assert.equal(state.state, CONVERSATION_STATES.WAITING_ON_OTHERS);
   assert.equal(state.actionState, ACTION_STATES.WAITING_ON_OTHERS);
-  assert.equal(state.currentActor, "other");
+  assert.equal(state.currentActor, "other_party");
   assert.equal(state.surfaceEligible, false);
   assert.match(state.actionReason, /taking the next step|other side/i);
 });
@@ -354,6 +374,7 @@ test("classifies newsletter-like traffic as no action needed", () => {
     })
   );
 
+  assert.equal(state.state, CONVERSATION_STATES.NO_ACTION_NEEDED);
   assert.equal(state.actionState, ACTION_STATES.NO_ACTION_NEEDED);
 });
 
@@ -368,6 +389,7 @@ test("new inbound after reply reactivates the conversation", () => {
     })
   );
 
+  assert.equal(state.state, CONVERSATION_STATES.WAITING_ON_YOU);
   assert.equal(state.actionState, ACTION_STATES.WAITING_ON_YOUR_REPLY);
 });
 
@@ -397,8 +419,9 @@ test("telegram acknowledgement reply shifts responsibility away from active surf
     })
   );
 
+  assert.equal(state.state, CONVERSATION_STATES.WAITING_ON_OTHERS);
   assert.equal(state.actionState, ACTION_STATES.WAITING_ON_OTHERS);
-  assert.equal(state.currentActor, "other");
+  assert.equal(state.currentActor, "other_party");
   assert.equal(state.surfaceEligible, false);
 });
 
@@ -422,6 +445,7 @@ test("classifies telegram help requests without a question mark as waiting on yo
     })
   );
 
+  assert.equal(state.state, CONVERSATION_STATES.WAITING_ON_YOU);
   assert.equal(state.actionState, ACTION_STATES.WAITING_ON_YOUR_REPLY);
   assert.equal(state.surfaceEligible, true);
   assert.match(state.actionReason, /waiting on your reply|directly asked/i);
@@ -447,6 +471,7 @@ test("classifies whatsapp direct help requests as waiting on your reply", () => 
     })
   );
 
+  assert.equal(state.state, CONVERSATION_STATES.WAITING_ON_YOU);
   assert.equal(state.actionState, ACTION_STATES.WAITING_ON_YOUR_REPLY);
   assert.equal(state.surfaceEligible, true);
 });
@@ -467,6 +492,7 @@ test("classifies imperative direct ask as waiting on your reply", () => {
     })
   );
 
+  assert.equal(state.state, CONVERSATION_STATES.WAITING_ON_YOU);
   assert.equal(state.actionState, ACTION_STATES.WAITING_ON_YOUR_REPLY);
 });
 
@@ -484,6 +510,7 @@ test("avoids surfacing noisy group messages when responsibility is unclear", () 
     })
   );
 
+  assert.equal(state.state, CONVERSATION_STATES.NO_ACTION_NEEDED);
   assert.equal(state.actionState, ACTION_STATES.NO_ACTION_NEEDED);
 });
 
@@ -508,6 +535,7 @@ test("ignores login code and otp noise", () => {
     })
   );
 
+  assert.equal(state.state, CONVERSATION_STATES.NO_ACTION_NEEDED);
   assert.equal(state.actionState, ACTION_STATES.NO_ACTION_NEEDED);
   assert.match(state.actionReason, /login|verification/i);
 });
@@ -533,6 +561,7 @@ test("ignores slack bot noise without required action", () => {
     })
   );
 
+  assert.equal(state.state, CONVERSATION_STATES.NO_ACTION_NEEDED);
   assert.equal(state.actionState, ACTION_STATES.NO_ACTION_NEEDED);
 });
 
@@ -562,6 +591,7 @@ test("promise follow-up remains surface eligible only when the user still owns t
     })
   );
 
+  assert.equal(state.state, CONVERSATION_STATES.NEEDS_FOLLOW_UP);
   assert.equal(state.actionState, ACTION_STATES.NEEDS_FOLLOW_UP);
   assert.equal(state.currentActor, "current_user");
   assert.equal(state.surfaceEligible, true);
@@ -580,4 +610,7 @@ test("summarizes action-state counts for briefing usage", () => {
   assert.equal(summary.approvalCount, 1);
   assert.equal(summary.followUpCount, 1);
   assert.equal(summary.waitingOnOthersCount, 1);
+  assert.equal(summary.insightsCount, 3);
+  assert.equal(summary.briefingCount, 4);
+  assert.equal(summary.priorityFeedCount, 3);
 });

@@ -6,7 +6,12 @@ async function getActionStates(req, res) {
   try {
     const userId = req.user?.username;
     const source = req.query.source || "all";
-    const payload = await getCommunicationActionStates(userId, { source });
+    const includeDebug =
+      req.query.debug === "1" || process.env.NODE_ENV !== "production";
+    const payload = await getCommunicationActionStates(userId, {
+      source,
+      includeDebug,
+    });
     res.json(payload);
   } catch (err) {
     console.error("Communication action states error:", err.message);

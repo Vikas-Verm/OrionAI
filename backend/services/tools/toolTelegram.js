@@ -4,6 +4,10 @@
  */
 
 const tg = require("./toolTelegramMTProto");
+const { filterTelegramDialogs } = require("../agentMessageFilterService");
+const {
+  findBestCommunicationMatch,
+} = require("../communicationContactMatcher");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -24,16 +28,30 @@ function initials(name = "") {
 }
 
 function fuzzyFind(dialogs, name) {
-  const q = clean(name)?.toLowerCase();
-  if (!q) return null;
+  const query = clean(name);
+  if (!query) return null;
 
-  return (
-    dialogs.find((d) => d.name.toLowerCase() === q) ||
-    dialogs.find((d) => d.name.toLowerCase().startsWith(q)) ||
-    dialogs.find((d) => d.name.toLowerCase().includes(q)) ||
-    dialogs.find((d) => d.username?.toLowerCase() === q) ||
-    null
+  const match = findBestCommunicationMatch(
+    query,
+    dialogs.map((dialog) => ({
+      record: dialog,
+      fields: [
+        dialog.name,
+        dialog.username,
+        dialog.username ? `@${dialog.username}` : null,
+      ],
+    }))
   );
+
+  return match?.item?.record || null;
+}
+
+function resolveDialog(dialogs = [], contact = "", options = {}) {
+  const includeGroups = Boolean(options.includeGroups);
+  const preferredDialogs = filterTelegramDialogs(dialogs, { includeGroups });
+  const match = fuzzyFind(preferredDialogs, contact);
+  if (match) return match;
+  return includeGroups ? null : fuzzyFind(dialogs, contact);
 }
 
 // get most recent chat fallback
@@ -46,12 +64,17 @@ function mostRecent(dialogs) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function toolTelegramListChats(params, ctx) {
+  const { includeGroups = false } = params;
   const dialogs = await tg.getDialogs(ctx.userId, 80);
+  const filteredDialogs = filterTelegramDialogs(dialogs, { includeGroups });
 
-  const unreadCount = dialogs.reduce((s, d) => s + (d.unreadCount || 0), 0);
+  const unreadCount = filteredDialogs.reduce(
+    (s, d) => s + (d.unreadCount || 0),
+    0
+  );
 
   return {
-    chats: dialogs.slice(0, 30).map((d) => ({
+    chats: filteredDialogs.slice(0, 30).map((d) => ({
       id: d.id,
       name: d.name,
       initials: initials(d.name),
@@ -61,9 +84,11 @@ async function toolTelegramListChats(params, ctx) {
       lastDate: d.lastDate,
       status: d.status || null,
     })),
-    total: dialogs.length,
+    total: filteredDialogs.length,
     unreadCount,
-    summary: `${dialogs.length} Telegram chats · ${unreadCount} unread`,
+    summary: `${filteredDialogs.length} Telegram chat${
+      filteredDialogs.length !== 1 ? "s" : ""
+    } · ${unreadCount} unread`,
   };
 }
 
@@ -73,12 +98,14 @@ async function toolTelegramListChats(params, ctx) {
 
 async function toolTelegramGetMessages(params = {}, ctx) {
   let contact = clean(params.contact);
+  const includeGroups = Boolean(params.includeGroups);
   const limit = Math.min(params.limit || 20, 30);
 
   const dialogs = await tg.getDialogs(ctx.userId, 80);
 
-  // ✅ fallback → most recent chat
-  let dialog = contact ? fuzzyFind(dialogs, contact) : mostRecent(dialogs);
+  let dialog = contact
+    ? resolveDialog(dialogs, contact, { includeGroups })
+    : filterTelegramDialogs(dialogs, { includeGroups })[0] || null;
 
   if (!dialog) {
     return {
@@ -86,7 +113,9 @@ async function toolTelegramGetMessages(params = {}, ctx) {
       contact,
       messages: [],
       count: 0,
-      summary: "No Telegram chats available",
+      summary: includeGroups
+        ? "No Telegram chats available"
+        : "No relevant direct Telegram chats available",
     };
   }
 
@@ -115,19 +144,27 @@ async function toolTelegramGetMessages(params = {}, ctx) {
 async function toolTelegramSendMessage(params = {}, ctx) {
   const message = clean(params.message);
   let contact = clean(params.contact);
+  const includeGroups = Boolean(params.includeGroups);
 
   if (!message) throw new Error("telegram_send_message: message required");
 
   const dialogs = await tg.getDialogs(ctx.userId, 80);
 
-  // fallback → recent chat
-  const dialog =
-    (contact && fuzzyFind(dialogs, contact)) || mostRecent(dialogs);
+  const dialog = contact
+    ? resolveDialog(dialogs, contact, { includeGroups })
+    : filterTelegramDialogs(dialogs, { includeGroups })[0] || null;
+
+  if (contact && !dialog) {
+    throw new Error(`No Telegram contact found for: ${contact}`);
+  }
 
   if (!dialog) {
     return {
       ok: false,
-      summary: "No Telegram chats available",
+      contact,
+      summary: includeGroups
+        ? "No Telegram chats available"
+        : "No relevant direct Telegram chats available",
     };
   }
 
@@ -150,12 +187,13 @@ async function toolTelegramSendMessage(params = {}, ctx) {
 async function toolTelegramGetUnread(params = {}, ctx) {
   const limit = params.limit || 10;
   const markRead = Boolean(params.markRead);
+  const includeGroups = Boolean(params.includeGroups);
 
   const dialogs = await tg.getDialogs(ctx.userId, 80);
-
-  const unreadDialogs = dialogs
-    .filter((d) => d.unreadCount > 0)
-    .slice(0, limit);
+  const unreadDialogs = filterTelegramDialogs(dialogs, {
+    includeGroups,
+    requireUnread: true,
+  }).slice(0, limit);
 
   const chats = await Promise.all(
     unreadDialogs.map(async (d) => {
@@ -188,7 +226,10 @@ async function toolTelegramGetUnread(params = {}, ctx) {
     })
   );
 
-  const totalUnread = dialogs.reduce((s, d) => s + (d.unreadCount || 0), 0);
+  const totalUnread = unreadDialogs.reduce(
+    (s, d) => s + (d.unreadCount || 0),
+    0
+  );
 
   return {
     ok: true,
@@ -206,14 +247,15 @@ async function toolTelegramGetUnread(params = {}, ctx) {
 async function toolTelegramSearchMessages(params = {}, ctx) {
   const query = clean(params.query);
   const contact = clean(params.contact);
+  const includeGroups = Boolean(params.includeGroups);
 
   if (!query) throw new Error("telegram_search_messages: query required");
 
   const dialogs = await tg.getDialogs(ctx.userId, 80);
 
   const scope = contact
-    ? [fuzzyFind(dialogs, contact)].filter(Boolean)
-    : dialogs.slice(0, 25);
+    ? [resolveDialog(dialogs, contact, { includeGroups })].filter(Boolean)
+    : filterTelegramDialogs(dialogs, { includeGroups }).slice(0, 25);
 
   const results = [];
 
@@ -251,13 +293,29 @@ async function toolTelegramSearchMessages(params = {}, ctx) {
 async function toolTelegramReplyMessage(params = {}, ctx) {
   const message = clean(params.message);
   let contact = clean(params.contact);
+  const includeGroups = Boolean(params.includeGroups);
 
   if (!message) throw new Error("telegram_reply_message: message required");
 
   const dialogs = await tg.getDialogs(ctx.userId, 80);
 
-  const dialog =
-    (contact && fuzzyFind(dialogs, contact)) || mostRecent(dialogs);
+  const dialog = contact
+    ? resolveDialog(dialogs, contact, { includeGroups })
+    : filterTelegramDialogs(dialogs, { includeGroups })[0] || null;
+
+  if (contact && !dialog) {
+    throw new Error(`No Telegram contact found for: ${contact}`);
+  }
+
+  if (!dialog) {
+    return {
+      ok: false,
+      contact,
+      summary: includeGroups
+        ? "No Telegram chats available"
+        : "No relevant direct Telegram chats available",
+    };
+  }
 
   const result = await tg.sendMessage(
     ctx.userId,
@@ -289,7 +347,7 @@ async function toolTelegramGetContactInfo(params = {}, ctx) {
     };
 
   const dialogs = await tg.getDialogs(ctx.userId, 80);
-  const dialog = fuzzyFind(dialogs, contact);
+  const dialog = resolveDialog(dialogs, contact, { includeGroups: false });
 
   if (!dialog) {
     return {

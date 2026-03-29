@@ -27,6 +27,40 @@ function formatCount(value) {
   }).format(count);
 }
 
+function buildCommunicationStats(communicationCounts = {}, connectedSet = new Set()) {
+  const stats = [
+    {
+      label: "Connected apps",
+      value: String(connectedSet.size),
+    },
+  ];
+
+  if (connectedSet.has("jira")) {
+    stats.push(
+      {
+        label: "Waiting on you",
+        value: formatCount(communicationCounts.replyRequiredCount || 0),
+      },
+      {
+        label: "Approvals",
+        value: formatCount(communicationCounts.approvalCount || 0),
+      }
+    );
+  } else {
+    stats.push({
+      label: "Waiting on you",
+      value: formatCount(communicationCounts.replyRequiredCount || 0),
+    });
+  }
+
+  stats.push({
+    label: "Follow-ups",
+    value: formatCount(communicationCounts.followUpCount || 0),
+  });
+
+  return stats;
+}
+
 async function getMorningBriefing(userId) {
   const integrations = await Integration.find({ userId }).lean();
   const connectedApps = integrations
@@ -74,35 +108,7 @@ async function getMorningBriefing(userId) {
   const calendarEvents = calendarResult?.events || [];
   const upcomingEvent = findUpcomingEvent(calendarEvents, now);
 
-  const stats = [
-    {
-      label: "Connected apps",
-      value: String(connectedApps.length),
-    },
-  ];
-
-  if (connectedSet.has("jira")) {
-    stats.push(
-      {
-        label: "Waiting on you",
-        value: formatCount(communicationCounts.replyRequiredCount || 0),
-      },
-      {
-        label: "Approvals",
-        value: formatCount(communicationCounts.approvalCount || 0),
-      }
-    );
-  } else {
-    stats.push({
-      label: "Waiting on you",
-      value: formatCount(communicationCounts.replyRequiredCount || 0),
-    });
-  }
-
-  stats.push({
-    label: "Follow-ups",
-    value: formatCount(communicationCounts.followUpCount || 0),
-  });
+  const stats = buildCommunicationStats(communicationCounts, connectedSet);
 
   const alerts = [];
 
@@ -409,4 +415,8 @@ function joinParts(parts) {
 module.exports = {
   getMorningBriefing,
   APP_META,
+  __test: {
+    buildCommunicationStats,
+    buildSummary,
+  },
 };

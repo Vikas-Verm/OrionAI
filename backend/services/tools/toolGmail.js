@@ -15,6 +15,10 @@
 
 const axios = require("axios");
 const Integration = require("../../models/Integration");
+const {
+  buildGmailInboxQuery,
+  filterGmailInboxEmails,
+} = require("../agentMessageFilterService");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Gmail OAuth2 client factory
@@ -166,6 +170,10 @@ function formatEmail(msg) {
     date: formatDate(msg.internalDate),
     snippet: msg.snippet || "",
     unread: (msg.labelIds || []).includes("UNREAD"),
+    labelIds: msg.labelIds || [],
+    replyTo: headerVal(h, "Reply-To"),
+    listUnsubscribe: headerVal(h, "List-Unsubscribe"),
+    precedence: headerVal(h, "Precedence"),
   };
 }
 
@@ -198,17 +206,30 @@ function buildRawEmail({
 // TOOL 1: gmailGetInbox — recent inbox emails
 // ─────────────────────────────────────────────────────────────────────────────
 async function toolGmailGetInbox(params, ctx) {
-  const { maxResults = 10, unreadOnly = false } = params;
+  const { maxResults = 10, unreadOnly = false, includeBulk = false } = params;
   const { client } = await getGmailClient(ctx.userId);
 
-  const q = unreadOnly ? "is:unread in:inbox" : "in:inbox";
+  const q = buildGmailInboxQuery({ unreadOnly, includeBulk });
   const listRes = await client.get("/messages", {
-    params: { q, maxResults, format: "minimal" },
+    params: {
+      q,
+      maxResults: includeBulk ? maxResults : Math.min(maxResults * 5, 50),
+      format: "minimal",
+    },
   });
 
   const messages = listRes.data.messages || [];
   if (!messages.length) {
-    return { emails: [], count: 0, summary: "📭 Your inbox is empty." };
+    return {
+      emails: [],
+      count: 0,
+      unreadCount: 0,
+      summary: includeBulk
+        ? "📭 Your inbox is empty."
+        : unreadOnly
+          ? "📭 No important unread emails right now."
+          : "📭 No important inbox emails right now.",
+    };
   }
 
   // Fetch each message metadata in parallel
@@ -218,20 +239,46 @@ async function toolGmailGetInbox(params, ctx) {
         .get(`/messages/${m.id}`, {
           params: {
             format: "metadata",
-            metadataHeaders: ["Subject", "From", "To", "Date"],
+            metadataHeaders: [
+              "Subject",
+              "From",
+              "To",
+              "Date",
+              "Reply-To",
+              "List-Unsubscribe",
+              "Precedence",
+            ],
           },
         })
         .then((r) => formatEmail(r.data))
     )
   );
 
-  const unreadCount = emails.filter((e) => e.unread).length;
+  const filteredEmails = filterGmailInboxEmails(emails, {
+    includeBulk,
+    maxResults,
+  });
+
+  if (!filteredEmails.length) {
+    return {
+      emails: [],
+      count: 0,
+      unreadCount: 0,
+      summary: unreadOnly
+        ? "📭 No important unread emails right now."
+        : "📭 No important inbox emails right now.",
+    };
+  }
+
+  const unreadCount = filteredEmails.filter((e) => e.unread).length;
   const lines = [
-    `📬 *Inbox — ${emails.length} emails${unreadOnly ? " (unread)" : ""}*${
+    `📬 *Inbox — ${filteredEmails.length} email${
+      filteredEmails.length !== 1 ? "s" : ""
+    }${unreadOnly ? " (unread)" : ""}*${
       unreadCount ? `  •  🔵 ${unreadCount} unread` : ""
     }`,
     "",
-    ...emails.map(
+    ...filteredEmails.map(
       (e, i) =>
         `${e.unread ? "🔵" : "⚪"} *${e.subject}*\n   From: ${e.from}\n   ${
           e.date
@@ -240,8 +287,8 @@ async function toolGmailGetInbox(params, ctx) {
   ];
 
   return {
-    emails,
-    count: emails.length,
+    emails: filteredEmails,
+    count: filteredEmails.length,
     unreadCount,
     summary: lines.join("\n"),
   };

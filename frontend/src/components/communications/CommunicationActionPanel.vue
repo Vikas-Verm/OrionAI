@@ -45,7 +45,7 @@
             <span>{{ item.sourceIcon }}</span>
             <span>{{ item.sourceLabel }}</span>
           </span>
-          <span class="comm-card-state">{{ item.actionStateLabel }}</span>
+          <span v-if="showStateBadge(item)" class="comm-card-state">{{ item.actionStateLabel }}</span>
         </div>
 
         <div class="comm-card-title">{{ item.conversationTitle }}</div>
@@ -170,6 +170,10 @@ function relativeTime(timestamp) {
 
   const days = Math.floor(hours / 24)
   return `${days}d ago`
+}
+
+function showStateBadge(item) {
+  return Boolean(item?.actionStateLabel) && item?.actionState !== 'waiting_on_others'
 }
 
 function setActiveFilter(filterId) {

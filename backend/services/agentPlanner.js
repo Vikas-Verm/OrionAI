@@ -11,6 +11,10 @@
 const Skill = require("../models/skill");
 const { chatCompleteNoSystem } = require("./llmService");
 const { getMemoryContext } = require("../services/memoryService");
+const {
+  buildMeetingPrepPlan,
+  isMeetingPrepRequest,
+} = require("./meetingPrepService");
 
 const DOCUMENT_LOOKUP_RE =
   /\b(invoice|invoices|bill|bills|purchase order|purchase orders|credit note|credit notes|debit note|debit notes|payment request|payment requests|proof of delivery|proof of deliveries|pod|pods|\bpo\b)\b/i;
@@ -24,6 +28,18 @@ const BUILTIN_TOOLS = [
       "Query the user's connected business database in a read-only way using natural language.",
     paramsText:
       '    - question (string, required): the business question to answer from the connected database',
+  },
+  {
+    name: "meeting_prep",
+    description:
+      "Synthesize a pre-meeting brief from calendar details plus related connected-app context.",
+    paramsText: [
+      '    - titleHint (string, optional): event title or meeting topic',
+      '    - attendeeHint (string, optional): attendee name or email to help identify the right meeting',
+      '    - relativeStartMinutes (number, optional): how soon the meeting starts, such as 16',
+      '    - dateFrom (string, optional): YYYY-MM-DD calendar date to search',
+      '    - userQuestion (string, optional): original user phrasing for the final brief',
+    ].join("\n"),
   },
   {
     name: "razorpay_get_payouts",
@@ -127,6 +143,10 @@ function normalizePlannedSteps(userMessage = "", plan = {}) {
     steps: Array.isArray(plan?.steps) ? plan.steps.filter((step) => step?.tool) : [],
   };
 
+  if (isMeetingPrepRequest(userMessage)) {
+    return buildMeetingPrepPlan(userMessage, normalizedPlan);
+  }
+
   if (shouldUseConnectedDatabase(userMessage, normalizedPlan)) {
     return buildConnectedDatabasePlan(userMessage, normalizedPlan);
   }
@@ -160,7 +180,7 @@ async function parseAgentIntent(userMessage, history = [], userId = null) {
       ``,
       `PLANNING RULES:`,
       `1. Pick the right tool(s). For multi-step tasks list ALL steps in order.`,
-      `2. Steps share results — use {{ticketKey}} in message params to reference a Jira ticket key from a previous step.`,
+      `2. Steps share results — use placeholders like {{ticketKey}}, {{eventTitle}}, {{eventDate}}, {{eventTime}}, {{eventSummary}}, {{lastSummary}}, or {{databaseSummary}} in later message/body params when one step depends on an earlier step.`,
       `3. CALENDAR DATES: When user mentions a specific date (e.g. "23/03/2026", "March 23", "tomorrow", "next Monday"):`,
       `   - Convert to YYYY-MM-DD and set BOTH dateFrom AND dateTo to that date`,
       `   - "tomorrow" = ${
@@ -169,6 +189,7 @@ async function parseAgentIntent(userMessage, history = [], userId = null) {
       `   - "today" = ${today}`,
       `   - Use calendar_get_events with dateFrom+dateTo, NOT query`,
       `4. SLACK/TELEGRAM DMs: Use person's first name in lowercase as channel/contact (e.g. "hari", "rahul")`,
+      `4a. FOLLOW-UP MESSAGES: when the user says things like "acknowledge this meeting", "notify them about it", or "send an update about this ticket", create the later messaging step as a follow-up to the earlier step and include a useful message body or placeholders referencing the earlier result.`,
       `5. CONNECTED DATABASE: Use database_query for read-only business data questions such as "show latest bill", "latest invoice details", "list unpaid bills", or "find PO details".`,
       `6. fetch_document is ONLY for document-delivery workflows where the user wants to send, share, attach, export, or generate a PDF from a document.`,
       `7. General questions, coding help, maths, or casual chat are NOT agent tasks.`,

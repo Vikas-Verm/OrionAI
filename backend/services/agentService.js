@@ -54,10 +54,12 @@ const {
   toolRazorpayGetPayouts,
   toolRazorpayCreatePayout,
 } = require("./tools/toolRazorpay");
+const { toolMeetingPrep } = require("./meetingPrepService");
 const Skill = require("../models/skill");
 const { checkNeedsConfirmation } = require("./confirmationService");
 const { waitForConfirmation } = require("./agentConfirmationStore");
 const { withRetry } = require("./retryHelper");
+const { resolveRuntimeStep } = require("./agentRuntimeContext");
 // ─────────────────────────────────────────────────────────────────────────────
 // TOOL_REGISTRY — static entries for non-Jira tools (document, email etc.)
 // Jira tools are loaded dynamically from DB via loadToolRegistry()
@@ -100,6 +102,7 @@ const STATIC_TOOL_REGISTRY = {
   whatsapp_get_unread: { icon: "🔔", label: "WhatsApp unread" },
   whatsapp_list_chats: { icon: "💬", label: "WhatsApp chats" },
   database_query: { icon: "🗄️", label: "Query connected database" },
+  meeting_prep: { icon: "🧠", label: "Prepare meeting brief" },
   razorpay_get_payouts: { icon: "₹", label: "List Razorpay payouts" },
   razorpay_create_payout: { icon: "₹", label: "Create Razorpay payout" },
 };
@@ -885,21 +888,22 @@ async function runAgent(steps, db, onProgress, userId, sessionId = "default") {
   const results = [];
 
   for (const step of steps) {
-    const { tool, params } = step;
+    const runtimeStep = resolveRuntimeStep(step, results, ctx);
+    const { tool, params } = runtimeStep;
     const { needsConfirm, preview } = checkNeedsConfirmation(
-      step.tool,
-      step.params,
+      tool,
+      params,
       results
     );
     // Resolve stepUI once per step — used in both running + done progress events
     const stepUI = presentStep(tool, results.length, TOOL_REGISTRY);
 
     if (needsConfirm) {
-      await onProgress({ status: "confirm_needed", tool: step.tool, preview });
-      const confirmed = await waitForConfirmation(sessionId, step.tool, preview);
+      await onProgress({ status: "confirm_needed", tool, preview });
+      const confirmed = await waitForConfirmation(sessionId, tool, preview);
       if (!confirmed) {
         results.push({
-          tool: step.tool,
+          tool,
           status: "skipped",
           result: { summary: "Skipped by user" },
         });
@@ -1162,30 +1166,40 @@ async function runAgent(steps, db, onProgress, userId, sessionId = "default") {
           result = await withRetry(() => calendarGetToday(params, ctx), {
             label: "calendar_get_today",
           });
+          ctx.lastCalendarEvents = result?.events || [];
+          ctx.lastCalendarEvent = ctx.lastCalendarEvents[0] || null;
           break;
 
         case "calendar_get_week":
           result = await withRetry(() => calendarGetWeek(params, ctx), {
             label: "calendar_get_week",
           });
+          ctx.lastCalendarEvents = result?.events || [];
+          ctx.lastCalendarEvent = ctx.lastCalendarEvents[0] || null;
           break;
 
         case "calendar_get_events":
           result = await withRetry(() => calendarGetEvents(params, ctx), {
             label: "calendar_get_events",
           });
+          ctx.lastCalendarEvents = result?.events || [];
+          ctx.lastCalendarEvent = ctx.lastCalendarEvents[0] || null;
           break;
 
         case "calendar_create":
           result = await withRetry(() => calendarCreate(params, ctx), {
             label: "calendar_create",
           });
+          ctx.lastCalendarEvents = result ? [result] : [];
+          ctx.lastCalendarEvent = result || null;
           break;
 
         case "calendar_update":
           result = await withRetry(() => calendarUpdate(params, ctx), {
             label: "calendar_update",
           });
+          ctx.lastCalendarEvents = result ? [result] : [];
+          ctx.lastCalendarEvent = result || null;
           break;
 
         case "calendar_delete":
@@ -1323,6 +1337,12 @@ async function runAgent(steps, db, onProgress, userId, sessionId = "default") {
         case "database_query":
           result = await withRetry(() => toolDatabaseQuery(params, ctx), {
             label: "database_query",
+          });
+          break;
+
+        case "meeting_prep":
+          result = await withRetry(() => toolMeetingPrep(params, ctx), {
+            label: "meeting_prep",
           });
           break;
 

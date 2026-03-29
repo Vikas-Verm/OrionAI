@@ -109,6 +109,7 @@ async function checkSlack(userId) {
         }
         if (previews.length < 3) {
           previews.push({
+            id: ch.id,
             name,
             unread,
             type: ch.is_im ? "DM" : "channel",
@@ -152,6 +153,7 @@ async function checkTelegram(userId) {
     const count = result.totalUnread || 0;
     const chats = result.chats || result.telegramChats || [];
     const previews = chats.slice(0, 3).map((c) => ({
+      id: c.chatId || c.id || c.username || c.chatName || c.name,
       name: c.chatName || c.name,
       unread: c.unreadCount || c.unread || 0,
       preview: c.lastMessage || "",
@@ -186,6 +188,7 @@ async function checkWhatsApp(userId) {
     const chats = result?.chats || [];
     const count = result?.totalUnread || 0;
     const previews = chats.slice(0, 3).map((c) => ({
+      id: c.chatId || c.id || c.chatName || c.name,
       name: c.chatName,
       unread: c.unreadCount,
       preview: c.lastMessage || "",

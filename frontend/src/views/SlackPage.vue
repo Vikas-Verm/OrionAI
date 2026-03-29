@@ -100,65 +100,67 @@
         />
       </div>
 
-      <!-- Channels -->
-      <div class="sl-section-hdr" @click="sectionsOpen.channels = !sectionsOpen.channels">
-        <svg :class="['sl-chevron', sectionsOpen.channels ? 'open' : '']" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
-        <span class="sl-section-label">Channels</span>
-        <span v-if="channelUnread > 0" class="sl-badge-pill">{{ channelUnread }}</span>
-        <button class="sl-section-plus" @click.stop="openModal('createChannel')" title="New channel">+</button>
-      </div>
-      <transition name="sl-expand">
-        <div v-if="sectionsOpen.channels" class="sl-ch-list">
-          <div v-if="channelsList.length === 0 && !loading" class="sl-ch-empty">No channels yet</div>
-          <div v-for="ch in channelsList" :key="ch.id"
-            :class="['sl-ch-item', activeChannelId === ch.id ? 'active' : '']"
-            @click="openChannel(ch)">
-            <span class="sl-ch-sigil">{{ ch.type === 'private' ? '🔒' : '#' }}</span>
-            <span class="sl-ch-label" :class="{bold: ch.unread > 0}">{{ ch.name.replace(/^#/, '') }}</span>
-            <span v-if="slackActionState(ch.id)" class="sl-action-chip" :class="`state-${slackActionState(ch.id).actionState}`">
-              {{ slackActionState(ch.id).actionStateLabel }}
-            </span>
-            <span v-if="ch.unread > 0" class="sl-badge-red">{{ ch.unread }}</span>
-          </div>
-          <div class="sl-ch-item sl-ch-add" @click="openModal('browseChannels')">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-            <span class="sl-ch-label" style="color:var(--text-muted)">Browse channels</span>
-          </div>
-          <div class="sl-ch-item sl-ch-add" @click="openModal('createChannel')">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            <span class="sl-ch-label" style="color:var(--text-muted)">Add a channel</span>
-          </div>
+      <div class="sl-sidebar-list-scroll">
+        <!-- Channels -->
+        <div class="sl-section-hdr" @click="sectionsOpen.channels = !sectionsOpen.channels">
+          <svg :class="['sl-chevron', sectionsOpen.channels ? 'open' : '']" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+          <span class="sl-section-label">Channels</span>
+          <span v-if="channelUnread > 0" class="sl-badge-pill">{{ channelUnread }}</span>
+          <button class="sl-section-plus" @click.stop="openModal('createChannel')" title="New channel">+</button>
         </div>
-      </transition>
+        <transition name="sl-expand">
+          <div v-if="sectionsOpen.channels" class="sl-ch-list">
+            <div v-if="channelsList.length === 0 && !loading" class="sl-ch-empty">No channels yet</div>
+            <div v-for="ch in channelsList" :key="ch.id"
+              :class="['sl-ch-item', activeChannelId === ch.id ? 'active' : '']"
+              @click="openChannel(ch)">
+              <span class="sl-ch-sigil">{{ ch.type === 'private' ? '🔒' : '#' }}</span>
+              <span class="sl-ch-label" :class="{bold: ch.unread > 0}">{{ ch.name.replace(/^#/, '') }}</span>
+              <span v-if="slackActionState(ch.id)" class="sl-action-chip" :class="`state-${slackActionState(ch.id).actionState}`">
+                {{ slackActionState(ch.id).actionStateLabel }}
+              </span>
+              <span v-if="ch.unread > 0" class="sl-badge-red">{{ ch.unread }}</span>
+            </div>
+            <div class="sl-ch-item sl-ch-add" @click="openModal('browseChannels')">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+              <span class="sl-ch-label" style="color:var(--text-muted)">Browse channels</span>
+            </div>
+            <div class="sl-ch-item sl-ch-add" @click="openModal('createChannel')">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              <span class="sl-ch-label" style="color:var(--text-muted)">Add a channel</span>
+            </div>
+          </div>
+        </transition>
 
-      <!-- DMs -->
-      <div class="sl-section-hdr" @click="sectionsOpen.dms = !sectionsOpen.dms">
-        <svg :class="['sl-chevron', sectionsOpen.dms ? 'open' : '']" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
-        <span class="sl-section-label">Direct messages</span>
-        <span v-if="dmUnread > 0" class="sl-badge-pill">{{ dmUnread }}</span>
-        <button class="sl-section-plus" @click.stop="openModal('newDM')" title="New DM">+</button>
-      </div>
-      <transition name="sl-expand">
-        <div v-if="sectionsOpen.dms" class="sl-ch-list">
-          <div v-if="dmsList.length === 0 && !loading" class="sl-ch-empty">No DMs yet</div>
-          <div v-for="ch in dmsList" :key="ch.id"
-            :class="['sl-ch-item sl-dm-item', activeChannelId === ch.id ? 'active' : '']"
-            @click="openChannel(ch)">
-            <div class="sl-dm-ava" :style="{background: avatarColor(ch.name)}">{{ ch.name.slice(0,1).toUpperCase() }}</div>
-            <span class="sl-ch-label" :class="{bold: ch.unread > 0}">{{ ch.name }}</span>
-            <span v-if="slackActionState(ch.id)" class="sl-action-chip" :class="`state-${slackActionState(ch.id).actionState}`">
-              {{ slackActionState(ch.id).actionStateLabel }}
-            </span>
-            <span v-if="ch.unread > 0" class="sl-badge-red">{{ ch.unread }}</span>
-          </div>
-          <div class="sl-ch-item sl-ch-add" @click="openModal('newDM')">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            <span class="sl-ch-label" style="color:var(--text-muted)">Add teammates</span>
-          </div>
+        <!-- DMs -->
+        <div class="sl-section-hdr" @click="sectionsOpen.dms = !sectionsOpen.dms">
+          <svg :class="['sl-chevron', sectionsOpen.dms ? 'open' : '']" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+          <span class="sl-section-label">Direct messages</span>
+          <span v-if="dmUnread > 0" class="sl-badge-pill">{{ dmUnread }}</span>
+          <button class="sl-section-plus" @click.stop="openModal('newDM')" title="New DM">+</button>
         </div>
-      </transition>
+        <transition name="sl-expand">
+          <div v-if="sectionsOpen.dms" class="sl-ch-list">
+            <div v-if="dmsList.length === 0 && !loading" class="sl-ch-empty">No DMs yet</div>
+            <div v-for="ch in dmsList" :key="ch.id"
+              :class="['sl-ch-item sl-dm-item', activeChannelId === ch.id ? 'active' : '']"
+              @click="openChannel(ch)">
+              <div class="sl-dm-ava" :style="{background: avatarColor(ch.name)}">{{ ch.name.slice(0,1).toUpperCase() }}</div>
+              <span class="sl-ch-label" :class="{bold: ch.unread > 0}">{{ ch.name }}</span>
+              <span v-if="slackActionState(ch.id)" class="sl-action-chip" :class="`state-${slackActionState(ch.id).actionState}`">
+                {{ slackActionState(ch.id).actionStateLabel }}
+              </span>
+              <span v-if="ch.unread > 0" class="sl-badge-red">{{ ch.unread }}</span>
+            </div>
+            <div class="sl-ch-item sl-ch-add" @click="openModal('newDM')">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              <span class="sl-ch-label" style="color:var(--text-muted)">Add teammates</span>
+            </div>
+          </div>
+        </transition>
 
-      <div v-if="loading" class="sl-sidebar-loading"><span class="sl-spin"></span> Loading…</div>
+        <div v-if="loading" class="sl-sidebar-loading"><span class="sl-spin"></span> Loading…</div>
+      </div>
 
       <!-- FIX 1+2: User bar — opens profile popup WITHOUT Add Workspace -->
       <div class="sl-user-bar" @click.stop="profileMenuOpen = !profileMenuOpen">
@@ -1350,7 +1352,8 @@ onUnmounted(() => {
 
 /* ── Sidebar ─────────────────────────────────────────────── */
 .sl-sidebar { width:258px; flex-shrink:0; background:var(--bg-surface); border-right:1px solid var(--border-subtle); display:flex; flex-direction:column; overflow:hidden; }
-.sl-action-panel-wrap { padding: 0 10px 8px; }
+.sl-sidebar-list-scroll { flex:1; min-height:0; overflow-y:auto; padding-bottom:4px; scrollbar-width:thin; }
+.sl-action-panel-wrap { padding: 0 10px 8px; flex-shrink:0; }
 .sl-sidebar :deep(.comm-insights) { background: var(--bg-base); }
 .sl-sidebar :deep(.comm-panel) { background: var(--bg-base); }
 .sl-action-chip {
@@ -1408,7 +1411,7 @@ onUnmounted(() => {
 .sl-section-plus:hover { background:rgba(255,255,255,0.08); color:var(--text-primary); }
 
 /* Channel list */
-.sl-ch-list { overflow-y:auto; scrollbar-width:thin; flex-shrink:0; max-height:230px; }
+.sl-ch-list { overflow:visible; flex-shrink:0; max-height:none; }
 .sl-ch-empty { padding:4px 13px; font-size:11px; color:var(--text-muted); }
 .sl-ch-item { display:flex; align-items:center; gap:5px; padding:3px 9px; cursor:pointer; border-radius:5px; margin:0 4px; transition:background 0.1s; min-height:26px; }
 .sl-ch-item:hover { background:rgba(255,255,255,0.04); }

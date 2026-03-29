@@ -247,6 +247,11 @@
         <!-- ── CALENDAR — delegated to CalendarRenderer ── -->
         <template v-else-if="calendarSteps.length">
           <CalendarRenderer :steps="msg.steps || []" :msg="msg" />
+          <div
+            v-if="showAgentTextWithCalendar"
+            class="agent-text-content"
+            v-html="formattedContent"
+          ></div>
         </template>
 
         <!-- ── TELEGRAM — delegated to TelegramRenderer ── -->
@@ -489,6 +494,12 @@ const CALENDAR_TOOLS = [
 ]
 const calendarSteps = computed(() =>
   (props.msg.steps || []).filter(s => CALENDAR_TOOLS.includes(s.tool) && s.richEvents?.length)
+)
+const hasMeetingPrepStep = computed(() =>
+  (props.msg.steps || []).some(s => s.tool === 'meeting_prep')
+)
+const showAgentTextWithCalendar = computed(() =>
+  hasMeetingPrepStep.value && calendarSteps.value.length > 0 && !!props.msg.content
 )
 
 // ── Telegram ───────────────────────────────────────────────────────────────
