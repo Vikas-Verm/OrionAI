@@ -280,6 +280,11 @@ async function whatsappGetMessages(params, ctx) {
   }
 
   const messages = await chat.fetchMessages({ limit });
+  if (typeof chat.sendSeen === "function") {
+    await chat.sendSeen().catch(() => {});
+  }
+  const { refreshUsersSignals } = require("../liveSignalRefresh");
+  refreshUsersSignals([userId]).catch(() => {});
   const formatted = messages.map(m => ({
     id:        m.id._serialized,
     from:      m.fromMe ? "You" : (m._data?.notifyName || m.from),
@@ -321,6 +326,10 @@ async function whatsappGetUnread(params, ctx) {
       unreadCount: c.unreadCount,
       isGroup:     c.isGroup,
       lastMessage: c.lastMessage?.body?.slice(0, 80) || "",
+      latestMessageId: c.lastMessage?.id?._serialized || null,
+      latestMessageAt: c.lastMessage?.timestamp
+        ? new Date(c.lastMessage.timestamp * 1000).toISOString()
+        : null,
     }));
 
   const totalUnread = unreadChats.reduce((s, c) => s + c.unreadCount, 0);

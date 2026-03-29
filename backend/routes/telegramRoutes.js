@@ -160,6 +160,8 @@ router.post("/dialogs/:id/upload", authenticate, async (req, res) => {
 router.post("/dialogs/:id/read", authenticate, async (req, res) => {
   try {
     await tg.markAsRead(req.user?.username, req.params.id);
+    const { refreshUsersSignals } = require("../services/liveSignalRefresh");
+    refreshUsersSignals([req.user?.username]).catch(() => {});
     res.json({ ok: true });
   } catch (err) {
     res.json({ ok: false }); // non-fatal

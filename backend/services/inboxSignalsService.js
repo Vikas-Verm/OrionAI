@@ -7,6 +7,24 @@ const {
   getCalendarUpcomingSignal,
 } = require("./workspaceSignalsService");
 
+function toIsoTimestamp(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString();
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return new Date(value > 1e12 ? value : value * 1000).toISOString();
+  }
+
+  if (typeof value === "string" && /^\d+(?:\.\d+)?$/.test(value)) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return null;
+    return new Date(numeric > 1e12 ? numeric : numeric * 1000).toISOString();
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+}
+
 async function getUnreadSignals(userId) {
   const checks = await Promise.allSettled([
     checkGmail(userId),
@@ -97,6 +115,10 @@ async function checkSlack(userId) {
       if (unread > 0) {
         count += unread;
         let name = ch.name || ch.id;
+        let latestMessageId = null;
+        let latestMessageAt = null;
+        let preview = "";
+
         if (ch.is_im && ch.user) {
           try {
             const u = await axios.get("https://slack.com/api/users.info", {
@@ -107,12 +129,29 @@ async function checkSlack(userId) {
               u.data.user?.profile?.display_name || u.data.user?.name || name;
           } catch {}
         }
+        try {
+          const history = await axios.get(
+            "https://slack.com/api/conversations.history",
+            {
+              headers: { Authorization: `Bearer ${token}` },
+              params: { channel: ch.id, limit: 1 },
+            }
+          );
+          const latestMessage = history.data?.messages?.[0] || null;
+          preview = String(latestMessage?.text || "").trim();
+          latestMessageId =
+            latestMessage?.client_msg_id || latestMessage?.ts || null;
+          latestMessageAt = toIsoTimestamp(latestMessage?.ts);
+        } catch {}
         if (previews.length < 3) {
           previews.push({
             id: ch.id,
             name,
             unread,
             type: ch.is_im ? "DM" : "channel",
+            preview,
+            latestMessageId,
+            latestMessageAt,
           });
         }
       }
@@ -152,12 +191,23 @@ async function checkTelegram(userId) {
 
     const count = result.totalUnread || 0;
     const chats = result.chats || result.telegramChats || [];
-    const previews = chats.slice(0, 3).map((c) => ({
-      id: c.chatId || c.id || c.username || c.chatName || c.name,
-      name: c.chatName || c.name,
-      unread: c.unreadCount || c.unread || 0,
-      preview: c.lastMessage || "",
-    }));
+    const previews = chats.slice(0, 3).map((chat) => {
+      const latestMessage = Array.isArray(chat.messages)
+        ? chat.messages[chat.messages.length - 1] || null
+        : null;
+
+      return {
+        id: chat.chatId || chat.id || chat.username || chat.chatName || chat.name,
+        name: chat.chatName || chat.name,
+        unread: chat.unreadCount || chat.unread || 0,
+        preview: latestMessage?.text || chat.lastMessage || "",
+        latestMessageId:
+          latestMessage?.id !== undefined && latestMessage?.id !== null
+            ? String(latestMessage.id)
+            : null,
+        latestMessageAt: toIsoTimestamp(latestMessage?.date),
+      };
+    });
 
     const summary =
       count > 0 && previews.length
@@ -192,6 +242,8 @@ async function checkWhatsApp(userId) {
       name: c.chatName,
       unread: c.unreadCount,
       preview: c.lastMessage || "",
+      latestMessageId: c.latestMessageId || null,
+      latestMessageAt: c.latestMessageAt || null,
     }));
 
     const summary =

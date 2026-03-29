@@ -350,9 +350,18 @@ function normalizeStepParams(step, userMessage = "", options = {}) {
       if (durationMinutes) params.durationMinutes = durationMinutes;
     }
 
+    const normalizedStartFromMessage = extractCalendarStartDateTime(
+      userMessage,
+      baseDate
+    );
+
+    if (normalizedStartFromMessage) {
+      params.startDateTime = normalizedStartFromMessage;
+    }
+
     if (
       !params.startDateTime ||
-        !isIsoDateTime(params.startDateTime) ||
+      !isIsoDateTime(params.startDateTime) ||
       String(params.startDateTime).toLowerCase().includes("today") ||
       String(params.startDateTime).toLowerCase().includes("tomorrow")
     ) {

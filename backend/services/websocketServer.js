@@ -24,6 +24,21 @@ const lastSlackCount = new Map();
 const lastCalendarEventIds = new Map();
 const telegramListeners = new Map();
 
+function toIsoTimestamp(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return new Date(value > 1e12 ? value : value * 1000).toISOString();
+  }
+  if (typeof value === "string" && /^\d+(?:\.\d+)?$/.test(value)) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return null;
+    return new Date(numeric > 1e12 ? numeric : numeric * 1000).toISOString();
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // INIT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -334,14 +349,25 @@ async function checkTelegram(userId, isFirstRun) {
 
     return {
       count,
-      items: chats.slice(0, 5).map((c) => ({
-        id: c.chatId || c.id || c.username || c.chatName || c.name,
-        chatId: c.chatId || c.id || null,
-        senderKey: c.chatId || c.id || c.username || c.chatName || c.name,
-        name: c.chatName || c.name,
-        unread: c.unreadCount || c.unread || 0,
-        preview: c.lastMessage || "",
-      })),
+      items: chats.slice(0, 5).map((chat) => {
+        const latestMessage = Array.isArray(chat.messages)
+          ? chat.messages[chat.messages.length - 1] || null
+          : null;
+
+        return {
+          id: chat.chatId || chat.id || chat.username || chat.chatName || chat.name,
+          chatId: chat.chatId || chat.id || null,
+          senderKey: chat.chatId || chat.id || chat.username || chat.chatName || chat.name,
+          name: chat.chatName || chat.name,
+          unread: chat.unreadCount || chat.unread || 0,
+          preview: latestMessage?.text || chat.lastMessage || "",
+          latestMessageId:
+            latestMessage?.id !== undefined && latestMessage?.id !== null
+              ? String(latestMessage.id)
+              : null,
+          latestMessageAt: toIsoTimestamp(latestMessage?.date),
+        };
+      }),
       _isNew: isNew,
       _newCount: isNew ? count - (prevCount || 0) : 0,
     };
@@ -380,6 +406,9 @@ async function checkSlack(userId, isFirstRun) {
       if (u > 0) {
         count += u;
         let name = ch.name || ch.id;
+        let preview = "";
+        let latestMessageId = null;
+        let latestMessageAt = null;
         if (ch.is_im && ch.user) {
           try {
             const u2 = await axios.get("https://slack.com/api/users.info", {
@@ -390,8 +419,32 @@ async function checkSlack(userId, isFirstRun) {
               u2.data.user?.profile?.display_name || u2.data.user?.name || name;
           } catch {}
         }
-        if (items.length < 5)
-          items.push({ name, unread: u, type: ch.is_im ? "DM" : "channel" });
+        try {
+          const history = await axios.get(
+            "https://slack.com/api/conversations.history",
+            {
+              headers: { Authorization: `Bearer ${token}` },
+              params: { channel: ch.id, limit: 1 },
+            }
+          );
+          const latestMessage = history.data?.messages?.[0] || null;
+          preview = String(latestMessage?.text || "").trim();
+          latestMessageId =
+            latestMessage?.client_msg_id || latestMessage?.ts || null;
+          latestMessageAt = toIsoTimestamp(latestMessage?.ts);
+        } catch {}
+        if (items.length < 5) {
+          items.push({
+            id: ch.id,
+            chatId: ch.id,
+            name,
+            unread: u,
+            type: ch.is_im ? "DM" : "channel",
+            preview,
+            latestMessageId,
+            latestMessageAt,
+          });
+        }
       }
     }
 
@@ -421,10 +474,14 @@ async function checkWhatsApp(userId) {
     return {
       count: result.totalUnread || 0,
       items: (result.chats || []).slice(0, 5).map((c) => ({
+        id: c.chatId,
+        chatId: c.chatId,
         name: c.chatName,
         unread: c.unreadCount,
         preview: c.lastMessage || "",
         isGroup: c.isGroup,
+        latestMessageId: c.latestMessageId || null,
+        latestMessageAt: c.latestMessageAt || null,
       })),
       _isNew: false,
       _newCount: 0,

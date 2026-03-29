@@ -149,6 +149,34 @@ test("normalizeStepParams infers calendar details from natural language meeting 
   assert.equal(normalized.params.addMeet, true);
 });
 
+test("normalizeStepParams prefers the user's local today wording over a stale ISO date from the planner", () => {
+  const normalized = normalizeStepParams(
+    {
+      tool: "calendar_create",
+      params: {
+        title: "testing OrionAI",
+        startDateTime: "2026-03-29T02:00:00+05:30",
+      },
+    },
+    "Schedule a meeting with vikasverma@poshn.co for testing OrionAI today at 2:00 AM",
+    { baseDate: new Date("2026-03-30T00:43:00+05:30") }
+  );
+
+  assert.equal(normalized.params.startDateTime, "2026-03-30T02:00:00+05:30");
+});
+
+test("agent planner prompt uses IST-local today and tomorrow near midnight", () => {
+  const prompt = plannerTest.buildPlannerPrompt({
+    userMessage: "Schedule a meeting today at 2:00 AM",
+    toolsText: "• calendar_create",
+    now: new Date("2026-03-29T19:13:00.000Z"),
+  });
+
+  assert.match(prompt, /Current date: 2026-03-30/);
+  assert.match(prompt, /"today" = 2026-03-30/);
+  assert.match(prompt, /"tomorrow" = 2026-03-31/);
+});
+
 test("normalizeStepParams infers Telegram contact from agent phrasing", () => {
   const normalized = normalizeStepParams(
     { tool: "telegram_send_message", params: { message: "" } },

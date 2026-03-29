@@ -852,21 +852,42 @@ function computePriorityBoost(actionState, details = {}) {
     details.latestMessageTimestamp ||
     null;
   const ageHours = hoursSince(latestTs, details.nowMs);
+  const latestInboundSignals = new Set(details.latestInboundIntent?.signals || []);
+  const hasExplicitRequest = latestInboundSignals.has("request");
+  const isLightQuestion = Boolean(
+    details.latestInboundIntent?.hasQuestion &&
+      !hasExplicitRequest &&
+      !details.latestInboundIntent?.hasApproval &&
+      !details.latestInboundIntent?.hasFollowUp &&
+      !details.latestInboundIntent?.hasUrgency
+  );
 
   let recencyBoost = 0;
   if (ageHours !== null) {
-    if (ageHours <= 2) recencyBoost = 12;
-    else if (ageHours <= 8) recencyBoost = 8;
-    else if (ageHours <= 24) recencyBoost = 5;
+    if (ageHours <= 2) recencyBoost = 8;
+    else if (ageHours <= 8) recencyBoost = 6;
+    else if (ageHours <= 24) recencyBoost = 4;
     else if (ageHours <= 72) recencyBoost = 2;
   }
 
   let signalBoost = 0;
-  if (details.latestInboundIntent?.hasApproval) signalBoost += 8;
-  if (details.latestInboundIntent?.hasQuestion || details.latestInboundIntent?.hasRequest) signalBoost += 6;
+  if (details.latestInboundIntent?.hasApproval) signalBoost += 10;
+  if (details.latestInboundIntent?.hasFollowUp) signalBoost += 6;
+  if (details.latestInboundIntent?.hasQuestion) signalBoost += isLightQuestion ? 1 : 4;
+  if (
+    hasExplicitRequest &&
+    !details.latestInboundIntent?.hasApproval &&
+    !details.latestInboundIntent?.hasFollowUp
+  ) {
+    signalBoost += 4;
+  }
   if (details.mentionedCurrentUser) signalBoost += 5;
-  if (details.conversation?.sourceMetadata?.isDirect) signalBoost += 4;
-  if (details.latestInboundIntent?.hasUrgency || details.latestMeaningfulIntent?.hasUrgency) signalBoost += 6;
+  if (details.conversation?.sourceMetadata?.isDirect && !isLightQuestion) {
+    signalBoost += 3;
+  }
+  if (details.latestInboundIntent?.hasUrgency || details.latestMeaningfulIntent?.hasUrgency) {
+    signalBoost += 10;
+  }
 
   return clamp(base + recencyBoost + signalBoost, 0, 98);
 }

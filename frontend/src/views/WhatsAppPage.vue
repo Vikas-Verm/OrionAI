@@ -255,8 +255,19 @@
   }
   
   async function selectChat(chat) {
+    const previousUnread = Number(chat?.unread || 0)
     selectedChat.value = chat
+    if (previousUnread > 0) {
+      chat.unread = 0
+    }
     await loadMessages(chat)
+    if (previousUnread > 0) {
+      emitCommunicationPriorityRefresh('communication_read', {
+        sourceApp: 'whatsapp',
+        conversationId: chat.id,
+      })
+      refreshWhatsAppActions({ silent: true }).catch(() => {})
+    }
   }
   
   async function loadMessages(chat) {

@@ -966,6 +966,7 @@ async function openChannel(ch) {
   if (activeChannelId.value === ch.id) return
   searchMode.value = false
   searchQuery.value = ''
+  const previousUnread = Number(ch.unread || 0)
   activeChannelId.value = ch.id
   activeChannel.value = ch
   messages.value = []
@@ -979,6 +980,13 @@ async function openChannel(ch) {
     messages.value = res.data.messages || []
     if (messages.value.length > 0) lastMsgTs.value = messages.value[messages.value.length - 1].id
     await nextTick(); scrollToBottom()
+    if (previousUnread > 0) {
+      emitCommunicationPriorityRefresh('communication_read', {
+        sourceApp: 'slack',
+        conversationId: ch.id,
+      })
+      refreshSlackActions({ silent: true }).catch(() => {})
+    }
   } catch(e) { console.error(e) } finally { messagesLoading.value = false }
 }
 

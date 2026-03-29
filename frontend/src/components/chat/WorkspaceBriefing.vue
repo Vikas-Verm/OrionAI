@@ -280,7 +280,10 @@ const fallbackSuggestions = [
 ]
 
 const dailyBriefing = computed(() => dashboard.value?.dailyBriefing || {})
-const filters = computed(() => dashboard.value?.priorityFeed?.filters || [
+const filterDefinitions = computed(() => dashboard.value?.priorityFeed?.filters?.map((filter) => ({
+  id: filter.id,
+  label: filter.label,
+})) || [
   { id: 'all', label: 'All', count: 0 },
   { id: 'urgent', label: 'Urgent', count: 0 },
   { id: 'communication', label: 'Communication', count: 0 },
@@ -289,6 +292,12 @@ const filters = computed(() => dashboard.value?.priorityFeed?.filters || [
   { id: 'meetings', label: 'Meetings', count: 0 },
   { id: 'tasks', label: 'Tasks', count: 0 },
 ])
+const filters = computed(() =>
+  filterDefinitions.value.map((filter) => ({
+    ...filter,
+    count: countItemsForFilter(items.value, filter.id),
+  }))
+)
 
 const briefingTitle = computed(() => dailyBriefing.value.title || props.fallbackTitle)
 const dateLabel = computed(() => dailyBriefing.value.dateLabel || 'Now')
@@ -429,6 +438,22 @@ function filterCountLabel(value) {
   return count > 9 ? '9+' : String(count)
 }
 
+function countItemsForFilter(feedItems = [], filterId = 'all') {
+  if (filterId === 'all') return feedItems.length
+  if (filterId === 'urgent') {
+    return feedItems.filter(
+      (item) => item.priority === 'High' && item.category !== 'meetings'
+    ).length
+  }
+  if (filterId === 'communication') {
+    return feedItems.filter((item) => item.category === 'communication').length
+  }
+  if (['waiting_on_your_reply', 'needs_approval', 'needs_follow_up', 'waiting_on_others'].includes(filterId)) {
+    return feedItems.filter((item) => item.actionState === filterId).length
+  }
+  return feedItems.filter((item) => item.category === filterId).length
+}
+
 function itemIdentity(item = {}) {
   return String(
     item?.latestMessageId ||
@@ -503,6 +528,7 @@ async function saveFeedAction(item, action, extras = {}) {
       ...extras,
     })
     applyActionResult(item.id, data.entry)
+    await loadDashboard({ silent: true, mode: 'replace' })
   } catch (err) {
     console.error('Priority Feed action failed:', err.message)
   } finally {
@@ -587,7 +613,7 @@ function onPriorityRefreshNeeded(event) {
     return
   }
 
-  if (reason === 'communication_replied' || reason === 'communication_action_recorded') {
+  if (reason === 'communication_replied' || reason === 'communication_action_recorded' || reason === 'communication_read') {
     loadDashboard({ silent: true, mode: 'replace' })
   }
 }

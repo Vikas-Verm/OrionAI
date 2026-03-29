@@ -12,6 +12,10 @@ const Skill = require("../models/skill");
 const { chatCompleteNoSystem } = require("./llmService");
 const { getMemoryContext } = require("../services/memoryService");
 const {
+  APP_TIMEZONE,
+  getTimezoneDateKey,
+} = require("./calendarWindowUtils");
+const {
   buildMeetingPrepPlan,
   isMeetingPrepRequest,
 } = require("./meetingPrepService");
@@ -154,6 +158,60 @@ function normalizePlannedSteps(userMessage = "", plan = {}) {
   return normalizedPlan;
 }
 
+function buildPlannerPrompt({
+  userMessage = "",
+  toolsText = "",
+  memoryCtx = "",
+  now = new Date(),
+} = {}) {
+  const today = getTimezoneDateKey(now);
+  const tomorrow = getTimezoneDateKey(
+    new Date(now.getTime() + 24 * 60 * 60 * 1000)
+  );
+  const dayName = now.toLocaleDateString("en-US", {
+    weekday: "long",
+    timeZone: APP_TIMEZONE,
+  });
+
+  return [
+    `You are an AI agent planner.${
+      memoryCtx ? `\n${memoryCtx}\n` : ""
+    } Analyze the user request and decide which tools to call.`,
+    ``,
+    `Current date: ${today} (${dayName}, IST timezone UTC+05:30)`,
+    ``,
+    `AVAILABLE TOOLS:`,
+    `─────────────────`,
+    toolsText,
+    ``,
+    `PLANNING RULES:`,
+    `1. Pick the right tool(s). For multi-step tasks list ALL steps in order.`,
+    `2. Steps share results — use placeholders like {{ticketKey}}, {{eventTitle}}, {{eventDate}}, {{eventTime}}, {{eventSummary}}, {{lastSummary}}, or {{databaseSummary}} in later message/body params when one step depends on an earlier step.`,
+    `3. CALENDAR DATES: When user mentions a specific date (e.g. "23/03/2026", "March 23", "tomorrow", "next Monday"):`,
+    `   - Convert to YYYY-MM-DD and set BOTH dateFrom AND dateTo to that date`,
+    `   - "tomorrow" = ${tomorrow}`,
+    `   - "today" = ${today}`,
+    `   - Use calendar_get_events with dateFrom+dateTo, NOT query`,
+    `4. SLACK/TELEGRAM DMs: Use person's first name in lowercase as channel/contact (e.g. "hari", "rahul")`,
+    `4a. FOLLOW-UP MESSAGES: when the user says things like "acknowledge this meeting", "notify them about it", or "send an update about this ticket", create the later messaging step as a follow-up to the earlier step and include a useful message body or placeholders referencing the earlier result.`,
+    `5. CONNECTED DATABASE: Use database_query for read-only business data questions such as "show latest bill", "latest invoice details", "list unpaid bills", or "find PO details".`,
+    `6. fetch_document is ONLY for document-delivery workflows where the user wants to send, share, attach, export, or generate a PDF from a document.`,
+    `7. General questions, coding help, maths, or casual chat are NOT agent tasks.`,
+    ``,
+    `USER REQUEST: "${userMessage}"`,
+    ``,
+    `Respond with ONLY valid JSON:`,
+    `{`,
+    `  "isAgentTask": true | false,`,
+    `  "confidence": 0.0 to 1.0,`,
+    `  "intent": "one line — what you will do",`,
+    `  "steps": [{ "tool": "tool_name", "params": { "key": "value" } }]`,
+    `}`,
+    ``,
+    `Not an agent task: {"isAgentTask":false,"confidence":0.95,"intent":"","steps":[]}`,
+  ].join("\n");
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // PARSE AGENT INTENT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -162,50 +220,15 @@ async function parseAgentIntent(userMessage, history = [], userId = null) {
     const tools = await loadToolsFromDB();
     const toolsText = formatTools(tools);
     const now = new Date();
-    const today = now.toISOString().split("T")[0]; // YYYY-MM-DD
-    const dayName = now.toLocaleDateString("en-US", { weekday: "long" });
     const memoryCtx = userId
       ? await getMemoryContext(userId).catch(() => "")
       : "";
-    const prompt = [
-      `You are an AI agent planner.${
-        memoryCtx ? `\n${memoryCtx}\n` : ""
-      } Analyze the user request and decide which tools to call.`,
-      ``,
-      `Current date: ${today} (${dayName}, IST timezone UTC+05:30)`,
-      ``,
-      `AVAILABLE TOOLS:`,
-      `─────────────────`,
+    const prompt = buildPlannerPrompt({
+      userMessage,
       toolsText,
-      ``,
-      `PLANNING RULES:`,
-      `1. Pick the right tool(s). For multi-step tasks list ALL steps in order.`,
-      `2. Steps share results — use placeholders like {{ticketKey}}, {{eventTitle}}, {{eventDate}}, {{eventTime}}, {{eventSummary}}, {{lastSummary}}, or {{databaseSummary}} in later message/body params when one step depends on an earlier step.`,
-      `3. CALENDAR DATES: When user mentions a specific date (e.g. "23/03/2026", "March 23", "tomorrow", "next Monday"):`,
-      `   - Convert to YYYY-MM-DD and set BOTH dateFrom AND dateTo to that date`,
-      `   - "tomorrow" = ${
-        new Date(now.getTime() + 86400000).toISOString().split("T")[0]
-      }`,
-      `   - "today" = ${today}`,
-      `   - Use calendar_get_events with dateFrom+dateTo, NOT query`,
-      `4. SLACK/TELEGRAM DMs: Use person's first name in lowercase as channel/contact (e.g. "hari", "rahul")`,
-      `4a. FOLLOW-UP MESSAGES: when the user says things like "acknowledge this meeting", "notify them about it", or "send an update about this ticket", create the later messaging step as a follow-up to the earlier step and include a useful message body or placeholders referencing the earlier result.`,
-      `5. CONNECTED DATABASE: Use database_query for read-only business data questions such as "show latest bill", "latest invoice details", "list unpaid bills", or "find PO details".`,
-      `6. fetch_document is ONLY for document-delivery workflows where the user wants to send, share, attach, export, or generate a PDF from a document.`,
-      `7. General questions, coding help, maths, or casual chat are NOT agent tasks.`,
-      ``,
-      `USER REQUEST: "${userMessage}"`,
-      ``,
-      `Respond with ONLY valid JSON:`,
-      `{`,
-      `  "isAgentTask": true | false,`,
-      `  "confidence": 0.0 to 1.0,`,
-      `  "intent": "one line — what you will do",`,
-      `  "steps": [{ "tool": "tool_name", "params": { "key": "value" } }]`,
-      `}`,
-      ``,
-      `Not an agent task: {"isAgentTask":false,"confidence":0.95,"intent":"","steps":[]}`,
-    ].join("\n");
+      memoryCtx,
+      now,
+    });
 
     const raw = await chatCompleteNoSystem(prompt, 1024, 0.1);
     const clean = raw
@@ -233,5 +256,6 @@ module.exports = {
     buildConnectedDatabasePlan,
     shouldUseConnectedDatabase,
     normalizePlannedSteps,
+    buildPlannerPrompt,
   },
 };

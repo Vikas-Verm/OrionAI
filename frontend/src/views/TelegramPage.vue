@@ -1558,6 +1558,11 @@ async function selectDlg(d) {
   // stays 0 on the next loadDlgs() refresh
   if (unread > 0) {
     api.post(`/api/telegram/dialogs/${encodeURIComponent(d.id)}/read`).catch(() => {})
+    emitCommunicationPriorityRefresh('communication_read', {
+      sourceApp: 'telegram',
+      conversationId: d.id,
+    })
+    refreshTelegramActions({ silent: true }).catch(() => {})
   }
 }
 

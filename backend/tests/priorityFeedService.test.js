@@ -15,6 +15,10 @@ const {
     mapCalendarEventToPriorityItem,
     dedupePriorityItems,
     buildEffectiveCommunicationSummary,
+    mapMessageSourceToItems,
+    isItemReactivatedSinceAction,
+    filterActiveItems,
+    buildCommunicationConversationKey,
   },
 } = require("../services/priorityFeedService");
 
@@ -79,8 +83,14 @@ test("urgent filter excludes meetings even when they are high priority", () => {
   assert.equal(byId.meetings, 1);
 });
 
-test("priority feed communication counts can be driven directly from the shared communication summary", () => {
+test("priority feed summary can still use the shared communication summary while chips follow visible cards", () => {
   const items = [
+    {
+      id: "comm-reply",
+      category: "communication",
+      actionState: ACTION_STATES.WAITING_ON_YOUR_REPLY,
+      priority: "Medium",
+    },
     {
       id: "meeting-1",
       category: "meetings",
@@ -108,9 +118,9 @@ test("priority feed communication counts can be driven directly from the shared 
   assert.equal(summary.waitingOnYouCount, 2);
   assert.equal(summary.approvalCount, 1);
   assert.equal(summary.followUpCount, 2);
-  assert.equal(byId.communication, 5);
-  assert.equal(byId.needs_approval, 1);
-  assert.equal(byId.needs_follow_up, 2);
+  assert.equal(byId.communication, 1);
+  assert.equal(byId.needs_approval, 0);
+  assert.equal(byId.needs_follow_up, 0);
 });
 
 test("priority feed headline keeps communication wording aligned with the shared state summary", () => {
@@ -224,4 +234,135 @@ test("effective communication summary keeps comm counts visible when fallback it
 
   assert.equal(summary.priorityFeedCount, 2);
   assert.equal(summary.replyRequiredCount, 1);
+});
+
+test("fallback messaging items include the latest message fingerprint in their identity", () => {
+  const [item] = mapMessageSourceToItems("telegram", [
+    {
+      id: "chat-1",
+      name: "Aarav",
+      unread: 2,
+      preview: "Can you share the update?",
+      latestMessageId: "msg-2",
+      latestMessageAt: "2026-03-29T09:15:00.000Z",
+    },
+  ]);
+
+  assert.equal(item.meta.conversationId, "chat-1");
+  assert.equal(item.meta.latestMessageId, "msg-2");
+  assert.equal(item.meta.latestMessageAt, "2026-03-29T09:15:00.000Z");
+  assert.match(item.id, /^telegram:chat-1:msg-2$/);
+});
+
+test("priority feed items reactivate once a newer fallback message arrives after an action", () => {
+  const latestAction = {
+    createdAt: "2026-03-29T09:00:00.000Z",
+  };
+
+  assert.equal(
+    isItemReactivatedSinceAction(
+      {
+        meta: {
+          latestMessageAt: "2026-03-29T09:15:00.000Z",
+        },
+      },
+      latestAction
+    ),
+    true
+  );
+
+  assert.equal(
+    isItemReactivatedSinceAction(
+      {
+        meta: {
+          latestMessageAt: "2026-03-29T08:45:00.000Z",
+        },
+      },
+      latestAction
+    ),
+    false
+  );
+});
+
+test("priority feed suppresses fallback chat cards when the same conversation was already marked done", () => {
+  const [item] = mapMessageSourceToItems("telegram", [
+    {
+      id: "chat-1",
+      name: "Arti",
+      unread: 1,
+      preview: "My name is arti and your?",
+      latestMessageId: "msg-2",
+      latestMessageAt: "2026-03-29T09:00:00.000Z",
+    },
+  ]);
+
+  const visible = filterActiveItems([item], {
+    latestByItem: new Map(),
+    latestByConversation: new Map([
+      [
+        buildCommunicationConversationKey("telegram", "chat-1"),
+        {
+          itemId: "comm:telegram:chat-1",
+          action: "approved",
+          createdAt: "2026-03-29T09:05:00.000Z",
+        },
+      ],
+    ]),
+  });
+
+  assert.equal(visible.length, 0);
+});
+
+test("priority feed reactivates a fallback chat card only after a newer message arrives", () => {
+  const [item] = mapMessageSourceToItems("telegram", [
+    {
+      id: "chat-1",
+      name: "Arti",
+      unread: 2,
+      preview: "Can you help me with this too?",
+      latestMessageId: "msg-3",
+      latestMessageAt: "2026-03-29T09:15:00.000Z",
+    },
+  ]);
+
+  const visible = filterActiveItems([item], {
+    latestByItem: new Map(),
+    latestByConversation: new Map([
+      [
+        buildCommunicationConversationKey("telegram", "chat-1"),
+        {
+          itemId: "comm:telegram:chat-1",
+          action: "approved",
+          createdAt: "2026-03-29T09:05:00.000Z",
+        },
+      ],
+    ]),
+  });
+
+  assert.equal(visible.length, 1);
+  assert.equal(visible[0].id, item.id);
+});
+
+test("priority feed filter chips do not show communication counts when no communication cards are visible", () => {
+  const filters = buildPriorityFeedFilters(
+    [
+      {
+        id: "meeting-1",
+        category: "meetings",
+        priority: "Medium",
+      },
+    ],
+    {
+      priorityFeedCount: 2,
+      replyRequiredCount: 2,
+      approvalCount: 0,
+      followUpCount: 0,
+    }
+  );
+
+  const byId = Object.fromEntries(filters.map((filter) => [filter.id, filter.count]));
+
+  assert.equal(byId.communication, 0);
+  assert.equal(byId.needs_approval, 0);
+  assert.equal(byId.needs_follow_up, 0);
 });

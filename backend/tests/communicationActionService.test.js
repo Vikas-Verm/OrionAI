@@ -15,6 +15,8 @@ const {
     buildGmailThreadHaystack,
     normalizeSlackMessages,
     pickSlackConversationMessages,
+    buildPriorityClassificationPrompt,
+    applyPriorityLabels,
   },
 } = require("../services/communicationActionService");
 
@@ -142,6 +144,90 @@ test("communication priority draft actions stay in chat mode and include the lat
   assert.match(item.action.prompt, /Latest message: "Urgently need your help pls reply me"\./);
   assert.match(item.action.prompt, /Return ONLY the reply text\./);
   assert.match(item.action.prompt, /Do NOT send the message or call any tools\./);
+});
+
+test("communication priority prompt tells the LLM to keep casual intros low", () => {
+  const prompt = buildPriorityClassificationPrompt([
+    {
+      id: "comm:telegram:123",
+      sourceType: "telegram",
+      sourceLabel: "Telegram",
+      conversationTitle: "Pikuu",
+      participantLabel: "Pikuu",
+      previewText: "My name is arti and your?",
+      actionState: ACTION_STATES.WAITING_ON_YOUR_REPLY,
+      actionStateLabel: "Waiting on your reply",
+      actionReason: "You were directly asked to respond and have not replied yet.",
+      confidenceBand: "high",
+    },
+  ]);
+
+  assert.match(prompt, /must be Low/i);
+  assert.match(prompt, /My name is arti and your\?/);
+});
+
+test("applyPriorityLabels respects an LLM override for casual chat priority", async () => {
+  const [state] = await applyPriorityLabels(
+    [
+      {
+        id: "comm:telegram:123",
+        sourceType: "telegram",
+        sourceLabel: "Telegram",
+        conversationId: "123",
+        conversationTitle: "Pikuu",
+        participantLabel: "Pikuu",
+        previewText: "My name is arti and your?",
+        actionState: ACTION_STATES.WAITING_ON_YOUR_REPLY,
+        actionStateLabel: "Waiting on your reply",
+        actionReason: "You were directly asked to respond and have not replied yet.",
+        confidenceBand: "high",
+        priorityBoost: 60,
+      },
+    ],
+    {
+      priorityInterpreter: async (states) => [
+        {
+          id: states[0].id,
+          priority: "Low",
+          priorityScore: 18,
+          priorityReason: "Casual introduction",
+          prioritySource: "llm",
+        },
+      ],
+    }
+  );
+
+  assert.equal(state.priority, "Low");
+  assert.equal(state.priorityScore, 18);
+  assert.equal(state.prioritySource, "llm");
+});
+
+test("mapActionStateToPriorityItem uses preclassified priority labels when available", () => {
+  const item = mapActionStateToPriorityItem({
+    id: "comm:telegram:123",
+    sourceType: "telegram",
+    sourceLabel: "Telegram",
+    conversationId: "123",
+    conversationTitle: "Pikuu",
+    participantLabel: "Pikuu",
+    previewText: "My name is arti and your?",
+    actionState: ACTION_STATES.WAITING_ON_YOUR_REPLY,
+    actionStateLabel: "Waiting on your reply",
+    actionReason: "You were directly asked to respond and have not replied yet.",
+    confidence: 0.9,
+    confidenceBand: "high",
+    priorityBoost: 60,
+    priority: "Low",
+    priorityScore: 18,
+    prioritySource: "llm",
+    latestMessageTimestamp: "2026-03-29T19:00:00.000Z",
+    latestInboundTimestamp: "2026-03-29T19:00:00.000Z",
+    openContext: { dialogId: "123" },
+  });
+
+  assert.equal(item.priority, "Low");
+  assert.equal(item.priorityScore, 18);
+  assert.equal(item.meta.prioritySource, "llm");
 });
 
 test("getNormalizedGmailMessageText keeps only the fresh reply above quoted history", () => {

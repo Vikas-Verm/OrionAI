@@ -522,9 +522,7 @@ async function getDialogs(userId, limit = 80) {
         type,
         unreadCount: d.dialog.unreadCount || 0,
         lastMessage,
-        lastDate: d.message?.date
-          ? new Date(d.message.date * 1000).toISOString()
-          : null,
+        lastDate: toTelegramIso(d.message?.date),
         pinned: d.dialog.pinned || false,
         status: type === "user" ? parseUserStatus(e.status) : null,
       };
@@ -548,6 +546,21 @@ function parseUserStatus(status) {
   if (cn === "UserStatusLastWeek") return { type: "lastWeek" };
   if (cn === "UserStatusLastMonth") return { type: "lastMonth" };
   return null;
+}
+
+function toTelegramIso(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return new Date(value > 1e12 ? value : value * 1000).toISOString();
+  }
+  if (typeof value === "string" && /^\d+(?:\.\d+)?$/.test(value)) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return null;
+    return new Date(numeric > 1e12 ? numeric : numeric * 1000).toISOString();
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
 }
 
 // ── Parse gramjs media → clean frontend object ────────────
@@ -664,7 +677,7 @@ async function getMessages(userId, dialogId, limit = 50, offsetId = 0) {
             "User"
           : "",
         fromUsername: m.sender?.username || null,
-        date: m.date ? new Date(m.date * 1000).toISOString() : null,
+        date: toTelegramIso(m.date),
         replyTo: m.replyTo?.replyToMsgId || null,
         views: m.views || null,
         media: parseMedia(m.media, m.id),
@@ -749,7 +762,7 @@ async function getSavedMessages(userId, limit = 50) {
     return msgs.reverse().map((m) => ({
       id: String(typeof m.id === "bigint" ? Number(m.id) : m.id),
       text: m.message || "",
-      date: m.date ? new Date(m.date * 1000).toISOString() : null,
+      date: toTelegramIso(m.date),
       fromMe: true,
       media: m.media ? m.media.className : null,
     }));
@@ -888,5 +901,6 @@ module.exports = {
     createReconnectRequiredError,
     createPendingAuthToken,
     readPendingAuthToken,
+    toTelegramIso,
   },
 };

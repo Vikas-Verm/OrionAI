@@ -35,6 +35,13 @@ const APP_META = {
   database: { label: "Database", icon: "🗄️", module: "database" },
 };
 
+const COMMUNICATION_ACTION_SOURCES = new Set([
+  "gmail",
+  "slack",
+  "telegram",
+  "whatsapp",
+]);
+
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
@@ -164,6 +171,37 @@ function buildSourceBadge(sourceApp) {
   };
 }
 
+function buildCommunicationConversationKey(sourceApp = "", conversationId = null) {
+  if (!COMMUNICATION_ACTION_SOURCES.has(String(sourceApp || ""))) return null;
+  if (conversationId === null || conversationId === undefined || conversationId === "") {
+    return null;
+  }
+  return `communication:${sourceApp}:${String(conversationId)}`;
+}
+
+function getConversationKeyFromItemId(itemId = "") {
+  const value = String(itemId || "");
+  if (!value) return null;
+
+  if (value.startsWith("comm:")) {
+    const [, sourceApp, ...conversationParts] = value.split(":");
+    return buildCommunicationConversationKey(sourceApp, conversationParts.join(":"));
+  }
+
+  const [sourceApp, conversationId] = value.split(":");
+  return buildCommunicationConversationKey(sourceApp, conversationId);
+}
+
+function getPriorityItemConversationKey(item = {}) {
+  if (!item || item.category !== "communication") return null;
+  return (
+    buildCommunicationConversationKey(
+      item.sourceApp,
+      item.meta?.conversationId || item.conversationId || null
+    ) || getConversationKeyFromItemId(item.id)
+  );
+}
+
 function dedupeById(items = []) {
   const seen = new Set();
   return items.filter((item) => {
@@ -272,10 +310,7 @@ function countItemsForFilter(items = [], filterId = "all", communicationSummary 
     ).length;
   }
   if (filterId === "communication") {
-    return Number(
-      communicationSummary?.priorityFeedCount ??
-        items.filter((item) => item.category === "communication").length
-    );
+    return items.filter((item) => item.category === "communication").length;
   }
   if (
     [
@@ -285,24 +320,6 @@ function countItemsForFilter(items = [], filterId = "all", communicationSummary 
       ACTION_STATES.WAITING_ON_OTHERS,
     ].includes(filterId)
   ) {
-    if (filterId === ACTION_STATES.WAITING_ON_YOUR_REPLY) {
-      return Number(
-        communicationSummary?.replyRequiredCount ??
-          items.filter((item) => item.actionState === filterId).length
-      );
-    }
-    if (filterId === ACTION_STATES.NEEDS_APPROVAL) {
-      return Number(
-        communicationSummary?.approvalCount ??
-          items.filter((item) => item.actionState === filterId).length
-      );
-    }
-    if (filterId === ACTION_STATES.NEEDS_FOLLOW_UP) {
-      return Number(
-        communicationSummary?.followUpCount ??
-          items.filter((item) => item.actionState === filterId).length
-      );
-    }
     return items.filter((item) => item.actionState === filterId).length;
   }
   return items.filter((item) => item.category === filterId).length;
@@ -749,6 +766,13 @@ function mapMessageSourceToItems(sourceApp, previews = []) {
   return previews.slice(0, 2).map((preview, index) => {
     const unread = Number(preview.unread || 0);
     const isDirect = String(preview.type || "").toLowerCase() === "dm";
+    const conversationId =
+      preview.id || preview.chatId || preview.username || preview.name || null;
+    const latestMessageFingerprint =
+      preview.latestMessageId ||
+      preview.latestMessageAt ||
+      normalizeText(preview.preview || "").toLowerCase().slice(0, 80) ||
+      String(unread || index);
     let score = 18;
     if (isDirect) score += 16;
     if (unread >= 8) score += 18;
@@ -757,7 +781,7 @@ function mapMessageSourceToItems(sourceApp, previews = []) {
     score = clamp(score, 0, 80);
 
     return {
-      id: `${sourceApp}:${preview.id || preview.chatId || preview.name || index}`,
+      id: `${sourceApp}:${conversationId || index}:${latestMessageFingerprint}`,
       title: preview.name || `${APP_META[sourceApp]?.label || sourceApp} conversation`,
       category: "communication",
       priority: toPriorityLevel(score),
@@ -775,9 +799,10 @@ function mapMessageSourceToItems(sourceApp, previews = []) {
       needsAttentionSoon: unread >= 6 || isDirect,
       meta: {
         unread,
-        conversationId:
-          preview.id || preview.chatId || preview.username || preview.name || null,
+        conversationId,
         previewText: preview.preview || "",
+        latestMessageId: preview.latestMessageId || null,
+        latestMessageAt: preview.latestMessageAt || null,
       },
       ...buildSourceBadge(sourceApp),
     };
@@ -914,6 +939,15 @@ function buildSuggestedActions(items = [], connectedApps = []) {
   }));
 }
 
+function chooseLatestAction(...actions) {
+  return actions
+    .filter(Boolean)
+    .sort(
+      (a, b) =>
+        new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+    )[0] || null;
+}
+
 async function getLatestActionsByItem(userId) {
   const actions = await PriorityFeedAction.find({ userId })
     .sort({ createdAt: -1 })
@@ -921,13 +955,29 @@ async function getLatestActionsByItem(userId) {
     .lean();
 
   const latestByItem = new Map();
+  const latestByConversation = new Map();
   for (const action of actions) {
     if (!latestByItem.has(action.itemId)) {
       latestByItem.set(action.itemId, action);
     }
+
+    const conversationKey =
+      buildCommunicationConversationKey(
+        action.sourceApp,
+        action.itemId?.startsWith("comm:")
+          ? String(action.itemId).split(":").slice(2).join(":")
+          : null
+      ) || getConversationKeyFromItemId(action.itemId);
+
+    if (conversationKey && !latestByConversation.has(conversationKey)) {
+      latestByConversation.set(conversationKey, action);
+    }
   }
 
-  return latestByItem;
+  return {
+    latestByItem,
+    latestByConversation,
+  };
 }
 
 function mapAuditEntry(action) {
@@ -943,10 +993,16 @@ function mapAuditEntry(action) {
   };
 }
 
-function filterActiveItems(items, latestActionsByItem) {
+function filterActiveItems(items, actionIndexes) {
   const now = Date.now();
+  const latestByItem = actionIndexes?.latestByItem || new Map();
+  const latestByConversation = actionIndexes?.latestByConversation || new Map();
+
   return items.filter((item) => {
-    const latest = latestActionsByItem.get(item.id);
+    const latest = chooseLatestAction(
+      latestByItem.get(item.id),
+      latestByConversation.get(getPriorityItemConversationKey(item))
+    );
     if (!latest) return true;
     if (isItemReactivatedSinceAction(item, latest)) {
       return true;
@@ -1109,5 +1165,9 @@ module.exports = {
     mapCalendarEventToPriorityItem,
     dedupePriorityItems,
     buildEffectiveCommunicationSummary,
+    mapMessageSourceToItems,
+    isItemReactivatedSinceAction,
+    filterActiveItems,
+    buildCommunicationConversationKey,
   },
 };

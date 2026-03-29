@@ -4,6 +4,7 @@ const axios = require("axios");
 const Integration = require("../models/Integration");
 const PriorityFeedAction = require("../models/PriorityFeedAction");
 const { getGmailClient } = require("./workspaceSignalsService");
+const { chatCompleteNoSystem } = require("./llmService");
 const tg = require("./tools/toolTelegramMTProto");
 const { getOrCreateClient } = require("./tools/toolWhatsapp");
 const {
@@ -92,11 +93,184 @@ function filterPriorityFeedStates(states = []) {
   return selectStatesForSurface(states, "priorityFeed");
 }
 
+function hasPriorityLLMConfig() {
+  return Boolean(
+    process.env.OPENAI_BASE_URL &&
+      process.env.OPENAI_API_KEY &&
+      process.env.API_VERSION
+  );
+}
+
 function shouldEnableSemanticInterpreter(options = {}) {
   if (typeof options.enableSemanticLLM === "boolean") {
     return options.enableSemanticLLM;
   }
   return String(process.env.ORION_CONVERSATION_STATE_LLM || "").toLowerCase() === "enabled";
+}
+
+function shouldEnablePriorityInterpreter(options = {}) {
+  if (typeof options.priorityInterpreter === "function") {
+    return true;
+  }
+  if (typeof options.enablePriorityLLM === "boolean") {
+    return options.enablePriorityLLM;
+  }
+  if (String(process.env.ORION_PRIORITY_LLM || "").toLowerCase() === "disabled") {
+    return false;
+  }
+  return hasPriorityLLMConfig();
+}
+
+function extractJsonObject(raw = "") {
+  const text = String(raw || "").trim();
+  if (!text) return null;
+
+  try {
+    return JSON.parse(text);
+  } catch {}
+
+  const fenced = text.match(/```(?:json)?\s*([\s\S]+?)```/i);
+  if (fenced?.[1]) {
+    try {
+      return JSON.parse(fenced[1].trim());
+    } catch {}
+  }
+
+  const objectMatch = text.match(/\{[\s\S]*\}/);
+  if (objectMatch?.[0]) {
+    try {
+      return JSON.parse(objectMatch[0]);
+    } catch {}
+  }
+
+  return null;
+}
+
+function normalizePriorityScore(score, label = "") {
+  const numeric = Number(score);
+  if (Number.isFinite(numeric)) {
+    return clamp(Math.round(numeric), 0, 99);
+  }
+
+  if (label === "High") return 85;
+  if (label === "Medium") return 58;
+  return 22;
+}
+
+function normalizePriorityLabel(value = "", fallback = "Medium") {
+  const normalized = normalizeText(value).toLowerCase();
+  if (normalized === "high") return "High";
+  if (normalized === "medium") return "Medium";
+  if (normalized === "low") return "Low";
+  return fallback;
+}
+
+function buildPriorityClassificationPrompt(states = []) {
+  return [
+    "Classify the work priority of each conversation for OrionAI.",
+    "Return JSON only.",
+    'Use this exact shape: {"items":[{"id":"string","priority":"High|Medium|Low","score":0,"reason":"short reason"}]}',
+    "",
+    "Priority rules:",
+    "- High: urgent, time-sensitive, blocker, repeated follow-up, approval needed soon, financial/ops risk, or clear deadline pressure.",
+    "- Medium: normal work request or reply needed, but not urgent.",
+    "- Low: introductions, greetings, casual chat, social questions, vague small talk, or no clear work urgency.",
+    '- A message like "My name is arti and your?" must be Low.',
+    "- If unsure, choose the lower priority.",
+    "",
+    ...states.map((state, index) =>
+      [
+        `${index + 1}. id: ${state.id}`,
+        `source: ${state.sourceLabel || getAppMeta(state.sourceType).label}`,
+        `action_state: ${state.actionStateLabel || state.actionState}`,
+        `conversation: ${normalizeText(state.conversationTitle || state.participantLabel || "Conversation")}`,
+        `latest_message: """${normalizeText(state.previewText || "") || "(none)"}"""`,
+        `reason: ${normalizeText(state.actionReason || "") || "(none)"}`,
+        `confidence: ${state.confidenceBand || "unknown"}`,
+      ].join("\n")
+    ),
+  ].join("\n");
+}
+
+async function defaultPriorityInterpreter(states = [], options = {}) {
+  const prompt = buildPriorityClassificationPrompt(states);
+  const raw = await chatCompleteNoSystem(
+    prompt,
+    options.priorityMaxTokens || Math.min(1400, 220 + states.length * 90),
+    0.1
+  );
+  const parsed = extractJsonObject(raw);
+  if (!parsed) {
+    throw new Error("Could not parse priority interpreter response");
+  }
+
+  const items = Array.isArray(parsed?.items)
+    ? parsed.items
+    : Array.isArray(parsed)
+      ? parsed
+      : [];
+
+  return items
+    .map((item) => {
+      const priority = normalizePriorityLabel(item?.priority, "");
+      if (!item?.id || !priority) return null;
+      return {
+        id: String(item.id),
+        priority,
+        priorityScore: normalizePriorityScore(item?.score, priority),
+        priorityReason: normalizeText(item?.reason || ""),
+        prioritySource: "llm",
+      };
+    })
+    .filter(Boolean);
+}
+
+async function applyPriorityLabels(states = [], options = {}) {
+  const actionableStates = states.filter(
+    (state) =>
+      state.actionState !== ACTION_STATES.NO_ACTION_NEEDED &&
+      state.actionState !== ACTION_STATES.RESOLVED
+  );
+
+  if (!actionableStates.length || !shouldEnablePriorityInterpreter(options)) {
+    return states;
+  }
+
+  const interpreter =
+    typeof options.priorityInterpreter === "function"
+      ? options.priorityInterpreter
+      : defaultPriorityInterpreter;
+
+  try {
+    const classifications = await interpreter(
+      actionableStates.slice(0, options.priorityStateLimit || 12),
+      options
+    );
+    const byId = new Map(
+      (classifications || [])
+        .filter((item) => item?.id)
+        .map((item) => [String(item.id), item])
+    );
+
+    if (!byId.size) return states;
+
+    return states.map((state) => {
+      const classification = byId.get(String(state.id));
+      if (!classification) return state;
+      return {
+        ...state,
+        priority: classification.priority,
+        priorityScore: classification.priorityScore,
+        priorityReason: classification.priorityReason || "",
+        prioritySource: classification.prioritySource || "llm",
+      };
+    });
+  } catch (err) {
+    if (options.includeDebug || process.env.NODE_ENV !== "production") {
+      console.debug("[communication-priority] LLM fallback:", err.message);
+    }
+    return states;
+  }
 }
 
 async function classifyNormalizedConversation(conversation, options = {}) {
@@ -182,8 +356,15 @@ function buildActionGroups(states = []) {
 
 function sortStates(states = []) {
   return [...states].sort((a, b) => {
-    if ((b.priorityBoost || 0) !== (a.priorityBoost || 0)) {
-      return (b.priorityBoost || 0) - (a.priorityBoost || 0);
+    const aPriority = Number.isFinite(Number(a.priorityScore))
+      ? Number(a.priorityScore)
+      : Number(a.priorityBoost || 0);
+    const bPriority = Number.isFinite(Number(b.priorityScore))
+      ? Number(b.priorityScore)
+      : Number(b.priorityBoost || 0);
+
+    if (bPriority !== aPriority) {
+      return bPriority - aPriority;
     }
     return (b.latestMessageTimestamp || 0) - (a.latestMessageTimestamp || 0);
   });
@@ -577,7 +758,10 @@ async function getCommunicationActionStates(userId, options = {}) {
       result.status === "fulfilled" ? result.value || [] : []
     )
   );
-  const visibleStates = sortStates(filterSuppressedStates(states, latestActionsByItem));
+  const visibleBaseStates = filterSuppressedStates(states, latestActionsByItem);
+  const visibleStates = sortStates(
+    await applyPriorityLabels(visibleBaseStates, options)
+  );
   const insightsStates = sortStates(filterSurfaceStates(visibleStates));
   const briefingStates = sortStates(filterBriefingStates(visibleStates));
   const priorityFeedStates = sortStates(filterPriorityFeedStates(visibleStates));
@@ -712,8 +896,10 @@ function buildCommunicationPrompt(state) {
 }
 
 function mapActionStateToPriorityItem(state) {
-  const priorityScore = clamp(24 + Number(state.priorityBoost || 0), 0, 99);
-  const priority = toPriorityLevel(priorityScore);
+  const priorityScore = Number.isFinite(Number(state.priorityScore))
+    ? clamp(Number(state.priorityScore), 0, 99)
+    : clamp(24 + Number(state.priorityBoost || 0), 0, 99);
+  const priority = state.priority || toPriorityLevel(priorityScore);
   const module = getAppMeta(state.sourceType).module;
 
   const baseContext = {
@@ -771,6 +957,8 @@ function mapActionStateToPriorityItem(state) {
       state: state.state,
       openContext: state.openContext || {},
       debug: state.debug || null,
+      prioritySource: state.prioritySource || "rules",
+      priorityReason: state.priorityReason || "",
     },
     ...buildSourceBadge(state.sourceType),
   };
@@ -811,5 +999,7 @@ module.exports = {
     normalizeGmailThread: conversationSourceAdapters.normalizeGmailThread,
     normalizeSlackMessages: conversationSourceAdapters.normalizeSlackMessages,
     pickSlackConversationMessages: conversationSourceAdapters.pickSlackConversationMessages,
+    buildPriorityClassificationPrompt,
+    applyPriorityLabels,
   },
 };

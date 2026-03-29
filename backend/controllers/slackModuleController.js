@@ -287,6 +287,8 @@ async function getMessages(req, res) {
         channel: id,
         ts: data.messages[0].ts,
       }).catch(() => {});
+      const { refreshUsersSignals } = require("../services/liveSignalRefresh");
+      refreshUsersSignals([req.user?.username]).catch(() => {});
     }
 
     res.json({ messages });

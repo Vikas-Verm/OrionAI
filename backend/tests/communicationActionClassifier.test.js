@@ -66,6 +66,33 @@ test("classifies direct inbound question as waiting on your reply", () => {
   assert.match(state.actionReason, /waiting on your reply|direct question|directly asked/i);
 });
 
+test("keeps casual introductory direct questions out of the urgent lane", () => {
+  const state = classifyConversation(
+    buildConversation({
+      sourceType: "telegram",
+      conversationTitle: "Arti",
+      participantLabel: "Arti",
+      sourceMetadata: {
+        isDirect: true,
+        participantLabel: "Arti",
+      },
+      messages: [
+        msg({
+          id: "1",
+          minutesAgo: 10,
+          text: "My name is arti and your?",
+          direction: "inbound",
+          addressedToCurrentUser: true,
+        }),
+      ],
+    })
+  );
+
+  assert.equal(state.state, CONVERSATION_STATES.WAITING_ON_YOU);
+  assert.equal(state.actionState, ACTION_STATES.WAITING_ON_YOUR_REPLY);
+  assert.ok(state.priorityBoost < 48);
+});
+
 test("classifies approval ask as needs approval", () => {
   const state = classifyConversation(
     buildConversation({

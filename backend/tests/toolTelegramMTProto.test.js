@@ -9,6 +9,7 @@ const {
     createReconnectRequiredError,
     createPendingAuthToken,
     readPendingAuthToken,
+    toTelegramIso,
   },
 } = require("../services/tools/toolTelegramMTProto");
 
@@ -51,4 +52,13 @@ test("pending auth token round-trips phone and hash for the same user", () => {
   } finally {
     process.env.JWT_SECRET = previousSecret;
   }
+});
+
+test("toTelegramIso supports Date objects and Telegram second timestamps", () => {
+  const iso = "2026-03-29T18:24:05.000Z";
+  const seconds = Math.floor(Date.parse(iso) / 1000);
+
+  assert.equal(toTelegramIso(new Date(iso)), iso);
+  assert.equal(toTelegramIso(seconds), iso);
+  assert.equal(toTelegramIso(String(seconds)), iso);
 });
