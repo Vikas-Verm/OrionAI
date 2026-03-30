@@ -1103,6 +1103,15 @@ async function sendReply() {
           fetchContactPhotos(res.data.messages.map(m => m.from))
         }
       } catch { /* keep optimistic message if reload fails */ }
+
+      try {
+        await syncMailboxView()
+        notifyPriorityStateChange('gmail_replied', {
+          threadId: selectedEmail.value.threadId,
+          subject: selectedEmail.value.subject,
+          sync: 'post_reply_refresh',
+        })
+      } catch {}
     }, 1500) // small delay — Gmail needs a moment to index the sent message
 
   } catch (e) { console.error(e.message) }
@@ -1607,14 +1616,22 @@ onUnmounted(() => {
 
 <style scoped>
 /* ── Root ── */
-.gm-root { height:100%; display:flex; overflow:hidden; background:var(--bg-base); }
+.gm-root {
+  height:100%;
+  display:flex;
+  overflow:hidden;
+  background:
+    radial-gradient(circle at 14% 12%, rgba(82, 212, 255, 0.08), transparent 24%),
+    linear-gradient(180deg, var(--bg-base-alt, var(--bg-base)), var(--bg-base));
+}
 
 /* ══ SIDEBAR ══ */
 .gm-sidebar {
   width:212px; flex-shrink:0; display:flex; flex-direction:column;
-  background:var(--bg-surface); border-right:1px solid var(--border-subtle);
+  background:rgba(8, 13, 28, 0.62); border-right:1px solid var(--border-subtle);
   padding-bottom:16px; overflow:hidden;
   transition:width .22s cubic-bezier(.4,0,.2,1);
+  backdrop-filter:blur(20px);
 }
 .gm-sidebar--collapsed { width:0; border-right:none; }
 .gm-brand {
@@ -1628,8 +1645,8 @@ onUnmounted(() => {
   display:flex; align-items:center; justify-content:center; gap:8px;
   background:linear-gradient(135deg,#EA4335 0%,#C5221F 100%);
   color:#fff; font-size:13px; font-weight:600;
-  border:none; border-radius:22px; cursor:pointer;
-  box-shadow:0 3px 10px rgba(234,67,53,.35);
+  border:1px solid rgba(255,255,255,.08); border-radius:999px; cursor:pointer;
+  box-shadow:0 16px 28px rgba(234,67,53,.24);
   transition:transform .15s, box-shadow .15s;
 }
 .gm-compose:hover { transform:translateY(-1px); box-shadow:0 5px 16px rgba(234,67,53,.45); }
@@ -1665,11 +1682,13 @@ onUnmounted(() => {
 .gm-list-pane {
   width:310px; flex-shrink:0; display:flex; flex-direction:column;
   border-right:1px solid var(--border-subtle);
+  background:rgba(7, 11, 24, 0.42);
+  backdrop-filter:blur(18px);
 }
 .gm-insights-wrap { padding: 0 12px 8px; }
 .gm-list-topbar {
   display:flex; align-items:center; gap:8px;
-  padding:10px 11px 0;
+  padding:12px 12px 4px;
 }
 .gm-toggle-btn {
   flex-shrink:0; width:30px; height:30px; border-radius:8px;
@@ -1680,14 +1699,15 @@ onUnmounted(() => {
 .gm-toggle-btn:hover { background:rgba(255,255,255,.07); color:var(--text-primary); }
 .gm-search-wrap {
   flex:1; display:flex; align-items:center; gap:8px;
-  background:var(--bg-elevated);
+  background:rgba(255,255,255,.045);
   border:1.5px solid var(--border-default);
-  border-radius:22px; padding:0 12px;
+  border-radius:999px; padding:0 14px;
   transition:border-color .15s, box-shadow .15s;
+  backdrop-filter:blur(16px);
 }
 .gm-search-wrap:focus-within {
-  border-color:rgba(234,67,53,.5);
-  box-shadow:0 0 0 3px rgba(234,67,53,.08);
+  border-color:rgba(82, 212, 255, .34);
+  box-shadow:0 0 0 4px rgba(82, 212, 255, .08);
 }
 .gm-search-ico { color:var(--text-muted); flex-shrink:0; }
 .gm-search-input {
@@ -1739,16 +1759,16 @@ onUnmounted(() => {
 .gm-row {
   display:flex; align-items:flex-start; gap:10px;
   padding:10px 13px; cursor:pointer; position:relative;
-  border-bottom:1px solid rgba(255,255,255,.028);
+  border-bottom:1px solid rgba(255,255,255,.03);
   transition:background .1s;
 }
-.gm-row:hover { background:rgba(255,255,255,.038); }
+.gm-row:hover { background:rgba(255,255,255,.05); }
 .gm-row--active {
-  background:rgba(234,67,53,.09) !important;
+  background:linear-gradient(135deg, rgba(82, 212, 255, .08), rgba(139, 125, 255, .08)) !important;
 }
 .gm-row--active::before {
   content:''; position:absolute; left:0; top:8px; bottom:8px;
-  width:3px; background:#EA4335; border-radius:0 3px 3px 0;
+  width:3px; background:var(--accent); border-radius:0 3px 3px 0;
 }
 .gm-row-av {
   width:36px; height:36px; border-radius:50%;

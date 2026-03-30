@@ -4,16 +4,10 @@ const { WebSocketServer, WebSocket } = require("ws");
 const jwt = require("jsonwebtoken");
 const Integration = require("../models/Integration");
 const { chatCompleteNoSystem } = require("./llmService");
+const { getCommunicationNotificationSignal } = require("./communicationActionService");
 const {
-  getGmailClient,
-  getGmailAttentionFromClient,
-  listRecentPriorityGmailMessages,
   getCalendarUpcomingSignal,
 } = require("./workspaceSignalsService");
-const {
-  GMAIL_PRIORITY_HEADERS,
-  classifyPriorityThread,
-} = require("./gmailPriorityRules");
 
 const connections = new Map();
 const pollers = new Map();
@@ -208,37 +202,13 @@ async function refreshUserSignals(userId) {
 // ─────────────────────────────────────────────────────────────────────────────
 async function checkGmail(userId, isFirstRun) {
   try {
-    const client = await getGmailClient(userId);
-    if (!client) return null;
-    const { gmail, integration } = client;
-
-    const [recentThreads, attention] = await Promise.all([
-      listRecentPriorityGmailMessages(gmail, 15),
-      getGmailAttentionFromClient(gmail, integration, { previewLimit: 3 }),
-    ]);
-
-    const selfEmail = (integration?.gmail?.userEmail || "").toLowerCase();
-    const threadResults = await Promise.all(
-      recentThreads.map((thread) =>
-        gmail.users.threads
-          .get({
-            userId: "me",
-            id: thread.id,
-            format: "metadata",
-            metadataHeaders: GMAIL_PRIORITY_HEADERS,
-          })
-          .then((result) => result.data)
-          .catch(() => null)
-      )
-    );
-
-    const classifiedRecent = threadResults
-      .map((thread) => (thread ? classifyPriorityThread(thread, selfEmail) : null))
-      .filter(Boolean)
-      .sort((a, b) => b.lastMs - a.lastMs);
-
+    const attention = await getCommunicationNotificationSignal(userId, "gmail");
+    if (!attention) return null;
+    const currentItems = (attention?.items || attention?.previews || []).slice(0, 5);
     const currentIds = new Set(
-      classifiedRecent.map((thread) => thread.latestMessageId || thread.id)
+      currentItems
+        .map((thread) => thread.latestMessageId || thread.id)
+        .filter(Boolean)
     );
     const prevIds = lastGmailMsgIds.get(userId) || new Set();
     const newIds = [...currentIds].filter((id) => !prevIds.has(id));
@@ -247,30 +217,28 @@ async function checkGmail(userId, isFirstRun) {
 
     if (!isFirstRun) {
       console.log(
-        `[Gmail] ${userId} — recent reply-worthy: ${classifiedRecent.length}, new: ${newIds.length}`
+        `[Gmail] ${userId} — active reply-worthy: ${currentItems.length}, new: ${newIds.length}`
       );
     }
 
-    const newEligibleThreads = classifiedRecent.filter((thread) =>
+    const newEligibleThreads = currentItems.filter((thread) =>
       newIds.includes(thread.latestMessageId || thread.id)
     );
 
-    const items = (isFirstRun
-      ? classifiedRecent.slice(0, 3)
-      : newEligibleThreads.slice(0, 3)
-    ).map((thread) => ({
+    const items = currentItems.slice(0, 3).map((thread) => ({
       id: thread.id,
       latestMessageId: thread.latestMessageId,
+      latestMessageAt: thread.latestMessageAt || null,
       subject: thread.subject,
       from: thread.from,
       unread: thread.unread,
       highConfidence: thread.highConfidence,
     }));
 
-    const hasNew = !isFirstRun && items.length > 0;
+    const hasNew = !isFirstRun && newEligibleThreads.length > 0;
     if (hasNew) {
       console.log(
-        `📧 Gmail NEW for ${userId}: ${items.length} — ${items
+        `📧 Gmail NEW for ${userId}: ${newEligibleThreads.length} — ${newEligibleThreads
           .map((i) => i.subject)
           .join(" | ")}`
       );

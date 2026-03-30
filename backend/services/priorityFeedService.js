@@ -202,6 +202,23 @@ function getPriorityItemConversationKey(item = {}) {
   );
 }
 
+function resolveCommunicationFallbackSources(communicationResult = null) {
+  const coveredSources = new Set(
+    Array.isArray(communicationResult?.allStates)
+      ? communicationResult.allStates
+          .map((state) => String(state?.sourceType || "").trim())
+          .filter(Boolean)
+      : []
+  );
+
+  return {
+    includeGmailFallback: !coveredSources.has("gmail"),
+    messagingSources: ["slack", "telegram", "whatsapp"].filter(
+      (source) => !coveredSources.has(source)
+    ),
+  };
+}
+
 function dedupeById(items = []) {
   const seen = new Set();
   return items.filter((item) => {
@@ -1034,29 +1051,30 @@ async function getHomeDashboard(userId) {
     jiraSignals,
     latestActionsByItem,
     recentActions,
-    gmailFallbackItems,
   ] = await Promise.all([
     getCommunicationActionStates(userId, { source: "all" }).catch(() => null),
     buildCalendarPriorityItems(userId).catch(() => []),
     buildJiraWorkspaceSignals(userId).catch(() => ({ personalItems: [], insight: null })),
     getLatestActionsByItem(userId),
     PriorityFeedAction.find({ userId }).sort({ createdAt: -1 }).limit(8).lean(),
-    buildGmailPriorityItems(userId).catch(() => []),
   ]);
 
   const communicationItems = buildCommunicationPriorityItems(
     communicationResult?.surfaceStates?.priorityFeed || []
   );
-  const communicationSources = new Set(
-    communicationItems.map((item) => item.sourceApp).filter(Boolean)
-  );
-  const messagingFallbackItems = await buildMessagingPriorityItems(userId, {
-    includeSources: ["slack", "telegram", "whatsapp"].filter(
-      (source) => !communicationSources.has(source)
-    ),
-  }).catch(() => []);
+  const fallbackPlan = resolveCommunicationFallbackSources(communicationResult);
+  const [gmailFallbackItems, messagingFallbackItems] = await Promise.all([
+    fallbackPlan.includeGmailFallback
+      ? buildGmailPriorityItems(userId).catch(() => [])
+      : Promise.resolve([]),
+    fallbackPlan.messagingSources.length
+      ? buildMessagingPriorityItems(userId, {
+          includeSources: fallbackPlan.messagingSources,
+        }).catch(() => [])
+      : Promise.resolve([]),
+  ]);
   const fallbackCommunicationItems = [
-    ...(communicationSources.has("gmail") ? [] : gmailFallbackItems),
+    ...gmailFallbackItems,
     ...messagingFallbackItems,
   ];
   const effectiveCommunicationSummary = buildEffectiveCommunicationSummary(
@@ -1169,5 +1187,6 @@ module.exports = {
     isItemReactivatedSinceAction,
     filterActiveItems,
     buildCommunicationConversationKey,
+    resolveCommunicationFallbackSources,
   },
 };

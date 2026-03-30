@@ -137,12 +137,14 @@ async function getGmailAttentionFromClient(
 
   const previews = threads
     .slice(0, previewLimit)
-    .map(({ id, subject, from, unread, highConfidence }) => ({
+    .map(({ id, subject, from, unread, highConfidence, latestMessageId, lastMs }) => ({
       id,
       subject,
       from,
       unread,
       highConfidence,
+      latestMessageId: latestMessageId || id,
+      latestMessageAt: lastMs ? new Date(lastMs).toISOString() : null,
     }));
 
   return {

@@ -1305,52 +1305,63 @@
   
   <style scoped>
   /* ── Root ── */
-  .gc-root { height:100%; display:flex; flex-direction:column; overflow:hidden; background:var(--bg-base); position:relative; }
+  .gc-root {
+    height:100%;
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+    background:
+      radial-gradient(circle at 16% 12%, rgba(82, 212, 255, 0.08), transparent 24%),
+      linear-gradient(180deg, var(--bg-base-alt, var(--bg-base)), var(--bg-base));
+    position:relative;
+  }
   
   /* ══ HEADER ══ */
   .gc-header {
     display:flex; align-items:center; gap:16px;
     padding:8px 16px; flex-shrink:0;
-    background:var(--bg-surface); border-bottom:1px solid var(--border-subtle);
+    background:rgba(8, 13, 28, 0.56); border-bottom:1px solid var(--border-subtle);
+    backdrop-filter:blur(20px);
   }
   .gc-brand { display:flex; align-items:center; gap:9px; }
   .gc-brand-name { font-size:18px; font-weight:700; color:var(--text-primary); letter-spacing:-.3px; }
   .gc-header-nav { display:flex; align-items:center; gap:4px; }
   .gc-nav-btn {
-    width:28px; height:28px; background:none; border:none; border-radius:50%;
+    width:32px; height:32px; background:rgba(255,255,255,.03); border:1px solid var(--border-default); border-radius:50%;
     color:var(--text-secondary); cursor:pointer;
     display:flex; align-items:center; justify-content:center; transition:background .12s;
   }
-  .gc-nav-btn:hover { background:rgba(255,255,255,.07); }
+  .gc-nav-btn:hover { background:rgba(255,255,255,.07); border-color:var(--border-strong); }
   .gc-today-btn {
-    padding:5px 13px; background:none;
-    border:1px solid var(--border-default); border-radius:20px;
+    padding:7px 14px; background:rgba(255,255,255,.04);
+    border:1px solid var(--border-default); border-radius:999px;
     color:var(--text-secondary); font-size:12.5px; cursor:pointer; transition:all .12s;
   }
-  .gc-today-btn:hover { background:rgba(255,255,255,.05); }
+  .gc-today-btn:hover { background:rgba(255,255,255,.07); border-color:var(--border-strong); }
   .gc-period-label { font-size:17px; font-weight:600; color:var(--text-primary); margin-left:6px; min-width:180px; }
-  .gc-view-tabs { display:flex; gap:2px; margin-left:auto; background:var(--bg-elevated); border-radius:10px; padding:3px; }
+  .gc-view-tabs { display:flex; gap:2px; margin-left:auto; background:rgba(255,255,255,.04); border-radius:999px; padding:4px; border:1px solid var(--border-default); }
   .gc-view-tab {
     padding:5px 13px; border:none; background:none; border-radius:8px;
     color:var(--text-secondary); font-size:12.5px; cursor:pointer; transition:all .12s;
   }
   .gc-view-tab:hover { color:var(--text-primary); }
-  .gc-view-tab.active { background:var(--bg-surface); color:#1a73e8; font-weight:600; box-shadow:0 1px 4px rgba(0,0,0,.2); }
+  .gc-view-tab.active { background:rgba(82,212,255,.12); color:var(--accent-hover); font-weight:600; box-shadow:none; }
   .gc-create-btn {
     display:flex; align-items:center; gap:7px;
-    padding:9px 18px; background:#1a73e8;
-    border:none; border-radius:22px; color:#fff;
+    padding:10px 18px; background:linear-gradient(135deg, rgba(82,212,255,.94), rgba(139,125,255,.84));
+    border:1px solid rgba(255,255,255,.12); border-radius:999px; color:#fff;
     font-size:13px; font-weight:600; cursor:pointer; transition:all .15s;
     box-shadow:0 2px 8px rgba(26,115,232,.35);
   }
-  .gc-create-btn:hover { background:#1557b0; transform:translateY(-1px); }
+  .gc-create-btn:hover { transform:translateY(-1px); box-shadow:var(--shadow-accent); }
   
   /* ══ TIME VIEW (week/day) ══ */
   .gc-time-view { flex:1; display:flex; flex-direction:column; overflow:hidden; }
   .gc-time-header {
     display:flex; flex-shrink:0;
     border-bottom:1px solid var(--border-subtle);
-    background:var(--bg-surface);
+    background:rgba(8, 13, 28, 0.48);
+    backdrop-filter:blur(16px);
   }
   .gc-gutter-head { width:68px; flex-shrink:0; }
   .gc-col-head {
@@ -1371,7 +1382,7 @@
   .gc-allday-row {
     display:flex; flex-shrink:0; min-height:28px;
     border-bottom:1px solid var(--border-subtle);
-    background:var(--bg-surface);
+    background:rgba(8, 13, 28, 0.42);
   }
   .gc-gutter-allday {
     width:68px; flex-shrink:0;
@@ -1416,7 +1427,7 @@
     flex:1; position:relative; border-left:1px solid var(--border-subtle);
     min-height: calc(48px * 24);
   }
-  .gc-day-col.is-today-col { background:rgba(26,115,232,.025); }
+  .gc-day-col.is-today-col { background:rgba(82,212,255,.04); }
   /* Hour lines overlay (covers all cols) */
   .gc-hour-lines-overlay {
     position:absolute; inset:0; pointer-events:none; z-index:0;
@@ -1439,7 +1450,8 @@
   .gc-month-view { flex:1; display:flex; flex-direction:column; overflow:hidden; }
   .gc-month-wdays {
     display:grid; grid-template-columns:repeat(7,1fr);
-    border-bottom:1px solid var(--border-subtle); background:var(--bg-surface); flex-shrink:0;
+    border-bottom:1px solid var(--border-subtle); background:rgba(8, 13, 28, 0.48); flex-shrink:0;
+    backdrop-filter:blur(16px);
   }
   .gc-month-wdays > div {
     padding:8px 0; text-align:center;
@@ -1455,9 +1467,9 @@
     border-bottom:1px solid var(--border-subtle);
     padding:4px 5px; cursor:pointer; transition:background .1s;
   }
-  .gc-mcell:hover { background:rgba(255,255,255,.03); }
+  .gc-mcell:hover { background:rgba(255,255,255,.05); }
   .gc-mcell.outside { opacity:.3; }
-  .gc-mcell.is-today { background:rgba(26,115,232,.05); }
+  .gc-mcell.is-today { background:rgba(82,212,255,.06); }
   .gc-mcell-num { font-size:12.5px; color:var(--text-secondary); display:inline-block; margin-bottom:3px; padding:1px; }
   .gc-mcell-events { display:flex; flex-direction:column; gap:2px; }
   .gc-mcell-event {
@@ -1490,10 +1502,10 @@
   .gc-sched-events { flex:1; display:flex; flex-direction:column; gap:6px; padding-right:16px; }
   .gc-sched-event {
     display:flex; gap:12px; padding:10px 14px;
-    background:var(--bg-surface); border-radius:10px;
+    background:rgba(255,255,255,.04); border-radius:18px; border:1px solid var(--border-default);
     cursor:pointer; transition:background .12s;
   }
-  .gc-sched-event:hover { background:var(--bg-elevated); }
+  .gc-sched-event:hover { background:rgba(255,255,255,.06); }
   .gc-sched-bar { width:4px; border-radius:2px; flex-shrink:0; }
   .gc-sched-info { flex:1; }
   .gc-sched-title { font-size:14px; font-weight:600; color:var(--text-primary); margin-bottom:3px; }

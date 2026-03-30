@@ -32,8 +32,62 @@ function normalizedAppKey(appKey = "") {
 function computeDisplayCount(entry = {}) {
   const rawCount = Number(entry.rawCount ?? entry.count ?? 0) || 0;
   const seenCount = Number(entry.seenCount || 0) || 0;
-  if (rawCount <= 0) return 0;
-  return Math.max(rawCount - seenCount, 0);
+  const unseenItemCount = computeUnseenItemCount(entry);
+  if (rawCount <= 0) return unseenItemCount;
+  return Math.max(rawCount - seenCount, unseenItemCount, 0);
+}
+
+function buildUnreadItemFingerprint(item = {}) {
+  return String(
+    item?.latestMessageId ||
+      item?.messageId ||
+      item?.id ||
+      item?.threadId ||
+      item?.chatId ||
+      item?.subject ||
+      item?.name ||
+      ""
+  ).trim();
+}
+
+function supportsItemBasedDisplayCount(entry = {}) {
+  return normalizedAppKey(entry?.app || "") === "gmail";
+}
+
+function computeUnseenItemCount(entry = {}) {
+  if (!supportsItemBasedDisplayCount(entry)) return 0;
+
+  const seenItemIds = Array.isArray(entry?.seenItemIds) ? entry.seenItemIds : [];
+  const seenSet = new Set(
+    seenItemIds
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+  );
+  if (!seenSet.size) return 0;
+
+  const currentFingerprints = Array.isArray(entry?.items)
+    ? entry.items
+        .map((item) => buildUnreadItemFingerprint(item))
+        .filter(Boolean)
+    : [];
+
+  if (!currentFingerprints.length) return 0;
+  return currentFingerprints.filter((fingerprint) => !seenSet.has(fingerprint)).length;
+}
+
+function countNewItemFingerprints(previousItems = [], nextItems = []) {
+  const previousSet = new Set(
+    (previousItems || [])
+      .map((item) => buildUnreadItemFingerprint(item))
+      .filter(Boolean)
+  );
+
+  return (nextItems || [])
+    .map((item) => buildUnreadItemFingerprint(item))
+    .filter(Boolean)
+    .filter((fingerprint, index, list) => list.indexOf(fingerprint) === index)
+    .filter((fingerprint) => !previousSet.has(fingerprint))
+    .length;
 }
 
 function normalizeNotificationIdentity(value = "") {
@@ -124,6 +178,10 @@ function restorePersistedState(userKey) {
         parsed.seenByApp && typeof parsed.seenByApp === "object"
           ? parsed.seenByApp
           : {},
+      seenItemIdsByApp:
+        parsed.seenItemIdsByApp && typeof parsed.seenItemIdsByApp === "object"
+          ? parsed.seenItemIdsByApp
+          : {},
     };
   } catch {
     return null;
@@ -134,8 +192,12 @@ function persistState() {
   if (!activeUserKey) return;
   try {
     const seenByApp = {};
+    const seenItemIdsByApp = {};
     for (const [appKey, entry] of Object.entries(state.unreadByApp)) {
       seenByApp[appKey] = Number(entry?.seenCount || 0) || 0;
+      if (Array.isArray(entry?.seenItemIds) && entry.seenItemIds.length) {
+        seenItemIdsByApp[appKey] = entry.seenItemIds.slice(0, 20);
+      }
     }
 
     localStorage.setItem(
@@ -151,6 +213,7 @@ function persistState() {
                 : entry.time || new Date().toISOString(),
           })),
         seenByApp,
+        seenItemIdsByApp,
       })
     );
   } catch {}
@@ -267,21 +330,39 @@ export function useWebSocket() {
   function processUpdates(updates) {
     for (const update of updates) {
       const { app, count, items, summary, ai, isNew, newCount, isFirst } = update;
+      const previousRawCount = Number(
+        state.unreadByApp[app]?.rawCount ?? state.unreadByApp[app]?.count ?? 0
+      ) || 0;
+      const previousItems = Array.isArray(state.unreadByApp[app]?.items)
+        ? state.unreadByApp[app].items
+        : [];
+      const gmailDetectedNewCount =
+        app === "gmail" &&
+        !isFirst &&
+        (previousItems.length > 0 || previousRawCount <= 0)
+          ? countNewItemFingerprints(previousItems, items || [])
+          : 0;
+      const effectiveIsNew = Boolean(isNew || gmailDetectedNewCount > 0);
+      const effectiveNewCount = effectiveIsNew
+        ? Math.max(Number(newCount || 0) || 0, gmailDetectedNewCount)
+        : 0;
 
       // Always update the live backend count (used for connected app state)
       if (!state.unreadByApp[app]) state.unreadByApp[app] = {};
+      state.unreadByApp[app].app = app;
       state.unreadByApp[app].rawCount = count;
       if (!Number.isFinite(Number(state.unreadByApp[app].seenCount))) {
         state.unreadByApp[app].seenCount = 0;
       }
       if ((Number(count) || 0) <= 0) {
         state.unreadByApp[app].seenCount = 0;
+        state.unreadByApp[app].seenItemIds = [];
       }
       state.unreadByApp[app].count = count;
+      state.unreadByApp[app].items = items;
       state.unreadByApp[app].displayCount = computeDisplayCount(
         state.unreadByApp[app]
       );
-      state.unreadByApp[app].items = items;
       state.unreadByApp[app].summary =
         state.unreadByApp[app].displayCount > 0
           ? summary || ai?.summary || state.unreadByApp[app].summary || null
@@ -291,7 +372,7 @@ export function useWebSocket() {
       if (isFirst) continue; // no toast/history on first load
 
       // New messages arrived AFTER first load — add to inbox and notify
-      if (isNew && newCount > 0 && !isFirst) {
+      if (effectiveIsNew && effectiveNewCount > 0 && !isFirst) {
         const meta = APP_META[app];
         if (!meta) continue;
         const shouldTriggerBriefingRefresh =
@@ -303,7 +384,8 @@ export function useWebSocket() {
         const eventId = buildNotificationEventId(app, items);
         const groupKey = buildNotificationGroupKey(app, items);
         const senderName = buildNotificationSenderName(app, items);
-        const fallbackSummary = ai?.summary || `${newCount} new in ${meta.label}`;
+        const fallbackSummary =
+          ai?.summary || `${effectiveNewCount} new in ${meta.label}`;
         const existingIndex =
           app === "telegram" && groupKey
             ? state.notifications.findIndex((entry) => entry.groupKey === groupKey)
@@ -316,8 +398,8 @@ export function useWebSocket() {
 
         const mergedCount =
           app === "telegram" && existingEntry
-            ? Number(existingEntry.count || 0) + newCount
-            : newCount;
+            ? Number(existingEntry.count || 0) + effectiveNewCount
+            : effectiveNewCount;
         const notificationId = app === "telegram" && groupKey ? groupKey : eventId;
         const notificationSummary = buildHistorySummary({
           app,
@@ -357,7 +439,7 @@ export function useWebSocket() {
           icon: meta.icon,
           color,
           label: meta.label,
-          count: newCount,
+          count: effectiveNewCount,
           summary: fallbackSummary,
           priority: ai?.priority || "normal",
           action: ai?.action || "Open",
@@ -373,7 +455,7 @@ export function useWebSocket() {
         setTimeout(() => dismissToast(eventId), duration);
 
         // Browser notification
-        showBrowserNotif(app, ai, newCount, meta);
+        showBrowserNotif(app, ai, effectiveNewCount, meta);
 
         if (shouldTriggerBriefingRefresh) {
           document.dispatchEvent(
@@ -381,8 +463,11 @@ export function useWebSocket() {
               detail: {
                 reason: "incoming_high_signal",
                 sourceApp: app,
-                count: Number(update.highSignalCount || newCount || 1),
-                summary: ai?.summary || summary || `${newCount} new item${newCount === 1 ? "" : "s"}`,
+                count: Number(update.highSignalCount || effectiveNewCount || 1),
+                summary:
+                  ai?.summary ||
+                  summary ||
+                  `${effectiveNewCount} new item${effectiveNewCount === 1 ? "" : "s"}`,
               },
             })
           );
@@ -453,6 +538,12 @@ export function useWebSocket() {
     const entry = state.unreadByApp[normalized];
     if (entry) {
       entry.seenCount = Number(entry.rawCount ?? entry.count ?? 0) || 0;
+      entry.seenItemIds = Array.isArray(entry.items)
+        ? entry.items
+            .map((item) => buildUnreadItemFingerprint(item))
+            .filter(Boolean)
+            .slice(0, 20)
+        : [];
       entry.displayCount = 0;
       entry.summary = null;
     }
@@ -516,6 +607,17 @@ export function useWebSocket() {
         state.unreadByApp[appKey].seenCount = Number(seenCount || 0) || 0;
       }
     }
+    if (restored?.seenItemIdsByApp) {
+      for (const [appKey, seenItemIds] of Object.entries(restored.seenItemIdsByApp)) {
+        if (!state.unreadByApp[appKey]) state.unreadByApp[appKey] = {};
+        state.unreadByApp[appKey].seenItemIds = Array.isArray(seenItemIds)
+          ? seenItemIds
+              .map((value) => String(value || "").trim())
+              .filter(Boolean)
+              .slice(0, 20)
+          : [];
+      }
+    }
 
     if ("Notification" in window && Notification.permission === "default") {
       await Notification.requestPermission();
@@ -530,10 +632,14 @@ export function useWebSocket() {
       for (const [appKey, appData] of Object.entries(data.apps || {})) {
         const existing = state.unreadByApp[appKey] || {};
         state.unreadByApp[appKey] = {
+          app: appKey,
           rawCount: appData?.count || 0,
           count: appData?.count || 0,
           displayCount: 0,
           seenCount: Number(existing.seenCount || 0) || 0,
+          seenItemIds: Array.isArray(existing.seenItemIds)
+            ? existing.seenItemIds
+            : [],
           items: appData.previews || [],
           summary: appData.summary || null,
           ai: null,

@@ -498,6 +498,7 @@ function applyDashboardSnapshot(data) {
   dashboard.value = data
   items.value = Array.isArray(data.priorityFeed?.items) ? data.priorityFeed.items : []
   auditTrail.value = Array.isArray(data.priorityFeed?.auditTrail) ? data.priorityFeed.auditTrail : []
+  loading.value = false
 }
 
 function clearPendingDashboard() {
@@ -583,7 +584,9 @@ async function loadDashboard({ silent = false, mode = 'replace' } = {}) {
     if (requestId !== latestLoadRequestId) return
     console.debug('Workspace briefing unavailable:', err.message)
   } finally {
-    if (!silent && requestId === latestLoadRequestId) loading.value = false
+    if (requestId === latestLoadRequestId && (!silent || dashboard.value)) {
+      loading.value = false
+    }
   }
 }
 
@@ -642,43 +645,44 @@ onUnmounted(() => {
 <style scoped>
 .briefing-shell {
   --briefing-hero-bg:
-    radial-gradient(circle at top left, rgba(251, 191, 36, 0.28), transparent 36%),
-    radial-gradient(circle at 82% 18%, rgba(45, 212, 191, 0.18), transparent 26%),
-    linear-gradient(135deg, rgba(20, 29, 40, 0.98), rgba(13, 38, 40, 0.94));
-  --briefing-hero-border: rgba(255, 255, 255, 0.08);
-  --briefing-hero-shadow: 0 24px 80px rgba(3, 7, 18, 0.35);
-  --briefing-badge-bg: rgba(251, 191, 36, 0.14);
-  --briefing-badge-border: rgba(251, 191, 36, 0.22);
-  --briefing-badge-text: #fcd34d;
-  --briefing-date-text: rgba(226, 232, 240, 0.66);
-  --briefing-orb-bg: linear-gradient(135deg, rgba(251, 191, 36, 0.22), rgba(45, 212, 191, 0.12));
-  --briefing-orb-border: rgba(255, 255, 255, 0.12);
+    radial-gradient(circle at 14% 14%, rgba(82, 212, 255, 0.16), transparent 28%),
+    radial-gradient(circle at 88% 18%, rgba(139, 125, 255, 0.2), transparent 28%),
+    linear-gradient(135deg, rgba(9, 16, 34, 0.98), rgba(10, 20, 43, 0.94));
+  --briefing-hero-border: rgba(176, 201, 255, 0.12);
+  --briefing-hero-shadow: 0 36px 96px rgba(0, 4, 18, 0.42);
+  --briefing-badge-bg: rgba(242, 198, 109, 0.12);
+  --briefing-badge-border: rgba(242, 198, 109, 0.2);
+  --briefing-badge-text: var(--accent-warm);
+  --briefing-date-text: rgba(200, 210, 228, 0.7);
+  --briefing-orb-bg: linear-gradient(135deg, rgba(82, 212, 255, 0.16), rgba(139, 125, 255, 0.16));
+  --briefing-orb-border: rgba(176, 201, 255, 0.14);
   --briefing-heading: #f8fafc;
-  --briefing-kicker: rgba(226, 232, 240, 0.82);
-  --briefing-summary: rgba(226, 232, 240, 0.7);
-  --briefing-stat-bg: rgba(255, 255, 255, 0.05);
-  --briefing-stat-border: rgba(255, 255, 255, 0.08);
-  --briefing-stat-label: rgba(148, 163, 184, 0.78);
+  --briefing-kicker: rgba(226, 232, 240, 0.86);
+  --briefing-summary: rgba(200, 210, 228, 0.72);
+  --briefing-stat-bg: rgba(255, 255, 255, 0.04);
+  --briefing-stat-border: rgba(176, 201, 255, 0.1);
+  --briefing-stat-label: rgba(127, 140, 166, 0.92);
   --briefing-stat-value: #f8fafc;
-  --briefing-chip-bg: rgba(255, 255, 255, 0.06);
-  --briefing-chip-border: rgba(255, 255, 255, 0.08);
+  --briefing-chip-bg: rgba(255, 255, 255, 0.045);
+  --briefing-chip-border: rgba(176, 201, 255, 0.1);
   --briefing-chip-text: #e2e8f0;
-  width: min(920px, 100%);
+  width: min(980px, 100%);
   max-width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  padding: 20px 0 8px;
+  gap: 22px;
+  padding: 12px 0 10px;
 }
 
 .briefing-hero {
   position: relative;
   overflow: hidden;
-  border-radius: 28px;
-  padding: 22px;
+  border-radius: 30px;
+  padding: 28px;
   background: var(--briefing-hero-bg);
   border: 1px solid var(--briefing-hero-border);
   box-shadow: var(--briefing-hero-shadow);
+  backdrop-filter: blur(24px);
 }
 
 .briefing-topline,
@@ -693,7 +697,7 @@ onUnmounted(() => {
 }
 
 .briefing-topline {
-  margin-bottom: 18px;
+  margin-bottom: 22px;
 }
 
 .briefing-badge,
@@ -708,12 +712,12 @@ onUnmounted(() => {
 }
 
 .briefing-badge {
-  padding: 6px 12px;
+  padding: 7px 12px;
   background: var(--briefing-badge-bg);
   border: 1px solid var(--briefing-badge-border);
   color: var(--briefing-badge-text);
   font-size: 11px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   font-weight: 700;
 }
@@ -729,24 +733,25 @@ onUnmounted(() => {
 .briefing-hero-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.6fr) minmax(220px, 0.9fr);
-  gap: 18px;
+  gap: 22px;
 }
 
 .briefing-copy {
   display: flex;
-  gap: 16px;
+  gap: 18px;
 }
 
 .briefing-orb {
-  width: 62px;
-  height: 62px;
-  border-radius: 20px;
+  width: 68px;
+  height: 68px;
+  border-radius: 24px;
   display: grid;
   place-items: center;
   font-size: 26px;
   background: var(--briefing-orb-bg);
   border: 1px solid var(--briefing-orb-border);
   flex-shrink: 0;
+  box-shadow: 0 18px 38px rgba(82, 212, 255, 0.12);
 }
 
 .briefing-copy h2,
@@ -757,9 +762,9 @@ onUnmounted(() => {
 }
 
 .briefing-copy h2 {
-  font-size: 32px;
+  font-size: 36px;
   line-height: 1.08;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
 }
 
 .briefing-kicker,
@@ -782,7 +787,7 @@ onUnmounted(() => {
 .briefing-stats {
   display: grid;
   grid-template-columns: repeat(1, minmax(0, 1fr));
-  gap: 12px;
+  gap: 14px;
 }
 
 .briefing-stat,
@@ -791,13 +796,14 @@ onUnmounted(() => {
 .priority-empty,
 .audit-trail-item,
 .briefing-suggestion {
-  border-radius: 22px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
+  border-radius: 24px;
+  border: 1px solid rgba(176, 201, 255, 0.1);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.012));
+  backdrop-filter: blur(18px);
 }
 
 .briefing-stat {
-  padding: 16px;
+  padding: 18px;
   background: var(--briefing-stat-bg);
   border: 1px solid var(--briefing-stat-border);
 }
@@ -807,7 +813,7 @@ onUnmounted(() => {
 .briefing-suggestion-label,
 .audit-trail-state {
   font-size: 11px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   font-weight: 700;
 }
@@ -817,10 +823,10 @@ onUnmounted(() => {
 }
 
 .briefing-stat-value {
-  margin-top: 6px;
+  margin-top: 8px;
   display: block;
   color: var(--briefing-stat-value);
-  font-size: 24px;
+  font-size: 28px;
   line-height: 1;
 }
 
@@ -829,7 +835,7 @@ onUnmounted(() => {
 }
 
 .briefing-app-chip {
-  padding: 8px 12px;
+  padding: 9px 13px;
   background: var(--briefing-chip-bg);
   border: 1px solid var(--briefing-chip-border);
   color: var(--briefing-chip-text);
@@ -853,7 +859,7 @@ onUnmounted(() => {
 .briefing-section {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
 }
 
 .priority-summary-grid {
@@ -873,8 +879,8 @@ onUnmounted(() => {
 .priority-empty,
 .audit-trail-item,
 .briefing-suggestion {
-  padding: 18px;
-  box-shadow: 0 18px 40px rgba(2, 6, 23, 0.16);
+  padding: 20px;
+  box-shadow: 0 24px 54px rgba(2, 6, 23, 0.2);
 }
 
 .priority-summary-card,
@@ -887,50 +893,57 @@ onUnmounted(() => {
 .priority-summary-card strong,
 .jira-insight-card strong,
 .jira-insight-count {
-  font-size: 30px;
+  font-size: 34px;
   line-height: 1;
 }
 
 .priority-summary-card.urgent {
   background:
-    radial-gradient(circle at top right, rgba(239, 68, 68, 0.14), transparent 36%),
-    rgba(26, 12, 19, 0.84);
+    radial-gradient(circle at top right, rgba(255, 107, 127, 0.18), transparent 36%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.012)),
+    rgba(17, 11, 24, 0.9);
 }
 
 .priority-summary-card.quick {
   background:
-    radial-gradient(circle at top right, rgba(34, 197, 94, 0.14), transparent 36%),
-    rgba(12, 24, 18, 0.84);
+    radial-gradient(circle at top right, rgba(47, 211, 157, 0.16), transparent 36%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.012)),
+    rgba(8, 19, 24, 0.9);
 }
 
 .priority-summary-card.upcoming {
   background:
-    radial-gradient(circle at top right, rgba(59, 130, 246, 0.14), transparent 36%),
-    rgba(10, 18, 32, 0.84);
+    radial-gradient(circle at top right, rgba(82, 212, 255, 0.16), transparent 36%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.012)),
+    rgba(9, 18, 34, 0.9);
 }
 
 .jira-insight-card.primary {
   background:
-    radial-gradient(circle at top right, rgba(239, 68, 68, 0.14), transparent 36%),
-    rgba(26, 12, 19, 0.84);
+    radial-gradient(circle at top right, rgba(255, 107, 127, 0.18), transparent 36%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.012)),
+    rgba(17, 11, 24, 0.9);
 }
 
 .jira-insight-card.org {
   background:
-    radial-gradient(circle at top right, rgba(59, 130, 246, 0.14), transparent 36%),
-    rgba(10, 18, 32, 0.84);
+    radial-gradient(circle at top right, rgba(82, 212, 255, 0.18), transparent 36%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.012)),
+    rgba(9, 18, 34, 0.9);
 }
 
 .jira-insight-card.blocked {
   background:
-    radial-gradient(circle at top right, rgba(245, 158, 11, 0.16), transparent 36%),
-    rgba(32, 22, 8, 0.84);
+    radial-gradient(circle at top right, rgba(242, 184, 79, 0.18), transparent 36%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.012)),
+    rgba(26, 18, 8, 0.9);
 }
 
 .jira-insight-card.high-priority {
   background:
-    radial-gradient(circle at top right, rgba(249, 115, 22, 0.16), transparent 36%),
-    rgba(34, 16, 8, 0.84);
+    radial-gradient(circle at top right, rgba(139, 125, 255, 0.18), transparent 36%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.012)),
+    rgba(19, 12, 31, 0.9);
 }
 
 .jira-insight-label {
@@ -938,7 +951,7 @@ onUnmounted(() => {
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: rgba(191, 219, 254, 0.78);
+  color: rgba(191, 226, 255, 0.82);
 }
 
 .jira-insight-stat-stack {
@@ -955,7 +968,7 @@ onUnmounted(() => {
 }
 
 .jira-insight-stat-copy {
-  color: rgba(226, 232, 240, 0.76);
+  color: rgba(200, 210, 228, 0.8);
   font-size: 13px;
   line-height: 1.4;
 }
@@ -988,12 +1001,12 @@ onUnmounted(() => {
 }
 
 .jira-insight-card p {
-  color: rgba(226, 232, 240, 0.76);
+  color: rgba(200, 210, 228, 0.78);
   line-height: 1.55;
 }
 
 .priority-summary-label {
-  color: rgba(191, 219, 254, 0.78);
+  color: rgba(191, 226, 255, 0.82);
 }
 
 .briefing-update-row {
@@ -1005,9 +1018,9 @@ onUnmounted(() => {
   min-height: 34px;
   padding: 0 14px;
   border-radius: 999px;
-  border: 1px solid rgba(45, 212, 191, 0.24);
-  background: rgba(45, 212, 191, 0.12);
-  color: #ccfbf1;
+  border: 1px solid rgba(82, 212, 255, 0.24);
+  background: rgba(82, 212, 255, 0.1);
+  color: var(--accent-hover);
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.02em;
@@ -1017,8 +1030,8 @@ onUnmounted(() => {
 
 .briefing-update-pill:hover {
   transform: translateY(-1px);
-  border-color: rgba(45, 212, 191, 0.36);
-  background: rgba(45, 212, 191, 0.18);
+  border-color: rgba(82, 212, 255, 0.34);
+  background: rgba(82, 212, 255, 0.16);
 }
 
 .priority-filter-row,
@@ -1037,9 +1050,9 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  min-height: 36px;
-  padding: 0 14px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  min-height: 38px;
+  padding: 0 15px;
+  border: 1px solid rgba(176, 201, 255, 0.1);
   background: rgba(255, 255, 255, 0.04);
   color: rgba(226, 232, 240, 0.8);
   font-size: 12px;
@@ -1047,8 +1060,8 @@ onUnmounted(() => {
 }
 
 .priority-filter-chip.active {
-  border-color: rgba(99, 102, 241, 0.24);
-  background: rgba(99, 102, 241, 0.16);
+  border-color: rgba(82, 212, 255, 0.24);
+  background: linear-gradient(135deg, rgba(82, 212, 255, 0.12), rgba(139, 125, 255, 0.12));
   color: #eef2ff;
 }
 
@@ -1057,7 +1070,7 @@ onUnmounted(() => {
   height: 20px;
   padding: 0 5px;
   border-radius: 999px;
-  background: #6366f1;
+  background: linear-gradient(135deg, rgba(82, 212, 255, 0.92), rgba(139, 125, 255, 0.82));
   color: #fff;
   font-size: 11px;
   font-weight: 700;
@@ -1067,7 +1080,7 @@ onUnmounted(() => {
 }
 
 .priority-filter-chip.active .priority-filter-count {
-  background: #6366f1;
+  background: linear-gradient(135deg, rgba(82, 212, 255, 0.92), rgba(139, 125, 255, 0.82));
 }
 
 .priority-feed-grid,
@@ -1091,18 +1104,18 @@ onUnmounted(() => {
 }
 
 .briefing-suggestion-label {
-  color: rgba(191, 219, 254, 0.82);
+  color: rgba(191, 226, 255, 0.86);
 }
 
 .briefing-suggestion-text {
-  color: rgba(226, 232, 240, 0.76);
+  color: rgba(200, 210, 228, 0.8);
   line-height: 1.55;
 }
 
 .audit-trail-badge,
 .audit-trail-state {
   font-size: 11px;
-  color: rgba(191, 219, 254, 0.76);
+  color: rgba(191, 226, 255, 0.8);
 }
 
 .audit-trail-item {

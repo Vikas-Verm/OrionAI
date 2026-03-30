@@ -232,46 +232,47 @@ function emitEditedApproval() {
 .priority-card {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 18px;
-  border-radius: 22px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  gap: 16px;
+  padding: 20px;
+  border-radius: 28px;
+  border: 1px solid rgba(176, 201, 255, 0.1);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.015)),
-    rgba(9, 13, 27, 0.72);
-  box-shadow: 0 20px 40px rgba(2, 6, 23, 0.22);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015)),
+    rgba(8, 14, 30, 0.8);
+  box-shadow: 0 28px 64px rgba(2, 6, 23, 0.22);
+  backdrop-filter: blur(20px);
   transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
 }
 
 .priority-card:hover {
-  transform: translateY(-1px);
-  border-color: rgba(255, 255, 255, 0.14);
+  transform: translateY(-2px);
+  border-color: rgba(176, 201, 255, 0.16);
 }
 
 .priority-card-expanded {
-  border-color: rgba(99, 102, 241, 0.28);
-  box-shadow: 0 24px 46px rgba(35, 44, 120, 0.2);
+  border-color: rgba(82, 212, 255, 0.24);
+  box-shadow: 0 28px 72px rgba(82, 212, 255, 0.12);
 }
 
 .priority-high {
   background:
-    radial-gradient(circle at top right, rgba(239, 68, 68, 0.16), transparent 34%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015)),
-    rgba(9, 13, 27, 0.82);
+    radial-gradient(circle at top right, rgba(255, 107, 127, 0.18), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015)),
+    rgba(9, 13, 27, 0.84);
 }
 
 .priority-medium {
   background:
-    radial-gradient(circle at top right, rgba(245, 158, 11, 0.14), transparent 34%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015)),
-    rgba(9, 13, 27, 0.82);
+    radial-gradient(circle at top right, rgba(242, 184, 79, 0.18), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015)),
+    rgba(9, 13, 27, 0.84);
 }
 
 .priority-low {
   background:
-    radial-gradient(circle at top right, rgba(34, 197, 94, 0.12), transparent 34%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015)),
-    rgba(9, 13, 27, 0.82);
+    radial-gradient(circle at top right, rgba(47, 211, 157, 0.16), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015)),
+    rgba(9, 13, 27, 0.84);
 }
 
 .priority-card-top {
@@ -298,12 +299,12 @@ function emitEditedApproval() {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 32px;
-  padding: 0 12px;
+  min-height: 34px;
+  padding: 0 13px;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
@@ -313,38 +314,38 @@ function emitEditedApproval() {
   justify-content: center;
   padding: 5px 10px;
   border-radius: 999px;
-  background: rgba(148, 163, 184, 0.14);
+  background: rgba(255, 255, 255, 0.06);
   color: var(--text-secondary);
   font-size: 11px;
   font-weight: 700;
 }
 
 .priority-source {
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(176, 201, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
   color: rgba(226, 232, 240, 0.88);
 }
 
 .priority-level.level-high {
-  background: rgba(239, 68, 68, 0.14);
-  color: #fecaca;
-  border: 1px solid rgba(248, 113, 113, 0.24);
+  background: rgba(255, 107, 127, 0.14);
+  color: #ffc3cf;
+  border: 1px solid rgba(255, 107, 127, 0.24);
 }
 
 .priority-level.level-medium {
-  background: rgba(245, 158, 11, 0.14);
-  color: #fde68a;
-  border: 1px solid rgba(251, 191, 36, 0.24);
+  background: rgba(242, 184, 79, 0.14);
+  color: #ffe1a3;
+  border: 1px solid rgba(242, 184, 79, 0.24);
 }
 
 .priority-level.level-low {
-  background: rgba(34, 197, 94, 0.14);
-  color: #bbf7d0;
-  border: 1px solid rgba(74, 222, 128, 0.22);
+  background: rgba(47, 211, 157, 0.14);
+  color: #bff8df;
+  border: 1px solid rgba(47, 211, 157, 0.22);
 }
 
 .priority-card-headline h4 {
-  font-size: 18px;
+  font-size: 19px;
   line-height: 1.35;
   color: var(--text-primary);
 }
@@ -352,7 +353,7 @@ function emitEditedApproval() {
 .priority-expand-btn {
   border: 0;
   background: transparent;
-  color: rgba(191, 219, 254, 0.78);
+  color: rgba(191, 226, 255, 0.82);
   font-size: 12px;
   cursor: pointer;
 }
@@ -374,10 +375,10 @@ function emitEditedApproval() {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 12px 14px;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.045);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 14px 15px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(176, 201, 255, 0.1);
 }
 
 .priority-next-label {
@@ -397,26 +398,42 @@ function emitEditedApproval() {
 .priority-control,
 .priority-mini-action,
 .priority-secondary-action {
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(176, 201, 255, 0.1);
   background: rgba(255, 255, 255, 0.04);
   color: rgba(226, 232, 240, 0.82);
-  border-radius: 12px;
+  border-radius: 14px;
   padding: 10px 14px;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
 }
 
 .priority-control.approve,
 .priority-primary-action {
-  border: 1px solid rgba(99, 102, 241, 0.26);
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.24), rgba(59, 130, 246, 0.2));
+  border: 1px solid rgba(82, 212, 255, 0.22);
+  background: linear-gradient(135deg, rgba(82, 212, 255, 0.2), rgba(139, 125, 255, 0.2));
   color: #eef2ff;
-  border-radius: 12px;
+  border-radius: 14px;
   padding: 10px 14px;
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
+}
+
+.priority-control:hover:not(:disabled),
+.priority-mini-action:hover:not(:disabled),
+.priority-secondary-action:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(176, 201, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.priority-control.approve:hover:not(:disabled),
+.priority-primary-action:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(82, 212, 255, 0.3);
+  background: linear-gradient(135deg, rgba(82, 212, 255, 0.26), rgba(139, 125, 255, 0.24));
 }
 
 .priority-panel,
@@ -436,12 +453,18 @@ function emitEditedApproval() {
   width: 100%;
   resize: vertical;
   border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(176, 201, 255, 0.1);
   background: rgba(5, 10, 22, 0.68);
   color: var(--text-primary);
   padding: 12px 14px;
   font: inherit;
   min-height: 92px;
+}
+
+.priority-edit-panel textarea:focus {
+  outline: none;
+  border-color: rgba(82, 212, 255, 0.26);
+  box-shadow: 0 0 0 4px rgba(82, 212, 255, 0.08);
 }
 
 button:disabled {

@@ -2,6 +2,9 @@
   <div>
     <LoginScreen v-if="!isLoggedIn" @success="onLoginSuccess" />
     <div v-else class="app">
+      <div class="app-aurora app-aurora-cyan" aria-hidden="true"></div>
+      <div class="app-aurora app-aurora-violet" aria-hidden="true"></div>
+      <div class="app-grid-glow" aria-hidden="true"></div>
       <OnboardingFlow ref="onboardingRef" @done="() => { }" @openIntegrations="onOpenIntegrations"
         @runCommand="onOnboardingCommand" />
       <Sidebar ref="sidebarRef" :activeView="activeModule || (showingIntegrations ? 'settings' : (store.mode === 'db' ? 'database' : 'agent'))"
@@ -377,6 +380,8 @@ function onOnboardingCommand(command) {
   height: 100vh;
   overflow: hidden;
   background: var(--bg-base);
+  position: relative;
+  isolation: isolate;
 }
 
 .main {
@@ -385,6 +390,8 @@ function onOnboardingCommand(command) {
   flex-direction: column;
   overflow: hidden;
   min-width: 0;
+  position: relative;
+  z-index: 1;
 }
 
 .split-view {
@@ -400,5 +407,43 @@ function onOnboardingCommand(command) {
   flex-direction: column;
   overflow: hidden;
   min-width: 0;
+  position: relative;
+}
+
+.app-aurora,
+.app-grid-glow {
+  position: absolute;
+  inset: auto;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.app-aurora {
+  width: 44rem;
+  height: 44rem;
+  border-radius: 999px;
+  filter: blur(90px);
+  opacity: 0.34;
+}
+
+.app-aurora-cyan {
+  top: -10rem;
+  right: 18%;
+  background: radial-gradient(circle, rgba(82, 212, 255, 0.28) 0%, rgba(82, 212, 255, 0.08) 36%, transparent 72%);
+}
+
+.app-aurora-violet {
+  bottom: -16rem;
+  left: 20%;
+  background: radial-gradient(circle, rgba(139, 125, 255, 0.28) 0%, rgba(139, 125, 255, 0.08) 34%, transparent 72%);
+}
+
+.app-grid-glow {
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent 24%),
+    radial-gradient(circle at 58% 12%, rgba(82, 212, 255, 0.08), transparent 22%),
+    radial-gradient(circle at 82% 82%, rgba(139, 125, 255, 0.08), transparent 24%);
+  opacity: 0.8;
 }
 </style>

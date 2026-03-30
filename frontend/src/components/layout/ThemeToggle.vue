@@ -17,9 +17,9 @@
   
   const { theme, setTheme } = useTheme()
   
-  const options = [
-    { value: 'dark',   icon: '🌙', label: 'Dark' },
-    { value: 'light',  icon: '☀️', label: 'Light' },
-    { value: 'system', icon: '💻', label: 'System' },
-  ]
+  // const options = [
+  //   { value: 'dark',   icon: '🌙', label: 'Dark' },
+  //   { value: 'light',  icon: '☀️', label: 'Light' },
+  //   { value: 'system', icon: '💻', label: 'System' },
+  // ]
   </script>

@@ -1174,9 +1174,11 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px 20px;
+  padding: 16px 22px;
   border-bottom: 1px solid var(--db-panel-border);
   flex-shrink: 0;
+  background: rgba(7, 13, 28, 0.42);
+  backdrop-filter: blur(18px);
 }
 
 .topbar-left,
@@ -1208,10 +1210,10 @@ onMounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 12px;
-  background: transparent;
+  padding: 9px 14px;
+  background: rgba(255, 255, 255, 0.035);
   border: 1px solid var(--db-border-soft);
-  border-radius: 8px;
+  border-radius: 999px;
   color: var(--db-text-soft);
   font-size: 13px;
   font-weight: 500;
@@ -1286,7 +1288,7 @@ onMounted(() => {
 .nl-send,
 .btn-run {
   border: none;
-  border-radius: 8px;
+  border-radius: 999px;
   color: white;
   font-size: 13px;
   font-weight: 700;
@@ -1294,9 +1296,9 @@ onMounted(() => {
 }
 
 .btn-open-data {
-  padding: 8px 15px;
-  background: linear-gradient(135deg, #6c5fff, #8b78ff);
-  box-shadow: 0 4px 16px rgba(108, 95, 255, 0.3);
+  padding: 10px 16px;
+  background: linear-gradient(135deg, rgba(82, 212, 255, 0.94), rgba(139, 125, 255, 0.84));
+  box-shadow: var(--shadow-accent);
 }
 
 .btn-open-data:hover,
@@ -1319,6 +1321,7 @@ onMounted(() => {
   flex-direction: column;
   background: var(--db-panel-bg);
   overflow: hidden;
+  backdrop-filter: blur(18px);
 }
 
 .schema-header {

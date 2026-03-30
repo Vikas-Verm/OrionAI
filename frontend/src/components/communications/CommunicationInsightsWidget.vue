@@ -232,12 +232,14 @@ function togglePanel() {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 9px 10px;
-  border-radius: 14px;
-  border: 1px solid rgba(148, 163, 184, 0.12);
+  padding: 10px 11px;
+  border-radius: 20px;
+  border: 1px solid rgba(176, 201, 255, 0.1);
   background:
-    linear-gradient(180deg, rgba(15, 23, 42, 0.04), rgba(15, 23, 42, 0.015)),
-    var(--bg-surface);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.015)),
+    rgba(9, 16, 34, 0.72);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(18px);
   transition:
     padding 0.18s ease,
     border-color 0.18s ease,
@@ -248,10 +250,10 @@ function togglePanel() {
 .comm-insights.mode-zero {
   gap: 6px;
   padding: 7px 10px;
-  border-color: rgba(148, 163, 184, 0.08);
+  border-color: rgba(176, 201, 255, 0.08);
   background:
-    linear-gradient(180deg, rgba(15, 23, 42, 0.015), rgba(15, 23, 42, 0)),
-    var(--bg-surface);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.01)),
+    rgba(9, 16, 34, 0.64);
 }
 
 .comm-insights.mode-low {
@@ -260,11 +262,11 @@ function togglePanel() {
 
 .comm-insights.mode-high {
   padding: 10px 11px;
-  border-color: rgba(59, 130, 246, 0.18);
+  border-color: rgba(82, 212, 255, 0.18);
   background:
-    linear-gradient(180deg, rgba(59, 130, 246, 0.05), rgba(15, 23, 42, 0.015)),
-    var(--bg-surface);
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+    linear-gradient(180deg, rgba(82, 212, 255, 0.06), rgba(255, 255, 255, 0.012)),
+    rgba(9, 16, 34, 0.74);
+  box-shadow: 0 16px 32px rgba(2, 8, 24, 0.22);
 }
 
 .comm-insights-bar {
@@ -291,8 +293,8 @@ function togglePanel() {
   display: inline-flex;
   padding: 3px 7px;
   border-radius: 999px;
-  background: rgba(59, 130, 246, 0.1);
-  color: #1d4ed8;
+  background: rgba(242, 198, 109, 0.12);
+  color: var(--accent-warm);
   font-size: 9.5px;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -303,8 +305,8 @@ function togglePanel() {
   display: inline-flex;
   padding: 3px 7px;
   border-radius: 999px;
-  background: rgba(239, 68, 68, 0.1);
-  color: #b91c1c;
+  background: rgba(255, 107, 127, 0.14);
+  color: #ffc3cf;
   font-size: 9.5px;
   font-weight: 700;
 }
@@ -363,7 +365,7 @@ function togglePanel() {
 
 .comm-insights-chip {
   border: 1px solid transparent;
-  background: rgba(148, 163, 184, 0.14);
+  background: rgba(255, 255, 255, 0.06);
   color: var(--text-secondary);
   cursor: pointer;
 }
@@ -375,8 +377,8 @@ function togglePanel() {
 }
 
 .comm-insights-chip.active {
-  border-color: rgba(59, 130, 246, 0.28);
-  background: rgba(59, 130, 246, 0.14);
+  border-color: rgba(82, 212, 255, 0.24);
+  background: rgba(82, 212, 255, 0.12);
   color: var(--text-primary);
 }
 
@@ -386,22 +388,22 @@ function togglePanel() {
 }
 
 .comm-insights-chip.state-waiting_on_your_reply {
-  background: rgba(245, 158, 11, 0.14);
-  color: #b45309;
+  background: rgba(242, 184, 79, 0.14);
+  color: #ffe1a3;
 }
 
 .comm-insights-chip.state-needs_approval {
-  background: rgba(239, 68, 68, 0.14);
-  color: #b91c1c;
+  background: rgba(255, 107, 127, 0.14);
+  color: #ffc3cf;
 }
 
 .comm-insights-chip.state-needs_follow_up {
-  background: rgba(14, 165, 233, 0.14);
-  color: #0369a1;
+  background: rgba(82, 212, 255, 0.14);
+  color: #bdefff;
 }
 
 .comm-insights-quiet-pill {
-  background: rgba(148, 163, 184, 0.08);
+  background: rgba(255, 255, 255, 0.04);
   color: var(--text-muted);
 }
 
@@ -417,11 +419,11 @@ function togglePanel() {
 }
 
 .comm-insights-btn {
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  background: rgba(255, 255, 255, 0.04);
   color: var(--text-secondary);
-  border-radius: 9px;
-  padding: 6px 9px;
+  border-radius: 12px;
+  padding: 7px 10px;
   cursor: pointer;
   font-size: 10.5px;
   font-weight: 600;
@@ -443,8 +445,8 @@ function togglePanel() {
 }
 
 .comm-insights-btn--primary {
-  border-color: rgba(59, 130, 246, 0.3);
-  background: rgba(59, 130, 246, 0.14);
+  border-color: rgba(82, 212, 255, 0.22);
+  background: rgba(82, 212, 255, 0.12);
   color: var(--text-primary);
 }
 
@@ -455,7 +457,7 @@ function togglePanel() {
 
 .comm-insights-panel {
   padding-top: 8px;
-  border-top: 1px solid rgba(148, 163, 184, 0.1);
+  border-top: 1px solid rgba(176, 201, 255, 0.08);
 }
 
 .comm-insights.mode-zero .comm-insights-panel {

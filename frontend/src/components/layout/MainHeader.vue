@@ -1,11 +1,14 @@
 <template>
     <div class="main-header">
-      <h2>
+      <div class="main-header-copy">
+        <!-- <span class="main-header-kicker">Workspace</span> -->
+        <h2>
         {{ store.mode === 'rag' ? '📄 Document Chat'
          : store.mode === 'db'  ? '🗄️ Data Intelligence' :store.mode === 'agent'  ? '🤖 Agent'
          : '&nbsp;' }}
-      </h2>
-      <div style="display:flex; gap:8px; align-items:center">
+        </h2>
+      </div>
+      <div class="main-header-actions">
         <button v-if="store.canvasCode" @click="store.showCanvas = !store.showCanvas" class="canvas-toggle-btn">
           {{ store.showCanvas ? '← Close Preview' : '⬡ Open Preview' }}
         </button>

@@ -2,6 +2,7 @@
 
 const Integration = require("../models/Integration");
 const { chatCompleteNoSystem } = require("./llmService");
+const { getCommunicationNotificationSignal } = require("./communicationActionService");
 const {
   getGmailAttentionSignal,
   getCalendarUpcomingSignal,
@@ -52,7 +53,7 @@ async function getUnreadSignals(userId) {
 
 async function checkGmail(userId) {
   try {
-    const signal = await getGmailAttentionSignal(userId);
+    const signal = await getCommunicationNotificationSignal(userId, "gmail");
     if (!signal) return null;
     return {
       count: signal.count,
@@ -61,7 +62,18 @@ async function checkGmail(userId) {
       app: "gmail",
     };
   } catch {
-    return null;
+    try {
+      const fallbackSignal = await getGmailAttentionSignal(userId);
+      if (!fallbackSignal) return null;
+      return {
+        count: fallbackSignal.count,
+        previews: fallbackSignal.previews || [],
+        summary: fallbackSignal.summary,
+        app: "gmail",
+      };
+    } catch {
+      return null;
+    }
   }
 }
 

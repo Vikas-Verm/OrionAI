@@ -15,6 +15,9 @@ const {
     buildGmailThreadHaystack,
     normalizeSlackMessages,
     pickSlackConversationMessages,
+    buildNotificationSignalFromStates,
+    buildWorkspaceDecisionPrompt,
+    applyWorkspaceDecisions,
     buildPriorityClassificationPrompt,
     applyPriorityLabels,
   },
@@ -166,6 +169,39 @@ test("communication priority prompt tells the LLM to keep casual intros low", ()
   assert.match(prompt, /My name is arti and your\?/);
 });
 
+test("workspace decision prompt includes recent message bodies instead of only the subject", () => {
+  const prompt = buildWorkspaceDecisionPrompt([
+    {
+      id: "comm:gmail:thread-1",
+      sourceType: "gmail",
+      sourceLabel: "Gmail",
+      conversationTitle: "Invoice Approval",
+      participantLabel: "vikashverma209200",
+      previewText: "Sure, I'll review the invoice right away and prioritize its approval.",
+      actionState: ACTION_STATES.WAITING_ON_OTHERS,
+      workspaceDecisionContext: {
+        participantLabel: "vikashverma209200",
+        latestInboundText: "Hii Vikas can you look this Invoice on Priority and approve.",
+        latestOutboundText: "Sure, I'll review the invoice right away and prioritize its approval.",
+        recentMessages: [
+          {
+            direction: "inbound",
+            text: "Hii Vikas can you look this Invoice on Priority and approve.",
+          },
+          {
+            direction: "outbound",
+            text: "Sure, I'll review the invoice right away and prioritize its approval.",
+          },
+        ],
+      },
+    },
+  ]);
+
+  assert.match(prompt, /recent message bodies/i);
+  assert.match(prompt, /Hii Vikas can you look this Invoice on Priority and approve\./);
+  assert.match(prompt, /Sure, I'll review the invoice right away and prioritize its approval\./);
+});
+
 test("applyPriorityLabels respects an LLM override for casual chat priority", async () => {
   const [state] = await applyPriorityLabels(
     [
@@ -228,6 +264,168 @@ test("mapActionStateToPriorityItem uses preclassified priority labels when avail
   assert.equal(item.priority, "Low");
   assert.equal(item.priorityScore, 18);
   assert.equal(item.meta.prioritySource, "llm");
+});
+
+test("workspace decisions keep promised replies visible as follow-ups", async () => {
+  const [state] = await applyWorkspaceDecisions(
+    [
+      {
+        id: "comm:gmail:thread-1",
+        sourceType: "gmail",
+        sourceLabel: "Gmail",
+        conversationId: "thread-1",
+        conversationTitle: "Invoice Approval",
+        participantLabel: "vikashverma209200",
+        previewText:
+          "Sure, I'll review the invoice right away and prioritize its approval. Otherwise, you'll receive an update shortly.",
+        actionState: ACTION_STATES.WAITING_ON_OTHERS,
+        actionStateLabel: "Waiting on others",
+        state: "waiting_on_others",
+        actionReason: "You already replied; next action appears to be on the other side.",
+        priority: "High",
+        priorityScore: 80,
+        workspaceDecisionContext: {
+          latestInboundText:
+            "Hii Vikas can you look this Invoice on Priority and approve.",
+          latestOutboundText:
+            "Sure, I'll review the invoice right away and prioritize its approval. Otherwise, you'll receive an update shortly.",
+          recentMessages: [
+            {
+              direction: "inbound",
+              timestamp: "2026-03-30T06:27:00.000Z",
+              text: "Hii Vikas can you look this Invoice on Priority and approve.",
+            },
+            {
+              direction: "outbound",
+              timestamp: "2026-03-30T06:38:00.000Z",
+              text:
+                "Sure, I'll review the invoice right away and prioritize its approval. Otherwise, you'll receive an update shortly.",
+            },
+          ],
+        },
+      },
+    ],
+    {
+      workspaceInterpreter: async (states) => [
+        {
+          id: states[0].id,
+          actionState: "needs_follow_up",
+          priority: "Medium",
+          score: 58,
+          reason: "You promised more work, so the thread is still pending on you.",
+        },
+      ],
+    }
+  );
+
+  assert.equal(state.actionState, ACTION_STATES.NEEDS_FOLLOW_UP);
+  assert.equal(state.eligibleForPriorityFeed, true);
+  assert.equal(state.priority, "Medium");
+  assert.equal(state.prioritySource, "workspace_llm");
+});
+
+test("workspace decisions hide a thread once the latest reply clearly resolves it", async () => {
+  const [state] = await applyWorkspaceDecisions(
+    [
+      {
+        id: "comm:gmail:thread-2",
+        sourceType: "gmail",
+        sourceLabel: "Gmail",
+        conversationId: "thread-2",
+        conversationTitle: "WFH Approval",
+        participantLabel: "vikas",
+        previewText:
+          "Hi, thanks for letting me know. Your WFH request for today is approved.",
+        actionState: ACTION_STATES.WAITING_ON_OTHERS,
+        actionStateLabel: "Waiting on others",
+        state: "waiting_on_others",
+        actionReason: "You already replied; next action appears to be on the other side.",
+        priority: "High",
+        priorityScore: 76,
+        workspaceDecisionContext: {
+          latestInboundText: "Hi Vikas, I want to do WFH for today, please approve.",
+          latestOutboundText:
+            "Hi, thanks for letting me know. Your WFH request for today is approved.",
+          recentMessages: [
+            {
+              direction: "inbound",
+              timestamp: "2026-03-30T06:10:00.000Z",
+              text: "Hi Vikas, I want to do WFH for today, please approve.",
+            },
+            {
+              direction: "outbound",
+              timestamp: "2026-03-30T06:15:00.000Z",
+              text:
+                "Hi, thanks for letting me know. Your WFH request for today is approved.",
+            },
+          ],
+        },
+      },
+    ],
+    {
+      workspaceInterpreter: async (states) => [
+        {
+          id: states[0].id,
+          actionState: "resolved",
+          priority: "Low",
+          score: 12,
+          reason: "The latest reply already approved the request and closed the loop.",
+        },
+      ],
+    }
+  );
+
+  assert.equal(state.actionState, ACTION_STATES.RESOLVED);
+  assert.equal(state.eligibleForPriorityFeed, false);
+  assert.equal(state.eligibleForBriefing, false);
+  assert.equal(state.priority, "Low");
+});
+
+test("notification signal uses actionable communication states for Gmail counts and previews", () => {
+  const signal = buildNotificationSignalFromStates(
+    {
+      counts: {
+        actionableCount: 2,
+      },
+      summaryText: "Gmail: 2 waiting on your reply.",
+      surfaceStates: {
+        insights: [
+          {
+            id: "comm:gmail:thread-1",
+            conversationId: "thread-1",
+            conversationTitle: "WFH Approval",
+            participantLabel: "Aarav",
+            previewText: "Hi Vikas, I want to do WFH for today, please approve.",
+            latestMeaningfulMessageId: "msg-1",
+            latestMessageTimestamp: "2026-03-30T07:05:00.000Z",
+            confidenceBand: "high",
+            priority: "High",
+            actionState: ACTION_STATES.NEEDS_APPROVAL,
+          },
+          {
+            id: "comm:gmail:thread-2",
+            conversationId: "thread-2",
+            conversationTitle: "Invoice Approval",
+            participantLabel: "vikashverma209200",
+            previewText: "Can you review this invoice and approve?",
+            latestMeaningfulMessageId: "msg-2",
+            latestMessageTimestamp: "2026-03-30T07:07:00.000Z",
+            confidenceBand: "medium",
+            priority: "Medium",
+            actionState: ACTION_STATES.WAITING_ON_YOUR_REPLY,
+          },
+        ],
+      },
+    },
+    "gmail"
+  );
+
+  assert.equal(signal.app, "gmail");
+  assert.equal(signal.count, 2);
+  assert.equal(signal.summary, "Gmail: 2 waiting on your reply.");
+  assert.equal(signal.previews[0].latestMessageId, "msg-1");
+  assert.equal(signal.previews[0].subject, "WFH Approval");
+  assert.equal(signal.previews[0].from, "Aarav");
 });
 
 test("getNormalizedGmailMessageText keeps only the fresh reply above quoted history", () => {

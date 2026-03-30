@@ -188,12 +188,14 @@ function setActiveFilter(filterId) {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 14px;
-  border-radius: 18px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  padding: 16px;
+  border-radius: 24px;
+  border: 1px solid rgba(176, 201, 255, 0.12);
   background:
-    linear-gradient(180deg, rgba(15, 23, 42, 0.08), rgba(15, 23, 42, 0.02)),
-    var(--bg-surface);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.015)),
+    rgba(9, 16, 34, 0.74);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(18px);
 }
 
 .comm-panel.compact {
@@ -212,8 +214,8 @@ function setActiveFilter(filterId) {
   display: inline-flex;
   padding: 4px 8px;
   border-radius: 999px;
-  background: rgba(34, 197, 94, 0.12);
-  color: #15803d;
+  background: rgba(242, 198, 109, 0.12);
+  color: var(--accent-warm);
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
@@ -227,11 +229,11 @@ function setActiveFilter(filterId) {
 }
 
 .comm-refresh {
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  background: rgba(255, 255, 255, 0.04);
   color: var(--text-secondary);
-  border-radius: 10px;
-  padding: 7px 10px;
+  border-radius: 12px;
+  padding: 8px 11px;
   cursor: pointer;
   font-size: 12px;
 }
@@ -254,8 +256,8 @@ function setActiveFilter(filterId) {
   gap: 8px;
   padding: 7px 10px;
   border-radius: 999px;
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  background: rgba(255, 255, 255, 0.04);
   color: var(--text-secondary);
   cursor: pointer;
   font-size: 11px;
@@ -266,9 +268,9 @@ function setActiveFilter(filterId) {
 }
 
 .comm-filter-chip.active {
-  border-color: rgba(37, 99, 235, 0.32);
+  border-color: rgba(82, 212, 255, 0.24);
   color: var(--text-primary);
-  background: rgba(37, 99, 235, 0.08);
+  background: rgba(82, 212, 255, 0.1);
 }
 
 .comm-list {
@@ -284,15 +286,15 @@ function setActiveFilter(filterId) {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 12px;
-  border-radius: 16px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: var(--bg-elevated);
+  padding: 14px;
+  border-radius: 20px;
+  border: 1px solid rgba(176, 201, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .comm-card.selected {
-  border-color: rgba(59, 130, 246, 0.32);
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.12);
+  border-color: rgba(82, 212, 255, 0.24);
+  box-shadow: 0 0 0 1px rgba(82, 212, 255, 0.12);
 }
 
 .comm-card-top,
@@ -317,28 +319,28 @@ function setActiveFilter(filterId) {
 .comm-card-state {
   padding: 4px 8px;
   border-radius: 999px;
-  background: rgba(148, 163, 184, 0.14);
+  background: rgba(255, 255, 255, 0.06);
   font-weight: 700;
 }
 
 .comm-card.state-waiting_on_your_reply .comm-card-state {
-  background: rgba(245, 158, 11, 0.14);
-  color: #b45309;
+  background: rgba(242, 184, 79, 0.14);
+  color: #ffe1a3;
 }
 
 .comm-card.state-needs_approval .comm-card-state {
-  background: rgba(239, 68, 68, 0.14);
-  color: #b91c1c;
+  background: rgba(255, 107, 127, 0.14);
+  color: #ffc3cf;
 }
 
 .comm-card.state-needs_follow_up .comm-card-state {
-  background: rgba(14, 165, 233, 0.14);
-  color: #0369a1;
+  background: rgba(82, 212, 255, 0.14);
+  color: #bdefff;
 }
 
 .comm-card.state-waiting_on_others .comm-card-state {
-  background: rgba(16, 185, 129, 0.14);
-  color: #047857;
+  background: rgba(47, 211, 157, 0.14);
+  color: #bff8df;
 }
 
 .comm-card-title {
@@ -362,8 +364,8 @@ function setActiveFilter(filterId) {
 .comm-primary,
 .comm-secondary,
 .comm-ghost {
-  border-radius: 10px;
-  padding: 7px 10px;
+  border-radius: 12px;
+  padding: 8px 11px;
   cursor: pointer;
   font-size: 11px;
   font-weight: 600;
@@ -371,25 +373,25 @@ function setActiveFilter(filterId) {
 
 .comm-primary {
   border: none;
-  background: rgba(59, 130, 246, 0.14);
+  background: linear-gradient(135deg, rgba(82, 212, 255, 0.18), rgba(139, 125, 255, 0.16));
   color: var(--text-primary);
 }
 
 .comm-secondary,
 .comm-ghost {
-  border: 1px solid var(--border-subtle);
-  background: transparent;
+  border: 1px solid var(--border-default);
+  background: rgba(255, 255, 255, 0.03);
   color: var(--text-secondary);
 }
 
 .comm-ghost.danger {
-  color: #dc2626;
+  color: #ffb4c1;
 }
 
 .comm-empty {
   padding: 18px 12px;
-  border-radius: 14px;
-  border: 1px dashed rgba(148, 163, 184, 0.2);
+  border-radius: 18px;
+  border: 1px dashed rgba(176, 201, 255, 0.18);
   text-align: center;
   color: var(--text-secondary);
 }

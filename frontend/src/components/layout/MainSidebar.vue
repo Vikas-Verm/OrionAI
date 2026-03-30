@@ -54,7 +54,13 @@
     <!-- Search -->
     <div class="search-box">
       <input v-model="searchQuery" ref="searchInputRef" placeholder="Search chats..." class="search-input"
-        @input="onSearch" />
+        @input="onSearch" @keydown.enter.prevent="runChatSearch" />
+      <button class="search-action-btn" type="button" title="Search chats" @click="runChatSearch">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="7" />
+          <path d="M20 20l-3.5-3.5" />
+        </svg>
+      </button>
     </div>
 
     <!-- New Chat -->
@@ -108,45 +114,62 @@
               {{ formatCount(app.unread) }}
             </span>
           </div>
+          <span v-if="collapsedAppsOverflow > 0" class="int-collapsed-more">+{{ collapsedAppsOverflow }}</span>
         </template>
       </div>
 
       <!-- ── EXPANDED: full rows ── -->
       <div v-if="intOpen" class="int-list">
         <div v-if="connectedApps.length === 0" class="int-empty">No integrations connected</div>
-        <div v-for="app in connectedApps" :key="app.id" class="int-row" :style="activeView === app.id
-          ? { background: app.color + '18', borderColor: app.color + '30' }
-          : { background: 'transparent', borderColor: 'transparent' }">
-          <div class="int-row-inner" @click="openApp(app.id)">
-            <component :is="app.icon" :size="16" />
-            <span class="int-row-name"
-              :style="{ color: activeView === app.id ? 'var(--text-primary)' : 'var(--text-secondary)', fontWeight: activeView === app.id ? 600 : 400 }">
-              {{ app.label }}
-            </span>
-            <span v-if="app.unread > 0" class="int-row-unread" :style="{ background: app.color }">
-              {{ formatCount(app.unread) }}
-            </span>
-            <span class="app-health-dot" :class="getStatus(app.apiType)"
-              :title="getErrorMessage(app.apiType) || 'Connected'"></span>
+        <template v-else>
+          <div class="int-search-wrap" @click.stop>
+            <svg class="int-search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2">
+              <circle cx="11" cy="11" r="7" />
+              <path d="M20 20l-3.5-3.5" />
+            </svg>
+            <input v-model="connectedAppQuery" class="int-search-input" type="search"
+              placeholder="Search connected apps..." @click.stop />
           </div>
-          <button class="int-row-x" @click.stop="removeApp(app.id)">×</button>
-        </div>
-        <!-- Reconnect banners for any broken integrations -->
-        <div v-for="app in connectedApps.filter(a => getStatus(a.apiType) === 'error')" :key="app.id + '-error'"
-          class="reconnect-banner" :style="{ borderLeftColor: app.color }">
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-            <line x1="12" y1="9" x2="12" y2="13" />
-            <line x1="12" y1="17" x2="12.01" y2="17" />
-          </svg>
-          <span>{{ app.label }} disconnected</span>
-          <button @click="emit('openIntegrations')">Fix →</button>
-        </div>
-        <!-- AI summary strip -->
-        <div v-if="anySummary" class="int-ai-summary">
-          <span class="int-ai-icon">✨</span>
-          <span class="int-ai-text">{{ firstSummary }}</span>
-        </div>
+          <div class="int-list-scroll">
+            <div v-if="filteredConnectedApps.length === 0" class="int-empty">No connected apps match your search</div>
+            <template v-else>
+              <div v-for="app in filteredConnectedApps" :key="app.id" class="int-row" :style="activeView === app.id
+                ? { background: app.color + '18', borderColor: app.color + '30' }
+                : { background: 'transparent', borderColor: 'transparent' }">
+                <div class="int-row-inner" @click="openApp(app.id)">
+                  <component :is="app.icon" :size="16" />
+                  <span class="int-row-name"
+                    :style="{ color: activeView === app.id ? 'var(--text-primary)' : 'var(--text-secondary)', fontWeight: activeView === app.id ? 600 : 400 }">
+                    {{ app.label }}
+                  </span>
+                  <span v-if="app.unread > 0" class="int-row-unread" :style="{ background: app.color }">
+                    {{ formatCount(app.unread) }}
+                  </span>
+                  <span class="app-health-dot" :class="getStatus(app.apiType)"
+                    :title="getErrorMessage(app.apiType) || 'Connected'"></span>
+                </div>
+                <button class="int-row-x" @click.stop="removeApp(app.id)">×</button>
+              </div>
+            </template>
+            <!-- Reconnect banners for any broken integrations -->
+            <div v-for="app in filteredConnectedApps.filter(a => getStatus(a.apiType) === 'error')" :key="app.id + '-error'"
+              class="reconnect-banner" :style="{ borderLeftColor: app.color }">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                <line x1="12" y1="9" x2="12" y2="13" />
+                <line x1="12" y1="17" x2="12.01" y2="17" />
+              </svg>
+              <span>{{ app.label }} disconnected</span>
+              <button @click="emit('openIntegrations')">Fix →</button>
+            </div>
+            <!-- AI summary strip -->
+            <div v-if="filteredFirstSummary" class="int-ai-summary">
+              <span class="int-ai-icon">✨</span>
+              <span class="int-ai-text">{{ filteredFirstSummary }}</span>
+            </div>
+          </div>
+        </template>
       </div>
     </div>
 
@@ -170,15 +193,15 @@
       <div class="user-row-wrapper">
         <transition name="menu-pop">
           <div v-if="showUserMenu" class="user-popup" @click.stop>
-            <div class="popup-section-label">Theme</div>
+            <!-- <div class="popup-section-label">Theme</div>
             <div class="popup-theme-options">
               <button v-for="opt in themeOptions" :key="opt.value"
                 :class="['popup-theme-btn', theme === opt.value ? 'active' : '']" @click="setTheme(opt.value)">
                 <span class="popup-theme-icon">{{ opt.icon }}</span>
                 <span>{{ opt.label }}</span>
               </button>
-            </div>
-            <div class="popup-divider"></div>
+            </div> -->
+            <!-- <div class="popup-divider"></div> -->
             <button class="popup-item danger" @click="emit('logout'); showUserMenu = false">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
@@ -232,16 +255,17 @@ const {
 
 const searchQuery = ref('')
 const searchInputRef = ref(null)
+const connectedAppQuery = ref('')
 const showUserMenu = ref(false)
 const intOpen = ref(true)   // collapsed by default — shows icon grid
 const connectedMap = reactive({})
 const bellOpen = ref(false)
 
-const themeOptions = [
-  { value: 'dark', icon: '🌙', label: 'Dark' },
-  { value: 'light', icon: '☀️', label: 'Light' },
-  { value: 'system', icon: '💻', label: 'System' },
-]
+// const themeOptions = [
+//   { value: 'dark', icon: '🌙', label: 'Dark' },
+//   { value: 'light', icon: '☀️', label: 'Light' },
+//   { value: 'system', icon: '💻', label: 'System' },
+// ]
 
 const initials = computed(() => (store.user?.username || '?').slice(0, 2).toUpperCase())
 
@@ -309,7 +333,10 @@ const unreadApps = computed(() =>
   connectedApps.value.filter(a => a.unread > 0)
 )
 const collapsedApps = computed(() =>
-  unreadApps.value
+  unreadApps.value.slice(0, 4)
+)
+const collapsedAppsOverflow = computed(() =>
+  Math.max(unreadApps.value.length - collapsedApps.value.length, 0)
 )
 const connectedApps = computed(() =>
   ALL_APPS
@@ -320,16 +347,18 @@ const connectedApps = computed(() =>
     }))
     .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }))
 )
+const filteredConnectedApps = computed(() => {
+  const query = connectedAppQuery.value.trim().toLowerCase()
+  if (!query) return connectedApps.value
+  return connectedApps.value.filter(app => app.label.toLowerCase().includes(query))
+})
 
 const totalUnread = computed(() =>
   connectedApps.value.reduce((s, a) => s + a.unread, 0)
 )
 
-const anySummary = computed(() =>
-  connectedApps.value.some(a => unreadByApp[a.id]?.summary && a.unread > 0)
-)
-const firstSummary = computed(() => {
-  const found = connectedApps.value.find(a => unreadByApp[a.id]?.summary && a.unread > 0)
+const filteredFirstSummary = computed(() => {
+  const found = filteredConnectedApps.value.find(a => unreadByApp[a.id]?.summary && a.unread > 0)
   return found ? unreadByApp[found.id]?.summary : ''
 })
 function appSummary(appId) {
@@ -392,6 +421,10 @@ let searchTimer = null
 function onSearch() {
   clearTimeout(searchTimer)
   searchTimer = setTimeout(() => loadSessions(searchQuery.value), 300)
+}
+function runChatSearch() {
+  clearTimeout(searchTimer)
+  loadSessions(searchQuery.value)
 }
 function onOutsideClick(e) {
   if (!e.target.closest('.user-row-wrapper')) showUserMenu.value = false
@@ -458,66 +491,76 @@ defineExpose({ searchInputRef, refreshConnected })
 
 <style scoped>
 .sidebar {
-  width: 220px;
-  background: var(--bg-surface);
+  width: var(--sidebar-width);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.012)),
+    rgba(7, 12, 26, 0.8);
   border-right: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
   height: 100vh;
   overflow: visible;
-  /* allow bell panel to flow inline without clipping */
+  padding: 14px 12px;
+  gap: 10px;
+  backdrop-filter: blur(24px);
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.02);
 }
 
 .sidebar-brand {
-  padding: 16px 14px 12px;
+  padding: 14px 14px 14px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  border-bottom: 1px solid var(--border-subtle);
+  gap: 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.035);
   flex-shrink: 0;
+  box-shadow: var(--shadow-sm);
 }
 
 .sidebar-brand-icon {
-  font-size: 20px;
+  font-size: 22px;
   line-height: 1;
+  filter: drop-shadow(0 8px 16px rgba(82, 212, 255, 0.18));
 }
 
 .sidebar-brand-name {
-  font-weight: 700;
-  font-size: 15px;
-  letter-spacing: -0.3px;
+  font-family: var(--font-brand);
+  font-size: 20px;
+  letter-spacing: -0.45px;
   color: var(--text-primary);
 }
 
 .sidebar-beta {
   margin-left: auto;
   font-size: 10px;
-  background: rgba(99, 102, 241, 0.15);
-  color: #818cf8;
-  padding: 2px 6px;
+  background: rgba(242, 198, 109, 0.12);
+  color: var(--accent-warm);
+  padding: 4px 8px;
   border-radius: 20px;
-  border: 1px solid rgba(99, 102, 241, 0.2);
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  border: 1px solid rgba(242, 198, 109, 0.18);
+  font-weight: 700;
+  letter-spacing: 0.12em;
 }
 
 .search-box {
-  padding: 10px 12px 4px;
+  position: relative;
+  padding: 0 2px;
   flex-shrink: 0;
 }
 
 .search-input {
   width: 100%;
-  background: color-mix(in srgb, var(--bg-surface) 88%, transparent);
+  background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--border-default);
-  border-radius: 8px;
-  padding: 8px 10px;
+  border-radius: 999px;
+  padding: 12px 50px 12px 16px;
   color: var(--text-primary);
   font-size: 13px;
   outline: none;
   box-sizing: border-box;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bg-elevated) 40%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
   transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
 }
 
@@ -526,39 +569,70 @@ defineExpose({ searchInputRef, refreshConnected })
 }
 
 .search-input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: var(--border-strong);
+  box-shadow: 0 0 0 4px rgba(82, 212, 255, 0.08);
+}
+
+.search-action-btn {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  width: 28px;
+  height: 28px;
+  transform: translateY(-50%);
+  border: 1px solid rgba(82, 212, 255, 0.16);
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(82, 212, 255, 0.16), rgba(139, 125, 255, 0.16));
+  color: var(--text-primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 10px 18px rgba(4, 8, 20, 0.28);
+  transition: transform 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.search-action-btn:hover {
+  transform: translateY(calc(-50% - 1px));
+  border-color: rgba(82, 212, 255, 0.24);
+  background: linear-gradient(135deg, rgba(82, 212, 255, 0.24), rgba(139, 125, 255, 0.2));
 }
 
 .new-chat-wrap {
-  padding: 4px 12px 8px;
+  padding: 0 2px;
   flex-shrink: 0;
 }
 
 .new-chat-btn {
   width: 100%;
-  padding: 8px 12px;
-  background: rgba(99, 102, 241, 0.08);
-  border: 1px solid rgba(99, 102, 241, 0.2);
-  border-radius: 8px;
-  color: #818cf8;
+  padding: 12px 14px;
+  background: linear-gradient(135deg, rgba(82, 212, 255, 0.16), rgba(139, 125, 255, 0.14));
+  border: 1px solid rgba(82, 212, 255, 0.2);
+  border-radius: 20px;
+  color: var(--text-primary);
   font-weight: 600;
   font-size: 12.5px;
   cursor: pointer;
   text-align: left;
-  transition: background 0.15s;
+  box-shadow: var(--shadow-sm);
+  transition: background 0.15s, transform 0.15s, border-color 0.15s;
 }
 
 .new-chat-btn:hover {
-  background: rgba(99, 102, 241, 0.15);
+  background: linear-gradient(135deg, rgba(82, 212, 255, 0.22), rgba(139, 125, 255, 0.18));
+  border-color: rgba(82, 212, 255, 0.28);
+  transform: translateY(-1px);
 }
 
 .sessions-list {
   flex: 1;
   overflow-y: auto;
-  padding: 0 8px;
+  padding: 2px;
   scrollbar-width: none;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .sessions-list::-webkit-scrollbar {
@@ -568,26 +642,34 @@ defineExpose({ searchInputRef, refreshConnected })
 .session-item {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 7px 8px;
-  border-radius: 7px;
+  gap: 9px;
+  padding: 10px 11px;
+  border-radius: 18px;
   cursor: pointer;
-  color: #94a3b8;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
   font-size: 12px;
-  transition: background 0.12s;
+  background: rgba(255, 255, 255, 0.025);
+  transition: background 0.12s, border-color 0.12s, transform 0.12s;
 }
 
 .session-item:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--border-subtle);
+  transform: translateY(-1px);
 }
 
 .session-item.active {
-  background: rgba(255, 255, 255, 0.06);
+  background:
+    linear-gradient(135deg, rgba(82, 212, 255, 0.08), rgba(139, 125, 255, 0.08)),
+    rgba(255, 255, 255, 0.04);
+  border-color: rgba(82, 212, 255, 0.18);
   color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
 }
 
 .session-icon {
-  opacity: 0.5;
+  opacity: 0.78;
   flex-shrink: 0;
 }
 
@@ -602,7 +684,7 @@ defineExpose({ searchInputRef, refreshConnected })
   display: none;
   background: none;
   border: none;
-  color: #475569;
+  color: var(--text-faint);
   cursor: pointer;
   font-size: 11px;
   padding: 2px 4px;
@@ -621,9 +703,12 @@ defineExpose({ searchInputRef, refreshConnected })
 
 /* ── Integrations ── */
 .int-section {
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
-  padding: 10px 12px 6px;
+  border: 1px solid var(--border-default);
+  padding: 14px 14px 10px;
   flex-shrink: 0;
+  border-radius: 26px;
+  background: rgba(255, 255, 255, 0.03);
+  box-shadow: var(--shadow-sm);
 }
 
 .int-header {
@@ -631,27 +716,27 @@ defineExpose({ searchInputRef, refreshConnected })
   align-items: center;
   gap: 6px;
   cursor: pointer;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
   user-select: none;
   padding: 1px 0;
 }
 
 .int-label {
   font-size: 10px;
-  font-weight: 600;
-  color: #475569;
+  font-weight: 700;
+  color: var(--accent-warm);
   text-transform: uppercase;
-  letter-spacing: 0.07em;
+  letter-spacing: 0.14em;
   flex: 1;
 }
 
 .int-total-pill {
-  background: #6366f1;
+  background: linear-gradient(135deg, rgba(82, 212, 255, 0.92), rgba(139, 125, 255, 0.82));
   color: white;
   font-size: 9px;
   font-weight: 700;
-  padding: 1px 5px;
-  border-radius: 9px;
+  padding: 3px 7px;
+  border-radius: 999px;
   min-width: 14px;
   text-align: center;
   animation: pulse-badge 2s infinite;
@@ -670,7 +755,7 @@ defineExpose({ searchInputRef, refreshConnected })
 }
 
 .int-chevron {
-  color: #475569;
+  color: var(--text-faint);
   transition: transform 0.2s;
   flex-shrink: 0;
 }
@@ -687,21 +772,36 @@ defineExpose({ searchInputRef, refreshConnected })
 .int-collapsed {
   display: flex;
   flex-wrap: wrap;
-  gap: 7px;
+  gap: 8px;
   padding: 2px 0 8px;
   align-items: center;
 }
 
+.int-collapsed-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 38px;
+  height: 38px;
+  padding: 0 10px;
+  border-radius: 14px;
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.02);
+}
+
 .int-no-msg {
   font-size: 11px;
-  color: #334155;
+  color: var(--text-faint);
 }
 
 .int-badge {
   position: relative;
-  width: 34px;
-  height: 34px;
-  border-radius: 9px;
+  width: 38px;
+  height: 38px;
+  border-radius: 14px;
   border: 1px solid;
   display: flex;
   align-items: center;
@@ -709,15 +809,16 @@ defineExpose({ searchInputRef, refreshConnected })
   cursor: pointer;
   transition: all 0.15s;
   flex-shrink: 0;
+  backdrop-filter: blur(14px);
 }
 
 .int-badge:hover {
-  transform: scale(1.08);
-  opacity: 0.9;
+  transform: translateY(-1px) scale(1.03);
+  opacity: 1;
 }
 
 .int-badge-active {
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.1);
+  box-shadow: 0 0 0 1px rgba(82, 212, 255, 0.18), 0 14px 28px rgba(82, 212, 255, 0.1);
 }
 
 /* Glow pulse when has unread */
@@ -756,26 +857,84 @@ defineExpose({ searchInputRef, refreshConnected })
 
 /* ── Expanded: rows ── */
 .int-list {
-  padding-bottom: 2px;
+  padding-bottom: 4px;
+}
+
+.int-search-wrap {
+  position: relative;
+  margin-bottom: 10px;
+}
+
+.int-search-icon {
+  position: absolute;
+  top: 50%;
+  left: 12px;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.int-search-input {
+  width: 100%;
+  padding: 9px 12px 9px 34px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-primary);
+  font-size: 12px;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+
+.int-search-input::placeholder {
+  color: var(--text-muted);
+}
+
+.int-search-input:focus {
+  border-color: rgba(82, 212, 255, 0.22);
+  box-shadow: 0 0 0 4px rgba(82, 212, 255, 0.06);
+}
+
+.int-list-scroll {
+  max-height: 176px;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(139, 125, 255, 0.35) transparent;
+}
+
+.int-list-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.int-list-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.int-list-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(82, 212, 255, 0.36), rgba(139, 125, 255, 0.36));
 }
 
 .int-empty {
   font-size: 11.5px;
-  color: #334155;
+  color: var(--text-faint);
   padding: 6px 4px;
 }
 
 .int-row {
   display: flex;
   align-items: center;
-  border-radius: 8px;
+  border-radius: 16px;
   border: 1px solid transparent;
-  margin-bottom: 2px;
+  margin-bottom: 6px;
+  background: rgba(255, 255, 255, 0.025);
   transition: all 0.12s;
 }
 
 .int-row:hover {
-  background: rgba(255, 255, 255, 0.04) !important;
+  background: rgba(255, 255, 255, 0.05) !important;
 }
 
 .int-row-inner {
@@ -784,7 +943,7 @@ defineExpose({ searchInputRef, refreshConnected })
   gap: 9px;
   flex: 1;
   min-width: 0;
-  padding: 6px 8px;
+  padding: 9px 10px;
   cursor: pointer;
 }
 
@@ -810,7 +969,7 @@ defineExpose({ searchInputRef, refreshConnected })
 .int-row-x {
   background: none;
   border: none;
-  color: #475569;
+  color: var(--text-faint);
   font-size: 15px;
   line-height: 1;
   cursor: pointer;
@@ -833,13 +992,13 @@ defineExpose({ searchInputRef, refreshConnected })
   display: flex;
   align-items: flex-start;
   gap: 6px;
-  padding: 7px 8px;
+  padding: 10px 12px;
   margin-top: 6px;
-  background: rgba(99, 102, 241, 0.07);
-  border: 1px solid rgba(99, 102, 241, 0.15);
-  border-radius: 8px;
+  background: linear-gradient(135deg, rgba(82, 212, 255, 0.08), rgba(139, 125, 255, 0.08));
+  border: 1px solid rgba(82, 212, 255, 0.16);
+  border-radius: 18px;
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--text-secondary);
   line-height: 1.4;
 }
 
@@ -853,50 +1012,56 @@ defineExpose({ searchInputRef, refreshConnected })
 
 /* ── Footer ── */
 .sidebar-footer {
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
-  padding: 8px 12px 10px;
+  border: 1px solid var(--border-default);
+  padding: 12px;
   flex-shrink: 0;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.03);
+  box-shadow: var(--shadow-sm);
 }
 
 .shortcuts-hint {
   display: flex;
   gap: 10px;
   font-size: 10px;
-  color: #334155;
-  padding: 2px 0 6px;
+  color: var(--text-faint);
+  padding: 0 0 8px;
 }
 
 .int-settings-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 8px;
-  border-radius: 8px;
+  padding: 10px 10px;
+  border-radius: 16px;
   cursor: pointer;
-  color: #64748b;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
   font-size: 12px;
   transition: background 0.12s;
   margin-bottom: 4px;
 }
 
 .int-settings-row:hover {
-  background: rgba(255, 255, 255, 0.04);
-  color: #94a3b8;
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--border-subtle);
+  color: var(--text-primary);
 }
 
 .int-settings-row.active {
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(82, 212, 255, 0.08);
+  border-color: rgba(82, 212, 255, 0.18);
   color: var(--text-primary);
 }
 
 .int-settings-count {
   margin-left: auto;
-  background: rgba(99, 102, 241, 0.2);
-  color: #818cf8;
+  background: rgba(82, 212, 255, 0.16);
+  color: var(--accent-hover);
   font-size: 9px;
   font-weight: 700;
-  padding: 1px 6px;
-  border-radius: 9px;
+  padding: 3px 7px;
+  border-radius: 999px;
 }
 
 .user-row-wrapper {
@@ -907,22 +1072,22 @@ defineExpose({ searchInputRef, refreshConnected })
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 8px 8px 4px;
-  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  padding: 10px 10px 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
   cursor: pointer;
-  border-radius: 8px;
+  border-radius: 18px;
   transition: background 0.12s;
 }
 
 .user-info:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .user-avatar {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  background: linear-gradient(135deg, rgba(82, 212, 255, 0.94), rgba(139, 125, 255, 0.84));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -930,11 +1095,12 @@ defineExpose({ searchInputRef, refreshConnected })
   font-size: 11px;
   color: white;
   flex-shrink: 0;
+  box-shadow: 0 14px 24px rgba(82, 212, 255, 0.22);
 }
 
 .username {
   font-size: 12.5px;
-  color: #94a3b8;
+  color: var(--text-secondary);
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -942,7 +1108,7 @@ defineExpose({ searchInputRef, refreshConnected })
 }
 
 .user-chevron {
-  color: #475569;
+  color: var(--text-faint);
   transition: transform 0.2s;
   flex-shrink: 0;
 }
@@ -956,12 +1122,13 @@ defineExpose({ searchInputRef, refreshConnected })
   bottom: calc(100% + 6px);
   left: 0;
   right: 0;
-  background: var(--bg-elevated);
+  background: var(--surface-glass-strong);
   border: 1px solid var(--border-default);
-  border-radius: 12px;
-  padding: 10px;
+  border-radius: 22px;
+  padding: 12px;
   z-index: 200;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(24px);
 }
 
 .popup-section-label {
@@ -976,16 +1143,16 @@ defineExpose({ searchInputRef, refreshConnected })
 
 .popup-theme-options {
   display: flex;
-  gap: 4px;
+  gap: 6px;
   margin-bottom: 4px;
 }
 
 .popup-theme-btn {
   flex: 1;
-  padding: 6px 4px;
-  background: var(--bg-surface);
+  padding: 8px 4px;
+  background: rgba(255, 255, 255, 0.035);
   border: 1px solid var(--border-default);
-  border-radius: 8px;
+  border-radius: 14px;
   color: var(--text-secondary);
   font-size: 11px;
   cursor: pointer;
@@ -997,13 +1164,13 @@ defineExpose({ searchInputRef, refreshConnected })
 }
 
 .popup-theme-btn:hover {
-  background: var(--bg-hover);
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .popup-theme-btn.active {
-  background: rgba(99, 102, 241, 0.15);
-  border-color: rgba(99, 102, 241, 0.3);
-  color: #818cf8;
+  background: rgba(82, 212, 255, 0.1);
+  border-color: rgba(82, 212, 255, 0.22);
+  color: var(--accent-hover);
 }
 
 .popup-theme-icon {
@@ -1033,7 +1200,7 @@ defineExpose({ searchInputRef, refreshConnected })
 }
 
 .popup-item:hover {
-  background: var(--bg-surface);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .popup-item.danger:hover {
@@ -1056,11 +1223,11 @@ defineExpose({ searchInputRef, refreshConnected })
 .sidebar-bell {
   position: relative;
   margin-left: 6px;
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
-  background: none;
-  border: 1px solid var(--border-subtle);
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-default);
   color: var(--text-muted, rgba(255, 255, 255, 0.35));
   cursor: pointer;
   display: flex;
@@ -1071,25 +1238,25 @@ defineExpose({ searchInputRef, refreshConnected })
 }
 
 .sidebar-bell:hover {
-  background: var(--bg-hover);
+  background: rgba(255, 255, 255, 0.07);
   color: var(--text-primary);
 }
 
 .sidebar-bell.bell-active {
-  border-color: rgba(99, 102, 241, 0.4);
-  color: #818cf8;
+  border-color: rgba(82, 212, 255, 0.28);
+  color: var(--accent-hover);
 }
 
 .sidebar-bell.bell-urgent {
-  border-color: rgba(239, 68, 68, 0.5);
-  color: #ef4444;
+  border-color: rgba(255, 107, 127, 0.4);
+  color: var(--danger);
 }
 
 .sidebar-bell-badge {
   position: absolute;
   top: -5px;
   right: -5px;
-  background: #6366f1;
+  background: linear-gradient(135deg, rgba(82, 212, 255, 0.92), rgba(139, 125, 255, 0.82));
   color: white;
   font-size: 8px;
   font-weight: 700;
@@ -1109,22 +1276,23 @@ defineExpose({ searchInputRef, refreshConnected })
   margin: 0 12px 4px;
   max-height: 420px;
   overflow-y: auto;
-  background: var(--bg-elevated);
+  background: var(--surface-glass-strong);
   border: 1px solid var(--border-default);
-  border-radius: 14px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  border-radius: 24px;
+  box-shadow: var(--shadow-lg);
   flex-shrink: 0;
   scrollbar-width: thin;
+  backdrop-filter: blur(24px);
 }
 
 .bell-panel-head {
   display: flex;
   align-items: center;
-  padding: 12px 14px 8px;
+  padding: 14px 16px 10px;
   border-bottom: 1px solid var(--border-subtle);
   position: sticky;
   top: 0;
-  background: var(--bg-elevated);
+  background: rgba(10, 17, 36, 0.92);
   z-index: 1;
 }
 
@@ -1137,7 +1305,7 @@ defineExpose({ searchInputRef, refreshConnected })
 
 .bell-btn-text {
   font-size: 10px;
-  color: #818cf8;
+  color: var(--accent-hover);
   background: none;
   border: none;
   cursor: pointer;
@@ -1146,7 +1314,7 @@ defineExpose({ searchInputRef, refreshConnected })
 }
 
 .bell-btn-text:hover {
-  background: rgba(99, 102, 241, 0.1);
+  background: rgba(82, 212, 255, 0.1);
 }
 
 .bell-btn-close {
@@ -1161,7 +1329,7 @@ defineExpose({ searchInputRef, refreshConnected })
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.8px;
-  color: rgba(255, 255, 255, 0.25);
+  color: var(--accent-warm);
   padding: 8px 14px 3px;
 }
 
@@ -1244,11 +1412,11 @@ defineExpose({ searchInputRef, refreshConnected })
 }
 
 .bell-history-row:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .bell-history-row.bell-unread {
-  background: rgba(99, 102, 241, 0.06);
+  background: rgba(82, 212, 255, 0.08);
 }
 
 .bell-history-icon {
@@ -1327,13 +1495,13 @@ defineExpose({ searchInputRef, refreshConnected })
 }
 
 .app-health-dot.healthy {
-  background: #10b981;
-  box-shadow: 0 0 4px rgba(16, 185, 129, 0.5);
+  background: var(--success);
+  box-shadow: 0 0 8px rgba(47, 211, 157, 0.42);
 }
 
 .app-health-dot.error {
-  background: #ef4444;
-  box-shadow: 0 0 4px rgba(239, 68, 68, 0.5);
+  background: var(--danger);
+  box-shadow: 0 0 8px rgba(255, 107, 127, 0.4);
   animation: health-pulse 2s infinite;
 }
 
@@ -1357,14 +1525,14 @@ defineExpose({ searchInputRef, refreshConnected })
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
+  padding: 8px 10px;
   margin: 4px 0 2px;
-  background: rgba(239, 68, 68, 0.08);
-  border: 1px solid rgba(239, 68, 68, 0.2);
-  border-left: 3px solid #ef4444;
-  border-radius: 8px;
+  background: rgba(255, 107, 127, 0.08);
+  border: 1px solid rgba(255, 107, 127, 0.18);
+  border-left: 3px solid var(--danger);
+  border-radius: 16px;
   font-size: 11px;
-  color: #f87171;
+  color: #ffb4c1;
 }
 
 .reconnect-banner span {
@@ -1373,18 +1541,18 @@ defineExpose({ searchInputRef, refreshConnected })
 
 .reconnect-banner button {
   background: none;
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  border-radius: 5px;
-  color: #f87171;
+  border: 1px solid rgba(255, 107, 127, 0.28);
+  border-radius: 999px;
+  color: #ffb4c1;
   font-size: 10px;
   font-weight: 600;
-  padding: 2px 7px;
+  padding: 4px 9px;
   cursor: pointer;
   white-space: nowrap;
   font-family: inherit;
 }
 
 .reconnect-banner button:hover {
-  background: rgba(239, 68, 68, 0.12);
+  background: rgba(255, 107, 127, 0.12);
 }
 </style>

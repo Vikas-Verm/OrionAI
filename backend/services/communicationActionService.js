@@ -10,12 +10,14 @@ const { getOrCreateClient } = require("./tools/toolWhatsapp");
 const {
   ACTION_STATES,
   ACTION_STATE_META,
+  buildSurfaceEligibility,
   classifyConversation,
   classifyConversationWithSemantics,
   selectStatesForSurface,
   summarizeActionStates,
   normalizeText,
   toTimestamp,
+  toConversationState,
   clamp,
 } = require("./conversationStateEngine");
 const { SOURCE_THRESHOLDS } = require("./communicationActionConfig");
@@ -27,6 +29,16 @@ const APP_META = {
   telegram: { label: "Telegram", icon: "✈️", module: "telegram" },
   whatsapp: { label: "WhatsApp", icon: "🟢", module: "whatsapp" },
 };
+
+const WORKSPACE_ACTIONABLE_STATES = new Set([
+  ACTION_STATES.WAITING_ON_YOUR_REPLY,
+  ACTION_STATES.NEEDS_APPROVAL,
+  ACTION_STATES.NEEDS_FOLLOW_UP,
+  ACTION_STATES.WAITING_ON_OTHERS,
+]);
+const WORKSPACE_DECISION_CACHE = new Map();
+const WORKSPACE_DECISION_CACHE_TTL_MS = 5 * 60 * 1000;
+const WORKSPACE_DECISION_CACHE_LIMIT = 400;
 
 function getAppMeta(sourceType) {
   return APP_META[sourceType] || {
@@ -121,6 +133,131 @@ function shouldEnablePriorityInterpreter(options = {}) {
   return hasPriorityLLMConfig();
 }
 
+function shouldEnableWorkspaceInterpreter(options = {}) {
+  if (typeof options.workspaceInterpreter === "function") {
+    return true;
+  }
+  if (typeof options.enableWorkspaceLLM === "boolean") {
+    return options.enableWorkspaceLLM;
+  }
+  if (
+    String(process.env.ORION_WORKSPACE_DECISION_LLM || "").toLowerCase() ===
+    "disabled"
+  ) {
+    return false;
+  }
+  return hasPriorityLLMConfig();
+}
+
+function normalizeActionStateValue(value = "", fallback = "") {
+  const normalized = normalizeText(value)
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+
+  if (
+    normalized === ACTION_STATES.WAITING_ON_YOUR_REPLY ||
+    normalized === "waiting_on_you"
+  ) {
+    return ACTION_STATES.WAITING_ON_YOUR_REPLY;
+  }
+  if (normalized === ACTION_STATES.NEEDS_APPROVAL) {
+    return ACTION_STATES.NEEDS_APPROVAL;
+  }
+  if (normalized === ACTION_STATES.NEEDS_FOLLOW_UP) {
+    return ACTION_STATES.NEEDS_FOLLOW_UP;
+  }
+  if (normalized === ACTION_STATES.WAITING_ON_OTHERS) {
+    return ACTION_STATES.WAITING_ON_OTHERS;
+  }
+  if (normalized === ACTION_STATES.RESOLVED) {
+    return ACTION_STATES.RESOLVED;
+  }
+  if (normalized === ACTION_STATES.NO_ACTION_NEEDED) {
+    return ACTION_STATES.NO_ACTION_NEEDED;
+  }
+  return fallback || "";
+}
+
+function summarizeDecisionText(value = "", maxLength = 200) {
+  const text = normalizeText(value || "");
+  if (!text) return "";
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1).trim()}...` : text;
+}
+
+function buildWorkspaceDecisionContext(conversation = {}) {
+  const sortedMessages = [...(conversation.messages || [])]
+    .map((message) => ({
+      id: message?.id ?? null,
+      direction: message?.direction || "unknown",
+      timestamp: toTimestamp(message?.timestamp),
+      text: summarizeDecisionText(message?.text || message?.previewText || "", 220),
+    }))
+    .filter((message) => message.timestamp && message.text)
+    .sort((a, b) => a.timestamp - b.timestamp);
+
+  const recentMessages = sortedMessages.slice(-4);
+  const latestInbound = [...sortedMessages]
+    .reverse()
+    .find((message) => message.direction === "inbound");
+  const latestOutbound = [...sortedMessages]
+    .reverse()
+    .find((message) => message.direction === "outbound");
+
+  return {
+    sourceType: conversation.sourceType,
+    conversationTitle: summarizeDecisionText(
+      conversation.conversationTitle || "Conversation",
+      120
+    ),
+    participantLabel: summarizeDecisionText(
+      conversation.participantLabel || "",
+      120
+    ),
+    isDirect: Boolean(
+      conversation.sourceMetadata?.isDirect ||
+        conversation.sourceMetadata?.directRecipient
+    ),
+    latestInboundText: latestInbound?.text || "",
+    latestOutboundText: latestOutbound?.text || "",
+    recentMessages,
+  };
+}
+
+function createWorkspaceDecisionFingerprint(state = {}) {
+  const context = state.workspaceDecisionContext || {};
+  return [
+    state.id || "",
+    state.actionState || "",
+    state.latestMessageTimestamp || "",
+    state.latestInboundTimestamp || "",
+    state.latestOutboundTimestamp || "",
+    summarizeDecisionText(state.previewText || "", 120),
+    summarizeDecisionText(context.latestInboundText || "", 120),
+    summarizeDecisionText(context.latestOutboundText || "", 120),
+    (context.recentMessages || [])
+      .map((message) => `${message.direction}:${message.timestamp}:${message.text}`)
+      .join("|"),
+  ].join("::");
+}
+
+function pruneWorkspaceDecisionCache(nowMs = Date.now()) {
+  for (const [key, entry] of WORKSPACE_DECISION_CACHE.entries()) {
+    if (!entry || entry.expiresAt <= nowMs) {
+      WORKSPACE_DECISION_CACHE.delete(key);
+    }
+  }
+
+  if (WORKSPACE_DECISION_CACHE.size <= WORKSPACE_DECISION_CACHE_LIMIT) {
+    return;
+  }
+
+  const overflow = WORKSPACE_DECISION_CACHE.size - WORKSPACE_DECISION_CACHE_LIMIT;
+  const keys = [...WORKSPACE_DECISION_CACHE.keys()].slice(0, overflow);
+  for (const key of keys) {
+    WORKSPACE_DECISION_CACHE.delete(key);
+  }
+}
+
 function extractJsonObject(raw = "") {
   const text = String(raw || "").trim();
   if (!text) return null;
@@ -163,6 +300,223 @@ function normalizePriorityLabel(value = "", fallback = "Medium") {
   if (normalized === "medium") return "Medium";
   if (normalized === "low") return "Low";
   return fallback;
+}
+
+function buildWorkspaceDecisionPrompt(states = []) {
+  return [
+    "Decide which communication threads should still appear in OrionAI WorkspaceBriefing right now.",
+    "Return JSON only.",
+    'Use this exact shape: {"items":[{"id":"string","actionState":"waiting_on_your_reply|needs_approval|needs_follow_up|waiting_on_others|resolved|no_action_needed","priority":"High|Medium|Low","score":0,"reason":"short reason"}]}',
+    "",
+    "Rules:",
+    "- Read the recent message bodies and latest replies, not just the subject or thread title.",
+    "- waiting_on_your_reply: the other person is still waiting for the current user's answer.",
+    "- needs_approval: the unresolved ask specifically needs the current user's approval or sign-off.",
+    "- needs_follow_up: the current user already replied, but that reply promises more work, says they will update later, or leaves the next step on the current user.",
+    "- waiting_on_others: the current user already made the latest actionable move and the other side now owns the next step.",
+    "- resolved or no_action_needed: the latest reply clearly answered, approved, closed, or finished the earlier ask. These should not stay in WorkspaceBriefing.",
+    '- Example: "WFH approved for today" is resolved.',
+    '- Example: "I will review and update shortly" is needs_follow_up.',
+    "- Low priority: casual chat, introductions, social messages, or completed threads.",
+    "- If unsure, choose the lower priority and prefer resolved/no_action_needed over keeping a completed thread open.",
+    "",
+    ...states.map((state, index) => {
+      const context = state.workspaceDecisionContext || {};
+      const transcript =
+        (context.recentMessages || []).length > 0
+          ? context.recentMessages
+              .map(
+                (message) =>
+                  `- ${message.direction}: """${summarizeDecisionText(message.text || "", 220)}"""`
+              )
+              .join("\n")
+          : "- (no recent message body captured)";
+
+      return [
+        `${index + 1}. id: ${state.id}`,
+        `source: ${state.sourceLabel || getAppMeta(state.sourceType).label}`,
+        `current_rule_state: ${state.actionState}`,
+        `conversation: ${summarizeDecisionText(state.conversationTitle || state.participantLabel || "Conversation", 140)}`,
+        context.participantLabel
+          ? `other_party: ${summarizeDecisionText(context.participantLabel, 140)}`
+          : "",
+        `latest_message: """${summarizeDecisionText(state.previewText || "", 220) || "(none)"}"""`,
+        context.latestInboundText
+          ? `latest_inbound: """${summarizeDecisionText(context.latestInboundText, 220)}"""`
+          : "",
+        context.latestOutboundText
+          ? `latest_outbound: """${summarizeDecisionText(context.latestOutboundText, 220)}"""`
+          : "",
+        `recent_messages:\n${transcript}`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }),
+  ].join("\n");
+}
+
+async function defaultWorkspaceInterpreter(states = [], options = {}) {
+  const prompt = buildWorkspaceDecisionPrompt(states);
+  const raw = await chatCompleteNoSystem(
+    prompt,
+    options.workspaceMaxTokens || Math.min(2200, 320 + states.length * 130),
+    0.1
+  );
+  const parsed = extractJsonObject(raw);
+  if (!parsed) {
+    throw new Error("Could not parse workspace interpreter response");
+  }
+
+  const items = Array.isArray(parsed?.items)
+    ? parsed.items
+    : Array.isArray(parsed)
+      ? parsed
+      : [];
+
+  return items
+    .map((item) => {
+      const actionState = normalizeActionStateValue(item?.actionState, "");
+      const priority = normalizePriorityLabel(item?.priority, "");
+      if (!item?.id || !actionState || !priority) return null;
+      return {
+        id: String(item.id),
+        actionState,
+        priority,
+        priorityScore: normalizePriorityScore(item?.score, priority),
+        reason: summarizeDecisionText(item?.reason || "", 180),
+        decisionSource: "workspace_llm",
+      };
+    })
+    .filter(Boolean);
+}
+
+function applyWorkspaceDecisionToState(state, decision) {
+  if (!state || !decision) return state;
+
+  const actionState = normalizeActionStateValue(
+    decision.actionState,
+    state.actionState
+  );
+  if (!actionState) return state;
+
+  const conversationState = toConversationState(actionState);
+  const eligibility = buildSurfaceEligibility(conversationState);
+  const nextPriority = normalizePriorityLabel(
+    decision.priority,
+    state.priority || toPriorityLevel(state.priorityScore)
+  );
+  const nextReason = summarizeDecisionText(
+    decision.reason || state.actionReason || state.reason || "",
+    180
+  );
+
+  return {
+    ...state,
+    state: conversationState,
+    stateLabel: ACTION_STATE_META[actionState]?.label || state.stateLabel,
+    actionState,
+    actionStateLabel: ACTION_STATE_META[actionState]?.label || state.actionStateLabel,
+    eligibleForInsights: eligibility.insights,
+    eligibleForBriefing: eligibility.briefing,
+    eligibleForPriorityFeed: eligibility.priorityFeed,
+    surfaceEligibility: eligibility,
+    surfaceEligible: eligibility.insights,
+    reason: nextReason || state.reason,
+    actionReason: nextReason || state.actionReason,
+    priority: nextPriority,
+    priorityScore: normalizePriorityScore(
+      decision.priorityScore,
+      nextPriority
+    ),
+    priorityReason: nextReason || state.priorityReason || "",
+    prioritySource: decision.decisionSource || "workspace_llm",
+    meta: {
+      ...(state.meta || {}),
+      actionState,
+      state: conversationState,
+      prioritySource: decision.decisionSource || "workspace_llm",
+      priorityReason: nextReason || state.priorityReason || "",
+      workspaceDecisionReason: nextReason || "",
+    },
+    ...(state.debug
+      ? {
+          debug: {
+            ...state.debug,
+            workspaceDecisionActionState: actionState,
+            workspaceDecisionReason: nextReason || "",
+            workspaceDecisionSource: decision.decisionSource || "workspace_llm",
+          },
+        }
+      : {}),
+  };
+}
+
+async function applyWorkspaceDecisions(states = [], options = {}) {
+  const candidates = sortStates(
+    states.filter((state) => WORKSPACE_ACTIONABLE_STATES.has(state?.actionState))
+  ).slice(0, options.workspaceStateLimit || 18);
+
+  if (!candidates.length || !shouldEnableWorkspaceInterpreter(options)) {
+    return states;
+  }
+
+  const interpreter =
+    typeof options.workspaceInterpreter === "function"
+      ? options.workspaceInterpreter
+      : defaultWorkspaceInterpreter;
+
+  const nowMs = Date.now();
+  pruneWorkspaceDecisionCache(nowMs);
+
+  const cachedDecisions = [];
+  const uncachedCandidates = [];
+
+  for (const state of candidates) {
+    const cacheKey = createWorkspaceDecisionFingerprint(state);
+    const cached = WORKSPACE_DECISION_CACHE.get(cacheKey);
+    if (cached && cached.expiresAt > nowMs) {
+      cachedDecisions.push(cached.value);
+      continue;
+    }
+    uncachedCandidates.push(state);
+  }
+
+  let freshDecisions = [];
+  if (uncachedCandidates.length) {
+    try {
+      freshDecisions = await interpreter(uncachedCandidates, options);
+      for (const decision of freshDecisions) {
+        const state = uncachedCandidates.find(
+          (candidate) => String(candidate.id) === String(decision.id)
+        );
+        if (!state) continue;
+        WORKSPACE_DECISION_CACHE.set(createWorkspaceDecisionFingerprint(state), {
+          value: decision,
+          expiresAt: nowMs + WORKSPACE_DECISION_CACHE_TTL_MS,
+        });
+      }
+      pruneWorkspaceDecisionCache(nowMs);
+    } catch (err) {
+      if (options.includeDebug || process.env.NODE_ENV !== "production") {
+        console.debug("[communication-workspace] LLM fallback:", err.message);
+      }
+      return states;
+    }
+  }
+
+  const byId = new Map(
+    [...cachedDecisions, ...freshDecisions]
+      .filter((decision) => decision?.id)
+      .map((decision) => [String(decision.id), decision])
+  );
+
+  if (!byId.size) return states;
+
+  return states.map((state) => {
+    const decision = byId.get(String(state.id));
+    if (!decision) return state;
+    return applyWorkspaceDecisionToState(state, decision);
+  });
 }
 
 function buildPriorityClassificationPrompt(states = []) {
@@ -229,7 +583,8 @@ async function applyPriorityLabels(states = [], options = {}) {
   const actionableStates = states.filter(
     (state) =>
       state.actionState !== ACTION_STATES.NO_ACTION_NEEDED &&
-      state.actionState !== ACTION_STATES.RESOLVED
+      state.actionState !== ACTION_STATES.RESOLVED &&
+      String(state.prioritySource || "").toLowerCase() !== "workspace_llm"
   );
 
   if (!actionableStates.length || !shouldEnablePriorityInterpreter(options)) {
@@ -408,6 +763,22 @@ function filterSuppressedStates(states = [], latestActionsByItem = new Map()) {
   });
 }
 
+async function classifyConversationBatch(conversations = [], sourceType, options = {}) {
+  const entries = await Promise.all(
+    conversations.filter(Boolean).map(async (conversation) => {
+      const state = await classifyNormalizedConversation(conversation, options);
+      if (!state) return null;
+      return {
+        ...state,
+        workspaceDecisionContext: buildWorkspaceDecisionContext(conversation),
+        ...buildSourceBadge(sourceType),
+      };
+    })
+  );
+
+  return entries.filter(Boolean);
+}
+
 async function fetchGmailStates(userId, options = {}) {
   const client = await getGmailClient(userId);
   if (!client?.gmail) return [];
@@ -451,16 +822,7 @@ async function fetchGmailStates(userId, options = {}) {
     .map((thread) => conversationSourceAdapters.normalizeGmailThread(thread, selfEmail))
     .filter(Boolean);
 
-  const states = await Promise.all(
-    conversations.map((conversation) => classifyNormalizedConversation(conversation, options))
-  );
-
-  return states
-    .filter(Boolean)
-    .map((state) => ({
-      ...state,
-      ...buildSourceBadge("gmail"),
-    }));
+  return classifyConversationBatch(conversations, "gmail", options);
 }
 
 async function fetchSlackStates(userId, options = {}) {
@@ -592,18 +954,7 @@ async function fetchSlackStates(userId, options = {}) {
     })
   );
 
-  const states = await Promise.all(
-    normalized
-      .filter(Boolean)
-      .map((conversation) => classifyNormalizedConversation(conversation, options))
-  );
-
-  return states
-    .filter(Boolean)
-    .map((state) => ({
-      ...state,
-      ...buildSourceBadge("slack"),
-    }));
+  return classifyConversationBatch(normalized.filter(Boolean), "slack", options);
 }
 
 async function fetchTelegramStates(userId, options = {}) {
@@ -651,18 +1002,7 @@ async function fetchTelegramStates(userId, options = {}) {
     })
   );
 
-  const states = await Promise.all(
-    conversations
-      .filter(Boolean)
-      .map((conversation) => classifyNormalizedConversation(conversation, options))
-  );
-
-  return states
-    .filter(Boolean)
-    .map((state) => ({
-      ...state,
-      ...buildSourceBadge("telegram"),
-    }));
+  return classifyConversationBatch(conversations.filter(Boolean), "telegram", options);
 }
 
 async function fetchWhatsAppStates(userId, options = {}) {
@@ -701,18 +1041,7 @@ async function fetchWhatsAppStates(userId, options = {}) {
     })
   );
 
-  const states = await Promise.all(
-    conversations
-      .filter(Boolean)
-      .map((conversation) => classifyNormalizedConversation(conversation, options))
-  );
-
-  return states
-    .filter(Boolean)
-    .map((state) => ({
-      ...state,
-      ...buildSourceBadge("whatsapp"),
-    }));
+  return classifyConversationBatch(conversations.filter(Boolean), "whatsapp", options);
 }
 
 async function fetchStatesForSource(sourceType, userId, options = {}) {
@@ -739,6 +1068,15 @@ function dedupeStates(states = []) {
   });
 }
 
+function stripInternalStateFields(state) {
+  if (!state) return state;
+  const {
+    workspaceDecisionContext,
+    ...rest
+  } = state;
+  return rest;
+}
+
 async function getCommunicationActionStates(userId, options = {}) {
   const source = options.source || "all";
   const sources =
@@ -759,13 +1097,18 @@ async function getCommunicationActionStates(userId, options = {}) {
     )
   );
   const visibleBaseStates = filterSuppressedStates(states, latestActionsByItem);
-  const visibleStates = sortStates(
-    await applyPriorityLabels(visibleBaseStates, options)
+  const workspaceAdjustedStates = await applyWorkspaceDecisions(
+    visibleBaseStates,
+    options
   );
-  const insightsStates = sortStates(filterSurfaceStates(visibleStates));
-  const briefingStates = sortStates(filterBriefingStates(visibleStates));
-  const priorityFeedStates = sortStates(filterPriorityFeedStates(visibleStates));
-  const summary = summarizeActionStates(visibleStates);
+  const visibleStates = sortStates(
+    await applyPriorityLabels(workspaceAdjustedStates, options)
+  );
+  const publicStates = visibleStates.map(stripInternalStateFields);
+  const insightsStates = sortStates(filterSurfaceStates(publicStates));
+  const briefingStates = sortStates(filterBriefingStates(publicStates));
+  const priorityFeedStates = sortStates(filterPriorityFeedStates(publicStates));
+  const summary = summarizeActionStates(publicStates);
   maybeLogStateDebug(visibleStates, options);
 
   return {
@@ -773,7 +1116,7 @@ async function getCommunicationActionStates(userId, options = {}) {
     source,
     sources,
     states: insightsStates,
-    allStates: visibleStates,
+    allStates: publicStates,
     surfaceStates: {
       insights: insightsStates,
       briefing: briefingStates,
@@ -975,6 +1318,51 @@ function buildCommunicationPriorityItems(states = []) {
     .slice(0, 12);
 }
 
+function buildNotificationSignalFromStates(result = null, sourceType = "gmail") {
+  const states = Array.isArray(result?.surfaceStates?.insights)
+    ? result.surfaceStates.insights
+    : Array.isArray(result?.states)
+      ? result.states
+      : [];
+  const items = states.slice(0, 3).map((state) => ({
+    id: state.conversationId || state.id,
+    latestMessageId:
+      state.latestMeaningfulMessageId ||
+      state.latestMessageId ||
+      state.latestMessageTimestamp ||
+      state.id,
+    latestMessageAt: state.latestMessageTimestamp
+      ? new Date(state.latestMessageTimestamp).toISOString()
+      : null,
+    subject: state.conversationTitle || state.participantLabel || "Conversation",
+    from: state.participantLabel || state.conversationTitle || "Conversation",
+    unread: 1,
+    preview: state.previewText || "",
+    highConfidence:
+      state.confidenceBand === "high" || String(state.priority || "") === "High",
+    actionState: state.actionState,
+  }));
+
+  const count = Number(result?.counts?.actionableCount || states.length || 0);
+
+  return {
+    app: sourceType,
+    count,
+    previews: items,
+    items,
+    summary: result?.summaryText || null,
+  };
+}
+
+async function getCommunicationNotificationSignal(userId, sourceType, options = {}) {
+  const result = await getCommunicationActionStates(userId, {
+    source: sourceType,
+    enablePriorityLLM: false,
+    ...options,
+  });
+  return buildNotificationSignalFromStates(result, sourceType);
+}
+
 async function getCommunicationPriorityItems(userId, options = {}) {
   const result = await getCommunicationActionStates(userId, {
     source: "all",
@@ -987,6 +1375,7 @@ module.exports = {
   ACTION_STATES,
   ACTION_STATE_META,
   getCommunicationActionStates,
+  getCommunicationNotificationSignal,
   buildCommunicationPriorityItems,
   getCommunicationPriorityItems,
   mapActionStateToPriorityItem,
@@ -999,6 +1388,9 @@ module.exports = {
     normalizeGmailThread: conversationSourceAdapters.normalizeGmailThread,
     normalizeSlackMessages: conversationSourceAdapters.normalizeSlackMessages,
     pickSlackConversationMessages: conversationSourceAdapters.pickSlackConversationMessages,
+    buildNotificationSignalFromStates,
+    buildWorkspaceDecisionPrompt,
+    applyWorkspaceDecisions,
     buildPriorityClassificationPrompt,
     applyPriorityLabels,
   },

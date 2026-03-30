@@ -19,6 +19,7 @@ const {
     isItemReactivatedSinceAction,
     filterActiveItems,
     buildCommunicationConversationKey,
+    resolveCommunicationFallbackSources,
   },
 } = require("../services/priorityFeedService");
 
@@ -234,6 +235,26 @@ test("effective communication summary keeps comm counts visible when fallback it
 
   assert.equal(summary.priorityFeedCount, 2);
   assert.equal(summary.replyRequiredCount, 1);
+});
+
+test("fallback sources stay disabled when the shared communication engine already inspected that app", () => {
+  const plan = resolveCommunicationFallbackSources({
+    allStates: [
+      {
+        id: "comm:gmail:thread-1",
+        sourceType: "gmail",
+        actionState: ACTION_STATES.RESOLVED,
+      },
+      {
+        id: "comm:telegram:chat-1",
+        sourceType: "telegram",
+        actionState: ACTION_STATES.NO_ACTION_NEEDED,
+      },
+    ],
+  });
+
+  assert.equal(plan.includeGmailFallback, false);
+  assert.deepEqual(plan.messagingSources, ["slack", "whatsapp"]);
 });
 
 test("fallback messaging items include the latest message fingerprint in their identity", () => {
