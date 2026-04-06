@@ -63,178 +63,190 @@
       </div>
     </section> -->
 
-    <section v-if="jiraInsight" class="briefing-section">
-      <div class="briefing-section-head">
-        <h3>Jira Overdue Insight</h3>
-        <span>{{ jiraInsight.definition }}</span>
-      </div>
+    <div
+      class="briefing-dashboard-top"
+      :class="{ 'briefing-dashboard-top-single': !hasJiraPanel }"
+    >
+      <section class="briefing-section briefing-card-shell briefing-feed-shell">
+        <div class="briefing-section-head">
+          <h3>{{ feedTitle }}</h3>
+          <span>One operational layer over Gmail, Calendar, Jira, and messaging</span>
+        </div>
 
-      <div class="jira-insight-grid">
-        <article class="jira-insight-card primary">
-          <span class="jira-insight-label">Your tickets</span>
-          <div class="jira-insight-stat-stack">
-            <div class="jira-insight-stat-row">
-              <span class="jira-insight-stat-copy">Total Tickets</span>
-              <button
-                v-if="isInteractiveJiraCount(jiraInsight.myTotalCount)"
-                type="button"
-                class="jira-insight-count clickable"
-                @click="openJiraInsightFilter({ scope: 'mine', focus: 'my-tickets' })"
-              >
-                {{ jiraInsight.myTotalCount }}
-              </button>
-              <strong v-else class="jira-insight-count">{{ jiraInsight.myTotalCount }}</strong>
-            </div>
-            <div class="jira-insight-stat-row">
-              <span class="jira-insight-stat-copy">Overdue Tickets</span>
-              <button
-                v-if="isInteractiveJiraCount(jiraInsight.myOverdueCount)"
-                type="button"
-                class="jira-insight-count clickable"
-                @click="openJiraInsightFilter({ scope: 'mine', overdueOnly: true, focus: 'my-overdue' })"
-              >
-                {{ jiraInsight.myOverdueCount }}
-              </button>
-              <strong v-else class="jira-insight-count">{{ jiraInsight.myOverdueCount }}</strong>
-            </div>
-          </div>
-          <p>Personally assigned Jira work, with overdue tickets called out separately.</p>
-        </article>
-        <article class="jira-insight-card org">
-          <span class="jira-insight-label">Org overdue tickets</span>
-          <button
-            v-if="isInteractiveJiraCount(jiraInsight.orgOverdueCount)"
-            type="button"
-            class="jira-insight-count clickable"
-            @click="openJiraInsightFilter({ scope: 'all', overdueOnly: true, focus: 'org-overdue' })"
-          >
-            {{ jiraInsight.orgOverdueCount }}
+        <div v-if="briefingUpdateLabel" class="briefing-update-row">
+          <button class="briefing-update-pill" @click="applyPendingDashboard">
+            {{ briefingUpdateLabel }}
           </button>
-          <strong v-else class="jira-insight-count">{{ jiraInsight.orgOverdueCount }}</strong>
-          <p>Overall overdue count in the connected Jira workspace scope.</p>
-        </article>
-        <article class="jira-insight-card compact blocked">
-          <span class="jira-insight-label">Blocked overdue</span>
+        </div>
+
+        <div class="priority-filter-row">
           <button
-            v-if="isInteractiveJiraCount(jiraInsight.blockedOverdueCount)"
-            type="button"
-            class="jira-insight-count clickable"
-            @click="openJiraInsightFilter({ scope: 'all', overdueOnly: true, blockedOnly: true, focus: 'blocked-overdue' })"
+            v-for="filter in filters"
+            :key="filter.id"
+            class="priority-filter-chip"
+            :class="{ active: activeFilter === filter.id }"
+            @click="activeFilter = filter.id"
           >
-            {{ jiraInsight.blockedOverdueCount }}
-          </button>
-          <strong v-else class="jira-insight-count">{{ jiraInsight.blockedOverdueCount }}</strong>
-          <p>Overdue tickets that also look blocked or stuck.</p>
-        </article>
-        <article class="jira-insight-card compact high-priority">
-          <span class="jira-insight-label">High-priority overdue</span>
-          <button
-            v-if="isInteractiveJiraCount(jiraInsight.highPriorityOverdueCount)"
-            type="button"
-            class="jira-insight-count clickable"
-            @click="openJiraInsightFilter({ scope: 'all', overdueOnly: true, priorityBucket: 'high', focus: 'high-priority-overdue' })"
-          >
-            {{ jiraInsight.highPriorityOverdueCount }}
-          </button>
-          <strong v-else class="jira-insight-count">{{ jiraInsight.highPriorityOverdueCount }}</strong>
-          <p>Overdue tickets already marked high or highest priority.</p>
-        </article>
-      </div>
-    </section>
-
-    <section class="briefing-section">
-      <div class="briefing-section-head">
-        <h3>{{ feedTitle }}</h3>
-        <span>One operational layer over Gmail, Calendar, Jira, and messaging</span>
-      </div>
-
-      <div v-if="briefingUpdateLabel" class="briefing-update-row">
-        <button class="briefing-update-pill" @click="applyPendingDashboard">
-          {{ briefingUpdateLabel }}
-        </button>
-      </div>
-
-      <div class="priority-filter-row">
-        <button
-          v-for="filter in filters"
-          :key="filter.id"
-          class="priority-filter-chip"
-          :class="{ active: activeFilter === filter.id }"
-          @click="activeFilter = filter.id"
-        >
-          <span>{{ filter.label }}</span>
-          <span v-if="Number(filter.count || 0) > 0" class="priority-filter-count">
-            {{ filterCountLabel(filter.count) }}
-          </span>
-        </button>
-      </div>
-
-      <div v-if="loading" class="priority-empty">
-        <strong>Building your Priority Feed...</strong>
-        <p>OrionAI is ranking signals from your connected work apps.</p>
-      </div>
-
-      <div v-else-if="filteredItems.length" class="priority-feed-grid">
-        <PriorityFeedCard
-          v-for="item in filteredItems"
-          :key="item.id"
-          :item="item"
-          :busy="pendingItemId === item.id"
-          @approve="approveItem"
-          @dismiss="dismissItem"
-          @snooze="snoozeItem"
-          @edited-approve="approveEditedItem"
-          @run-action="runPrimaryAction"
-          @run-secondary-action="runSecondaryAction"
-        />
-      </div>
-
-      <div v-else class="priority-empty">
-        <strong>{{ emptyStateTitle }}</strong>
-        <p>{{ emptyStateDescription }}</p>
-      </div>
-    </section>
-
-    <section class="briefing-section">
-      <div class="briefing-section-head">
-        <h3>Suggested Next Actions</h3>
-        <span>{{ suggestedActions.length }} suggestion{{ suggestedActions.length === 1 ? '' : 's' }}</span>
-      </div>
-
-      <div class="briefing-suggestions">
-        <button
-          v-for="suggestion in suggestedActions"
-          :key="suggestion.id"
-          class="briefing-suggestion"
-          @click="triggerAction(suggestion.action)"
-        >
-          <span class="briefing-suggestion-label">{{ suggestion.label }}</span>
-          <span class="briefing-suggestion-text">{{ suggestion.description }}</span>
-        </button>
-      </div>
-    </section>
-
-    <section v-if="auditTrail.length" class="briefing-section">
-      <div class="briefing-section-head">
-        <h3>Recent Feed Actions</h3>
-        <span>Light audit trail</span>
-      </div>
-
-      <div class="audit-trail-list">
-        <article v-for="entry in auditTrail" :key="entry.id" class="audit-trail-item">
-          <div class="audit-trail-top">
-            <span class="audit-trail-badge">
-              <span>{{ entry.sourceIcon }}</span>
-              <span>{{ entry.sourceLabel }}</span>
+            <span>{{ filter.label }}</span>
+            <span v-if="Number(filter.count || 0) > 0" class="priority-filter-count">
+              {{ filterCountLabel(filter.count) }}
             </span>
-            <span class="audit-trail-state">{{ actionStateLabel(entry.action) }}</span>
+          </button>
+        </div>
+
+        <div class="briefing-feed-body">
+          <div v-if="loading" class="priority-empty briefing-panel-fill">
+            <strong>Building your Priority Feed...</strong>
+            <p>OrionAI is ranking signals from your connected work apps.</p>
           </div>
-          <strong>{{ entry.title }}</strong>
-          <p v-if="entry.note">{{ entry.note }}</p>
-          <span class="audit-trail-time">{{ formatActionTime(entry.createdAt) }}</span>
-        </article>
-      </div>
-    </section>
+
+          <div v-else-if="filteredItems.length" class="priority-feed-grid briefing-scroll-panel">
+            <PriorityFeedCard
+              v-for="item in filteredItems"
+              :key="item.id"
+              :item="item"
+              :busy="pendingItemId === item.id"
+              @approve="approveItem"
+              @dismiss="dismissItem"
+              @snooze="snoozeItem"
+              @edited-approve="approveEditedItem"
+              @run-action="runPrimaryAction"
+              @run-secondary-action="runSecondaryAction"
+            />
+          </div>
+
+          <div v-else class="priority-empty briefing-panel-fill">
+            <strong>{{ emptyStateTitle }}</strong>
+            <p>{{ emptyStateDescription }}</p>
+          </div>
+        </div>
+      </section>
+
+      <section v-if="hasJiraPanel" class="briefing-section briefing-card-shell briefing-jira-shell">
+        <div class="briefing-section-head">
+          <h3>Jira Overdue Insight</h3>
+          <span>{{ jiraInsight.definition }}</span>
+        </div>
+
+        <div class="jira-insight-grid">
+          <article class="jira-insight-card primary">
+            <span class="jira-insight-label">Your tickets</span>
+            <div class="jira-insight-stat-stack">
+              <div class="jira-insight-stat-row">
+                <span class="jira-insight-stat-copy">Total Tickets</span>
+                <button
+                  v-if="isInteractiveJiraCount(jiraInsight.myTotalCount)"
+                  type="button"
+                  class="jira-insight-count clickable"
+                  @click="openJiraInsightFilter({ scope: 'mine', focus: 'my-tickets' })"
+                >
+                  {{ jiraInsight.myTotalCount }}
+                </button>
+                <strong v-else class="jira-insight-count">{{ jiraInsight.myTotalCount }}</strong>
+              </div>
+              <div class="jira-insight-stat-row">
+                <span class="jira-insight-stat-copy">Overdue Tickets</span>
+                <button
+                  v-if="isInteractiveJiraCount(jiraInsight.myOverdueCount)"
+                  type="button"
+                  class="jira-insight-count clickable"
+                  @click="openJiraInsightFilter({ scope: 'mine', overdueOnly: true, focus: 'my-overdue' })"
+                >
+                  {{ jiraInsight.myOverdueCount }}
+                </button>
+                <strong v-else class="jira-insight-count">{{ jiraInsight.myOverdueCount }}</strong>
+              </div>
+            </div>
+            <p>Personally assigned Jira work, with overdue tickets called out separately.</p>
+          </article>
+          <article class="jira-insight-card org">
+            <span class="jira-insight-label">Org overdue tickets</span>
+            <button
+              v-if="isInteractiveJiraCount(jiraInsight.orgOverdueCount)"
+              type="button"
+              class="jira-insight-count clickable"
+              @click="openJiraInsightFilter({ scope: 'all', overdueOnly: true, focus: 'org-overdue' })"
+            >
+              {{ jiraInsight.orgOverdueCount }}
+            </button>
+            <strong v-else class="jira-insight-count">{{ jiraInsight.orgOverdueCount }}</strong>
+            <p>Overall overdue count in the connected Jira workspace scope.</p>
+          </article>
+          <article class="jira-insight-card compact blocked">
+            <span class="jira-insight-label">Blocked overdue</span>
+            <button
+              v-if="isInteractiveJiraCount(jiraInsight.blockedOverdueCount)"
+              type="button"
+              class="jira-insight-count clickable"
+              @click="openJiraInsightFilter({ scope: 'all', overdueOnly: true, blockedOnly: true, focus: 'blocked-overdue' })"
+            >
+              {{ jiraInsight.blockedOverdueCount }}
+            </button>
+            <strong v-else class="jira-insight-count">{{ jiraInsight.blockedOverdueCount }}</strong>
+            <p>Overdue tickets that also look blocked or stuck.</p>
+          </article>
+          <article class="jira-insight-card compact high-priority">
+            <span class="jira-insight-label">High-priority overdue</span>
+            <button
+              v-if="isInteractiveJiraCount(jiraInsight.highPriorityOverdueCount)"
+              type="button"
+              class="jira-insight-count clickable"
+              @click="openJiraInsightFilter({ scope: 'all', overdueOnly: true, priorityBucket: 'high', focus: 'high-priority-overdue' })"
+            >
+              {{ jiraInsight.highPriorityOverdueCount }}
+            </button>
+            <strong v-else class="jira-insight-count">{{ jiraInsight.highPriorityOverdueCount }}</strong>
+            <p>Overdue tickets already marked high or highest priority.</p>
+          </article>
+        </div>
+      </section>
+    </div>
+
+    <div
+      class="briefing-dashboard-bottom"
+      :class="{ 'briefing-dashboard-bottom-single': !hasRecentActions }"
+    >
+      <section v-if="hasRecentActions" class="briefing-section briefing-card-shell briefing-recent-shell">
+        <div class="briefing-section-head">
+          <h3>Recent Actions</h3>
+          <span>Light audit trail</span>
+        </div>
+
+        <div class="audit-trail-list briefing-scroll-panel">
+          <article v-for="entry in auditTrail" :key="entry.id" class="audit-trail-item">
+            <div class="audit-trail-top">
+              <span class="audit-trail-badge">
+                <span>{{ entry.sourceIcon }}</span>
+                <span>{{ entry.sourceLabel }}</span>
+              </span>
+              <span class="audit-trail-state">{{ actionStateLabel(entry.action) }}</span>
+            </div>
+            <strong>{{ entry.title }}</strong>
+            <p v-if="entry.note">{{ entry.note }}</p>
+            <span class="audit-trail-time">{{ formatActionTime(entry.createdAt) }}</span>
+          </article>
+        </div>
+      </section>
+
+      <section class="briefing-section briefing-card-shell briefing-suggestions-shell">
+        <div class="briefing-section-head">
+          <h3>Suggested Next Actions</h3>
+          <span>{{ suggestedActions.length }} suggestion{{ suggestedActions.length === 1 ? '' : 's' }}</span>
+        </div>
+
+        <div class="briefing-suggestions">
+          <button
+            v-for="suggestion in suggestedActions"
+            :key="suggestion.id"
+            class="briefing-suggestion"
+            @click="triggerAction(suggestion.action)"
+          >
+            <span class="briefing-suggestion-label">{{ suggestion.label }}</span>
+            <span class="briefing-suggestion-text">{{ suggestion.description }}</span>
+          </button>
+        </div>
+      </section>
+    </div>
   </div>
 </template>
 
@@ -368,6 +380,8 @@ const suggestedActions = computed(() => {
     action: item.action,
   }))
 })
+const hasJiraPanel = computed(() => Boolean(jiraInsight.value))
+const hasRecentActions = computed(() => auditTrail.value.length > 0)
 
 function actionStateLabel(value) {
   return {
@@ -590,13 +604,6 @@ async function loadDashboard({ silent = false, mode = 'replace' } = {}) {
   }
 }
 
-function schedulePendingRefresh() {
-  clearTimeout(refreshTimer)
-  refreshTimer = setTimeout(() => {
-    loadDashboard({ silent: true, mode: 'pending' })
-  }, 350)
-}
-
 function scheduleLiveRefresh() {
   clearTimeout(liveRefreshTimer)
   liveRefreshTimer = setTimeout(() => {
@@ -666,6 +673,11 @@ onUnmounted(() => {
   --briefing-chip-bg: rgba(255, 255, 255, 0.045);
   --briefing-chip-border: rgba(176, 201, 255, 0.1);
   --briefing-chip-text: #e2e8f0;
+  --briefing-panel-bg:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.92), rgba(9, 16, 34, 0.88));
+  --briefing-panel-border: rgba(176, 201, 255, 0.1);
+  --briefing-panel-shadow: 0 28px 72px rgba(0, 4, 18, 0.28);
+  --briefing-top-card-height: clamp(500px, 62vh, 640px);
   width: min(980px, 100%);
   max-width: 100%;
   display: flex;
@@ -862,6 +874,131 @@ onUnmounted(() => {
   gap: 16px;
 }
 
+.briefing-card-shell {
+  min-width: 0;
+  padding: 22px;
+  border-radius: 30px;
+  border: 1px solid var(--briefing-panel-border);
+  background: var(--briefing-panel-bg);
+  box-shadow: var(--briefing-panel-shadow);
+  backdrop-filter: blur(24px);
+}
+
+.briefing-dashboard-top,
+.briefing-dashboard-bottom {
+  display: grid;
+  gap: 22px;
+}
+
+.briefing-dashboard-top {
+  grid-template-columns: minmax(0, 1.55fr) minmax(300px, 0.92fr);
+  align-items: stretch;
+}
+
+.briefing-dashboard-top-single,
+.briefing-dashboard-bottom-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.briefing-dashboard-bottom {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.briefing-dashboard-top:not(.briefing-dashboard-top-single) > .briefing-feed-shell,
+.briefing-dashboard-top:not(.briefing-dashboard-top-single) > .briefing-jira-shell {
+  min-height: var(--briefing-top-card-height);
+  height: var(--briefing-top-card-height);
+}
+
+.briefing-feed-shell,
+.briefing-jira-shell,
+.briefing-recent-shell,
+.briefing-suggestions-shell {
+  min-width: 0;
+}
+
+.briefing-feed-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.briefing-panel-fill {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  justify-content: center;
+}
+
+.briefing-panel-fill,
+.briefing-feed-body > .priority-feed-grid,
+.briefing-jira-shell .jira-insight-grid,
+.briefing-recent-shell .audit-trail-list {
+  min-height: 0;
+}
+
+.briefing-scroll-panel {
+  overflow-y: auto;
+  padding-right: 6px;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(139, 125, 255, 0.45) transparent;
+}
+
+.briefing-scroll-panel::-webkit-scrollbar {
+  width: 6px;
+}
+
+.briefing-scroll-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.briefing-scroll-panel::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(139, 125, 255, 0.45);
+}
+
+.briefing-jira-shell .jira-insight-grid {
+  flex: 1;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+}
+
+.briefing-jira-shell .jira-insight-card {
+  min-height: 0;
+  padding: 18px;
+  gap: 10px;
+}
+
+.briefing-jira-shell .jira-insight-stat-stack {
+  gap: 12px;
+}
+
+.briefing-jira-shell .jira-insight-stat-row {
+  gap: 10px;
+}
+
+.briefing-jira-shell .jira-insight-card p {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.briefing-recent-shell,
+.briefing-suggestions-shell {
+  min-height: 320px;
+}
+
+.briefing-recent-shell .audit-trail-list {
+  flex: 1;
+  max-height: 360px;
+}
+
+.briefing-suggestions {
+  align-content: start;
+}
+
 .priority-summary-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -870,7 +1007,7 @@ onUnmounted(() => {
 
 .jira-insight-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -1034,11 +1171,16 @@ onUnmounted(() => {
   background: rgba(82, 212, 255, 0.16);
 }
 
-.priority-filter-row,
-.briefing-suggestions {
+.priority-filter-row {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.briefing-suggestions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
 }
 
 .priority-filter-chip,
@@ -1096,7 +1238,7 @@ onUnmounted(() => {
 }
 
 .briefing-suggestion {
-  min-width: min(280px, 100%);
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1147,6 +1289,9 @@ onUnmounted(() => {
   --briefing-chip-bg: rgba(255, 255, 255, 0.86);
   --briefing-chip-border: rgba(148, 163, 184, 0.18);
   --briefing-chip-text: #1e293b;
+  --briefing-panel-bg: rgba(255, 255, 255, 0.96);
+  --briefing-panel-border: rgba(148, 163, 184, 0.28);
+  --briefing-panel-shadow: 0 14px 34px rgba(148, 163, 184, 0.14);
 }
 
 :global([data-theme="light"]) .briefing-hero {
@@ -1156,6 +1301,7 @@ onUnmounted(() => {
 :global([data-theme="light"]) .priority-summary-card,
 :global([data-theme="light"]) .jira-insight-card,
 :global([data-theme="light"]) .priority-empty,
+:global([data-theme="light"]) .briefing-card-shell,
 :global([data-theme="light"]) .audit-trail-item,
 :global([data-theme="light"]) .briefing-suggestion,
 :global([data-theme="light"]) .priority-filter-chip {
@@ -1272,6 +1418,9 @@ onUnmounted(() => {
     --briefing-chip-bg: rgba(255, 255, 255, 0.86);
     --briefing-chip-border: rgba(148, 163, 184, 0.18);
     --briefing-chip-text: #1e293b;
+    --briefing-panel-bg: rgba(255, 255, 255, 0.96);
+    --briefing-panel-border: rgba(148, 163, 184, 0.28);
+    --briefing-panel-shadow: 0 14px 34px rgba(148, 163, 184, 0.14);
   }
 
   :global([data-theme="system"]) .briefing-hero {
@@ -1281,6 +1430,7 @@ onUnmounted(() => {
   :global([data-theme="system"]) .priority-summary-card,
   :global([data-theme="system"]) .jira-insight-card,
   :global([data-theme="system"]) .priority-empty,
+  :global([data-theme="system"]) .briefing-card-shell,
   :global([data-theme="system"]) .audit-trail-item,
   :global([data-theme="system"]) .briefing-suggestion,
   :global([data-theme="system"]) .priority-filter-chip {
@@ -1385,8 +1535,22 @@ onUnmounted(() => {
 
   .briefing-hero-grid,
   .priority-summary-grid,
+  .briefing-dashboard-top,
+  .briefing-dashboard-bottom,
   .jira-insight-grid {
     grid-template-columns: 1fr;
+  }
+
+  .briefing-jira-shell .jira-insight-grid {
+    grid-template-rows: none;
+  }
+
+  .briefing-dashboard-top:not(.briefing-dashboard-top-single) > .briefing-feed-shell,
+  .briefing-dashboard-top:not(.briefing-dashboard-top-single) > .briefing-jira-shell,
+  .briefing-recent-shell .audit-trail-list {
+    min-height: 0 !important;
+    height: auto !important;
+    max-height: none;
   }
 }
 </style>
