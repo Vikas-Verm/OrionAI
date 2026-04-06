@@ -1,0 +1,41 @@
+# Configuration file for Synapse.
+#
+# This is a YAML file: see [1] for a quick introduction. Note in particular
+# that *indentation is important*: all the elements of a list or dictionary
+# should have the same indentation.
+#
+# [1] https://docs.ansible.com/ansible/latest/reference_appendices/YAMLSyntax.html
+#
+# For more information on how to configure Synapse, including a complete accounting of
+# each option, go to docs/usage/configuration/config_documentation.md or
+# https://element-hq.github.io/synapse/latest/usage/configuration/config_documentation.html
+app_service_config_files:
+  - /data/appservices/mautrix-signal-registration.yaml
+server_name: "orion.local"
+pid_file: /data/homeserver.pid
+listeners:
+  - port: 8008
+    resources:
+    - compress: false
+      names:
+      - client
+      - federation
+    tls: false
+    type: http
+    x_forwarded: true
+database:
+  name: sqlite3
+  args:
+    database: /data/homeserver.db
+log_config: "/data/orion.local.log.config"
+media_store_path: /data/media_store
+registration_shared_secret: "hRa,6c6f60#7sjz1Su#D565Rth12FjRXzqaZYU65WQ~0Ugns;:"
+report_stats: false
+macaroon_secret_key: "xEQZE2loX^R-gGhrffmauoGPFh*.S69lx:#cfceoxz4@e6;-#."
+form_secret: "2wC:*bX3ywwmIhEa&2oUy-jvN5AvIqStvboRh^I7M#-=sf#6re"
+signing_key_path: "/data/orion.local.signing.key"
+trusted_key_servers:
+  - server_name: "matrix.org"
+
+
+# vim:ft=yaml

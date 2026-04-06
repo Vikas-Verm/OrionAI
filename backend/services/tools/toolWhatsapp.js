@@ -10,7 +10,7 @@
 
 "use strict";
 
-const path        = require("path");
+const path = require("path");
 const Integration = require("../../models/Integration");
 const { filterWhatsAppChats } = require("../agentMessageFilterService");
 const {
@@ -25,11 +25,7 @@ const clients = new Map();
 function buildWhatsAppChatCandidates(chats = []) {
   return chats.map((chat) => ({
     record: chat,
-    fields: [
-      chat.name,
-      chat.id?._serialized,
-      chat.id?.user,
-    ],
+    fields: [chat.name, chat.id?._serialized, chat.id?.user],
   }));
 }
 
@@ -95,12 +91,12 @@ async function getOrCreateClient(userId) {
       {
         $set: {
           userId,
-          type:    "whatsapp",
-          name:    "WhatsApp",
+          type: "whatsapp",
+          name: "WhatsApp",
           enabled: true,
           whatsapp: {
-            status:    "connected",
-            phone:     client.info?.wid?.user || "",
+            status: "connected",
+            phone: client.info?.wid?.user || "",
             connectedAt: new Date(),
           },
           updatedAt: new Date(),
@@ -112,8 +108,8 @@ async function getOrCreateClient(userId) {
     try {
       const { pushToUser } = require("../websocketServer");
       pushToUser(userId, {
-        type:   "whatsapp_connected",
-        phone:  client.info?.wid?.user || "",
+        type: "whatsapp_connected",
+        phone: client.info?.wid?.user || "",
       });
     } catch {}
   });
@@ -139,20 +135,20 @@ async function getOrCreateClient(userId) {
     if (msg.fromMe) return; // ignore sent messages
 
     const contact = await msg.getContact();
-    const chat    = await msg.getChat();
+    const chat = await msg.getChat();
 
     try {
       const { pushToUser } = require("../websocketServer");
       pushToUser(userId, {
-        type:      "whatsapp_message",
-        from:      contact.pushname || contact.number,
-        phone:     contact.number,
-        message:   msg.body,
-        chatId:    chat.id._serialized,
-        chatName:  chat.name,
-        isGroup:   chat.isGroup,
+        type: "whatsapp_message",
+        from: contact.pushname || contact.number,
+        phone: contact.number,
+        message: msg.body,
+        chatId: chat.id._serialized,
+        chatName: chat.name,
+        isGroup: chat.isGroup,
         timestamp: msg.timestamp,
-        msgId:     msg.id._serialized,
+        msgId: msg.id._serialized,
       });
     } catch {}
   });
@@ -167,11 +163,12 @@ async function whatsappConnect(params, ctx) {
   try {
     const entry = await getOrCreateClient(userId);
     return {
-      ok:     true,
+      ok: true,
       status: entry.status,
-      message: entry.status === "connected"
-        ? "WhatsApp already connected"
-        : "WhatsApp initializing — scan the QR code",
+      message:
+        entry.status === "connected"
+          ? "WhatsApp already connected"
+          : "WhatsApp initializing — scan the QR code",
     };
   } catch (err) {
     return { ok: false, error: err.message };
@@ -195,7 +192,8 @@ async function whatsappSend(params, ctx) {
   const { userId } = ctx;
   const { to, contact, message, isGroup } = params;
 
-  if ((!to && !contact) || !message) throw new Error("to/contact and message are required");
+  if ((!to && !contact) || !message)
+    throw new Error("to/contact and message are required");
 
   const entry = clients.get(userId);
   if (!entry || entry.status !== "connected") {
@@ -228,11 +226,11 @@ async function whatsappSend(params, ctx) {
 
   const sentMsg = await entry.client.sendMessage(chatId, message);
   return {
-    ok:      true,
-    to:      targetLabel,
+    ok: true,
+    to: targetLabel,
     chatId,
     message,
-    msgId:   sentMsg.id._serialized,
+    msgId: sentMsg.id._serialized,
     summary: `WhatsApp sent to ${targetLabel}`,
   };
 }
@@ -285,21 +283,21 @@ async function whatsappGetMessages(params, ctx) {
   }
   const { refreshUsersSignals } = require("../liveSignalRefresh");
   refreshUsersSignals([userId]).catch(() => {});
-  const formatted = messages.map(m => ({
-    id:        m.id._serialized,
-    from:      m.fromMe ? "You" : (m._data?.notifyName || m.from),
-    message:   m.body,
+  const formatted = messages.map((m) => ({
+    id: m.id._serialized,
+    from: m.fromMe ? "You" : m._data?.notifyName || m.from,
+    message: m.body,
     timestamp: new Date(m.timestamp * 1000).toLocaleString("en-IN"),
-    fromMe:    m.fromMe,
-    type:      m.type,
+    fromMe: m.fromMe,
+    type: m.type,
   }));
 
   return {
-    ok:       true,
+    ok: true,
     chatName: chat.name,
-    count:    formatted.length,
+    count: formatted.length,
     messages: formatted,
-    summary:  `${formatted.length} messages from ${chat.name}`,
+    summary: `${formatted.length} messages from ${chat.name}`,
   };
 }
 
@@ -313,18 +311,18 @@ async function whatsappGetUnread(params, ctx) {
   const entry = clients.get(userId);
   if (!entry || entry.status !== "connected") return null;
 
-  const chats       = await entry.client.getChats();
+  const chats = await entry.client.getChats();
   const unreadChats = filterWhatsAppChats(chats, {
     includeGroups,
     includeBroadcasts,
     requireUnread: true,
   })
     .slice(0, limit)
-    .map(c => ({
-      chatId:      c.id._serialized,
-      chatName:    c.name,
+    .map((c) => ({
+      chatId: c.id._serialized,
+      chatName: c.name,
       unreadCount: c.unreadCount,
-      isGroup:     c.isGroup,
+      isGroup: c.isGroup,
       lastMessage: c.lastMessage?.body?.slice(0, 80) || "",
       latestMessageId: c.lastMessage?.id?._serialized || null,
       latestMessageAt: c.lastMessage?.timestamp
@@ -335,13 +333,14 @@ async function whatsappGetUnread(params, ctx) {
   const totalUnread = unreadChats.reduce((s, c) => s + c.unreadCount, 0);
 
   return {
-    ok:           true,
+    ok: true,
     totalUnread,
-    chatCount:    unreadChats.length,
-    chats:        unreadChats,
-    summary:      totalUnread > 0
-      ? `${totalUnread} unread across ${unreadChats.length} chats`
-      : "No unread WhatsApp messages",
+    chatCount: unreadChats.length,
+    chats: unreadChats,
+    summary:
+      totalUnread > 0
+        ? `${totalUnread} unread across ${unreadChats.length} chats`
+        : "No unread WhatsApp messages",
   };
 }
 
@@ -362,15 +361,15 @@ async function whatsappListChats(params, ctx) {
     includeBroadcasts,
   }).slice(0, limit);
   return {
-    ok:    true,
+    ok: true,
     total: chats.length,
-    chats: chats.map(c => ({
-      id:          c.id._serialized,
-      name:        c.name,
-      isGroup:     c.isGroup,
-      unread:      c.unreadCount,
+    chats: chats.map((c) => ({
+      id: c.id._serialized,
+      name: c.name,
+      isGroup: c.isGroup,
+      unread: c.unreadCount,
       lastMessage: c.lastMessage?.body?.slice(0, 60) || "",
-      pinned:      c.pinned,
+      pinned: c.pinned,
     })),
     summary: `${chats.length} WhatsApp chats`,
   };
@@ -381,9 +380,9 @@ function whatsappStatus(params, ctx) {
   const { userId } = ctx;
   const entry = clients.get(userId);
   return {
-    ok:     true,
+    ok: true,
     status: entry?.status || "not_initialized",
-    qr:     entry?.qr || null,
+    qr: entry?.qr || null,
   };
 }
 
@@ -391,14 +390,22 @@ function whatsappStatus(params, ctx) {
 async function toolWhatsApp(params, ctx) {
   const { action } = params;
   switch (action) {
-    case "connect":      return whatsappConnect(params, ctx);
-    case "disconnect":   return whatsappDisconnect(params, ctx);
-    case "send":         return whatsappSend(params, ctx);
-    case "get_messages": return whatsappGetMessages(params, ctx);
-    case "get_unread":   return whatsappGetUnread(params, ctx);
-    case "list_chats":   return whatsappListChats(params, ctx);
-    case "status":       return whatsappStatus(params, ctx);
-    default:             throw new Error(`Unknown WhatsApp action: ${action}`);
+    case "connect":
+      return whatsappConnect(params, ctx);
+    case "disconnect":
+      return whatsappDisconnect(params, ctx);
+    case "send":
+      return whatsappSend(params, ctx);
+    case "get_messages":
+      return whatsappGetMessages(params, ctx);
+    case "get_unread":
+      return whatsappGetUnread(params, ctx);
+    case "list_chats":
+      return whatsappListChats(params, ctx);
+    case "status":
+      return whatsappStatus(params, ctx);
+    default:
+      throw new Error(`Unknown WhatsApp action: ${action}`);
   }
 }
 

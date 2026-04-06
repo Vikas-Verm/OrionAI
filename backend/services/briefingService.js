@@ -11,6 +11,7 @@ const APP_META = {
   gmail: { label: "Gmail", icon: "📧", module: "gmail" },
   slack: { label: "Slack", icon: "💬", module: "slack" },
   telegram: { label: "Telegram", icon: "✈️", module: "telegram" },
+  signal: { label: "Signal", icon: "🛡️", module: "signal" },
   whatsapp: { label: "WhatsApp", icon: "🟢", module: "whatsapp" },
   jira: { label: "Jira", icon: "🔷", module: "jira" },
   google_calendar: { label: "Calendar", icon: "📅", module: "google_calendar" },
@@ -313,6 +314,17 @@ function buildSuggestions({ connectedSet, unreadSignals, jiraResult, calendarEve
       mode: "agent",
       prompt:
         "Summarize my unread Telegram chats and point out anything that looks urgent.",
+    });
+  }
+
+  if (connectedSet.has("signal")) {
+    suggestions.push({
+      id: "suggestion-signal",
+      label: "Review Signal",
+      appId: "signal",
+      mode: "agent",
+      prompt:
+        "Summarize my unread Signal conversations, highlight anything urgent, and tell me where I should reply first.",
     });
   }
 

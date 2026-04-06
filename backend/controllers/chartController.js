@@ -7,7 +7,6 @@ const extractChart = async (req, res) => {
       return res.status(400).json({ error: "replyText is required" });
 
     const result = await extractChartFromText(replyText);
-    console.log("result", result);
     res.json(result);
   } catch (e) {
     console.error("Chart extraction failed:", e);

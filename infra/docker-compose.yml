@@ -1,0 +1,18 @@
+services:
+  synapse:
+    image: matrixdotorg/synapse:latest
+    container_name: synapse
+    restart: unless-stopped
+    ports:
+      - "8008:8008"
+    volumes:
+      - ./synapse:/data
+
+  mautrix-signal:
+    image: dock.mau.dev/mautrix/signal:latest
+    container_name: mautrix-signal
+    restart: unless-stopped
+    depends_on:
+      - synapse
+    volumes:
+      - ./mautrix-signal:/data

@@ -229,7 +229,6 @@
 import { ref, computed, onMounted, onUnmounted, reactive, defineComponent, h } from 'vue'
 import { store } from '../../stores/app'
 import { useSession } from '../../composables/useSession'
-import { useTheme } from '../../composables/useTheme'
 import { useWebSocket } from '../../composables/useWebSocket'
 import api from '../../services/api'
 import { useIntegrationHealth } from '../../composables/useIntegrationHealth'
@@ -246,7 +245,6 @@ const props = defineProps({
 })
 
 const { loadSessions } = useSession()
-const { theme, setTheme } = useTheme()
 const {
   unreadByApp, startPolling, stopPolling, markSeen,
   unreadNotifCount, hasUrgent, notifications: bellNotifications,
@@ -287,6 +285,11 @@ const TelegramIcon = ic(s => h('svg', { width: s, height: s, viewBox: '0 0 24 24
   h('circle', { cx: 12, cy: 12, r: 12, fill: '#229ED9' }),
   h('path', { d: 'M5.4 11.9l10.2-3.9c.47-.18.88.11.73.8l-1.74 8.2c-.13.58-.47.72-.95.45l-2.63-1.94-1.27 1.22c-.14.14-.26.26-.53.26l.19-2.69 4.87-4.4c.21-.19-.05-.29-.32-.1L7.47 13.9 4.87 13.1c-.56-.17-.57-.56.53-1.2z', fill: 'white' }),
 ]))
+const SignalIcon = ic(s => h('svg', { width: s, height: s, viewBox: '0 0 24 24', fill: 'none' }, [
+  h('circle', { cx: 12, cy: 12, r: 12, fill: '#3b82f6' }),
+  h('path', { d: 'M12 5.2a6.8 6.8 0 0 0-6.8 6.8c0 1.34.39 2.6 1.07 3.65l-.7 2.92 3-.67A6.8 6.8 0 1 0 12 5.2Z', fill: 'white', opacity: 0.92 }),
+  h('path', { d: 'M12 7.35a4.65 4.65 0 1 0 0 9.3 4.65 4.65 0 0 0 0-9.3Zm0 8.1a3.45 3.45 0 1 1 0-6.9 3.45 3.45 0 0 1 0 6.9Z', fill: '#3b82f6' }),
+]))
 const WhatsAppIcon = ic(s => h('svg', { width: s, height: s, viewBox: '0 0 24 24', fill: '#25D366' }, [
   h('path', { d: 'M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51a4.7 4.7 0 00-.57-.01c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347M12 0C5.373 0 0 5.373 0 12c0 2.117.549 4.103 1.509 5.831L0 24l6.335-1.652A11.94 11.94 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0z' }),
 ]))
@@ -319,6 +322,7 @@ const RazorpayIcon = ic(s => h('svg', { width: s, height: s, viewBox: '0 0 24 24
 
 const ALL_APPS = [
   { id: 'telegram', label: 'Telegram', color: '#229ED9', icon: TelegramIcon, apiType: 'telegram' },
+  { id: 'signal', label: 'Signal', color: '#3b82f6', icon: SignalIcon, apiType: 'signal' },
   { id: 'whatsapp', label: 'WhatsApp', color: '#25D366', icon: WhatsAppIcon, apiType: 'whatsapp' },
   { id: 'gmail', label: 'Gmail', color: '#EA4335', icon: GmailIcon, apiType: 'gmail' },
   { id: 'slack', label: 'Slack', color: '#E01E5A', icon: SlackIcon, apiType: 'slack' },
@@ -383,6 +387,12 @@ function hasConnectedState(int) {
   if (int.type === 'google_calendar') return Boolean(int.googleCalendar?.refreshToken || int.googleCalendar?.accessToken || int.googleCalendar?.userEmail)
   if (int.type === 'slack') return Boolean(int.slack?.userToken || int.slack?.webhookUrl)
   if (int.type === 'telegram') return Boolean(int.telegram?.sessionString)
+  if (int.type === 'signal') {
+    return Boolean(
+      (int.matrix?.loginState === 'connected' && int.connected !== false) ||
+      (int.signal?.accessToken && int.signal?.homeserverUrl && int.signal?.mxid)
+    )
+  }
   if (int.type === 'whatsapp') return Boolean(int.whatsapp?.connected)
   if (int.type === 'jira') return Boolean(int.jira?.domain && int.jira?.email && int.jira?.apiToken)
   if (int.type === 'database') return Boolean(int.database?.connectionString || int.database?.filePath)

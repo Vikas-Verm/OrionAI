@@ -2083,7 +2083,21 @@ onUnmounted(() => {
 .jr-topbar-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 
 /* ══ TOOLBAR ══════════════════════════════════════════════════ */
-.jr-toolbar { display: flex; align-items: center; gap: 8px; padding: 10px 18px; background: rgba(8, 13, 28, 0.46); border-bottom: 1px solid var(--border-subtle); flex-shrink: 0; flex-wrap: wrap; backdrop-filter: blur(16px); }
+.jr-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  background: rgba(8, 13, 28, 0.46);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  backdrop-filter: blur(16px);
+
+  position: relative;
+  z-index: 20;
+  overflow: visible;
+}
 .jr-search-wrap { position: relative; flex-shrink: 0; }
 .jr-si { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none; }
 .jr-search { background: rgba(255,255,255,.045); border: 1px solid var(--border-default); border-radius: 999px; padding: 8px 30px 8px 30px; color: var(--text-primary); font-size: 12.5px; outline: none; width: 200px; transition: all .15s; backdrop-filter: blur(14px); }

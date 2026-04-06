@@ -9,12 +9,20 @@ const {
 } = require("../services/connectedDatabaseService");
 const { testRazorpayConnection } = require("../services/tools/toolRazorpay");
 const { toolRazorpayGetPayouts } = require("../services/tools/toolRazorpay");
+const {
+  buildSignalClientIntegration,
+} = require("../services/signalMatrixService");
+
+function sanitizeIntegrationForClient(integration) {
+  if (!integration || integration.type !== "signal") return integration;
+  return buildSignalClientIntegration(integration);
+}
 
 // ── GET /api/integrations ─────────────────────────────────
 async function getIntegrations(req, res) {
   const userId = req.user?.username;
   const integrations = await Integration.find({ userId });
-  res.json(integrations);
+  res.json(integrations.map(sanitizeIntegrationForClient));
 }
 
 // ── POST /api/integrations/:type ──────────────────────────
@@ -24,6 +32,18 @@ async function saveIntegration(req, res) {
   const payload = req.body;
 
   try {
+    if (type === "signal") {
+      const {
+        connectSignalIntegration,
+      } = require("../services/signalMatrixService");
+      const result = await connectSignalIntegration(userId, payload || {});
+      return res.json({
+        ok: true,
+        integration: result.clientIntegration || result.integration || null,
+        status: result.status || null,
+      });
+    }
+
     const doc = await Integration.findOneAndUpdate(
       { userId, type },
       {
@@ -38,7 +58,7 @@ async function saveIntegration(req, res) {
       },
       { upsert: true, new: true }
     );
-    res.json({ ok: true, integration: doc });
+    res.json({ ok: true, integration: sanitizeIntegrationForClient(doc) });
   } catch (err) {
     console.error("Save integration error:", err.message);
     res.status(500).json({ error: err.message });
@@ -50,6 +70,10 @@ async function deleteIntegration(req, res) {
   const userId = req.user?.username;
   const { type } = req.params;
   await Integration.findOneAndDelete({ userId, type });
+  if (type === "signal") {
+    const { invalidateSignalCache } = require("../services/signalMatrixService");
+    invalidateSignalCache(userId);
+  }
   res.json({ ok: true });
 }
 
@@ -125,6 +149,20 @@ async function testIntegration(req, res) {
       const result = await testRazorpayConnection(integration.razorpay || {});
       ok = true;
       message = result.message;
+    } else if (type === "signal") {
+      const { getSignalStatus } = require("../services/signalMatrixService");
+      const status = await getSignalStatus(userId);
+      if (!status.connected) {
+        throw new Error(status.lastError || status.error || "Signal not connected");
+      }
+      ok = true;
+      message = `Signal connected${
+        status.profile?.displayName ? ` for ${status.profile.displayName}` : ""
+      }${
+        status.roomCount
+          ? ` with ${status.roomCount} chat${status.roomCount === 1 ? "" : "s"}`
+          : ""
+      }.`;
     } else {
       message = `Test not implemented yet for ${type}`;
       ok = true;

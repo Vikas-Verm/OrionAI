@@ -115,6 +115,15 @@ const SOURCE_THRESHOLDS = {
     maxConversations: 12,
     messageLimit: 24,
   },
+  signal: {
+    replyWindowHours: 24,
+    approvalWindowHours: 72,
+    followUpWindowHours: 120,
+    promiseFollowUpHours: 36,
+    waitingOnOthersWindowHours: 120,
+    maxConversations: 12,
+    messageLimit: 24,
+  },
   whatsapp: {
     replyWindowHours: 24,
     approvalWindowHours: 72,

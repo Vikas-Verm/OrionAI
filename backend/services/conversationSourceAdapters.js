@@ -460,6 +460,73 @@ function normalizeTelegramConversation(dialog, messages = [], me = {}) {
   };
 }
 
+function normalizeSignalConversation(room, messages = [], me = {}) {
+  const currentUserHandles = [
+    me.mxid ? `@${String(me.mxid).replace(/^@/, "").split(":")[0]}` : "",
+    me.mxid ? String(me.mxid).replace(/^@/, "").split(":")[0] : "",
+    me.displayName || "",
+  ].filter(Boolean);
+  const outboundIds = new Set(
+    messages.filter((message) => message.fromMe).map((message) => String(message.id))
+  );
+
+  const normalizedMessages = messages.map((message) => {
+    const text = normalizeText(message.text || message.previewText || "");
+    const mentionedCurrentUser =
+      containsNameMention(text, currentUserHandles) ||
+      currentUserHandles.some(
+        (handle) => handle && normalizeLower(text).includes(String(handle).toLowerCase())
+      );
+    const replyToCurrentUser = Boolean(
+      message.replyToEventId && outboundIds.has(String(message.replyToEventId))
+    );
+
+    return {
+      id: message.id,
+      timestamp: toTimestamp(message.timestamp),
+      text,
+      previewText: text,
+      direction: message.fromMe ? "outbound" : "inbound",
+      senderType: room.isDirect ? "human" : "unknown",
+      senderId: message.sender || "",
+      senderName: message.senderName || room.name,
+      mentionedCurrentUser,
+      addressedToCurrentUser:
+        room.isDirect || mentionedCurrentUser || replyToCurrentUser,
+      replyToCurrentUser,
+      hasAttachments: Boolean(message.media),
+    };
+  });
+
+  return {
+    sourceType: "signal",
+    conversationId: String(room.roomId || room.id),
+    threadId: null,
+    conversationTitle: room.name,
+    participantLabel: room.name,
+    previewText:
+      room.lastMessage ||
+      normalizedMessages[normalizedMessages.length - 1]?.text ||
+      "",
+    sourceMetadata: {
+      isDirect: Boolean(room.isDirect),
+      isGroup: Boolean(room.isGroup),
+      isBroadcast: false,
+      unreadCount: Number(room.unreadCount || 0),
+      participantLabel: room.name,
+    },
+    platformMetadata: {
+      roomId: String(room.roomId || room.id),
+      unreadCount: Number(room.unreadCount || 0),
+      memberCount: Number(room.memberCount || 0),
+    },
+    openContext: {
+      roomId: String(room.roomId || room.id),
+    },
+    messages: normalizedMessages,
+  };
+}
+
 function normalizeWhatsAppConversation(chat, messages = []) {
   const normalizedMessages = messages.map((message) => ({
     id: message.id._serialized,
@@ -526,5 +593,6 @@ module.exports = {
   normalizeSlackMessages,
   pickSlackConversationMessages,
   normalizeTelegramConversation,
+  normalizeSignalConversation,
   normalizeWhatsAppConversation,
 };

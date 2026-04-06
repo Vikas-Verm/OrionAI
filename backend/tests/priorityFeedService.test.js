@@ -168,11 +168,13 @@ test("priority feed sorts earlier meetings first inside the meetings lane", () =
 });
 
 test("calendar priority ignores per-user RSVP differences for the same meeting", () => {
+  const start = new Date(Date.now() + 2 * 60 * 60 * 1000);
+  const end = new Date(start.getTime() + 60 * 60 * 1000);
   const baseEvent = {
     id: "evt-1",
     title: "testing apis",
-    start: "2026-03-30T18:00:00+05:30",
-    end: "2026-03-30T19:00:00+05:30",
+    start: start.toISOString(),
+    end: end.toISOString(),
     description: "",
     location: null,
     meet: "https://meet.google.com/abc-defg-hij",
@@ -254,7 +256,7 @@ test("fallback sources stay disabled when the shared communication engine alread
   });
 
   assert.equal(plan.includeGmailFallback, false);
-  assert.deepEqual(plan.messagingSources, ["slack", "whatsapp"]);
+  assert.deepEqual(plan.messagingSources, ["slack", "signal", "whatsapp"]);
 });
 
 test("fallback messaging items include the latest message fingerprint in their identity", () => {

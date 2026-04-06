@@ -28,7 +28,7 @@ You have access to the following MongoDB collections from a B2B trade/ERP platfo
 Purchase bills from sellers.
 Key fields:
 - _id, number (bill number), internal_number (e.g. PB-POSHN-xxx)
-- po_id (ref to PurchaseOrders), seller (ref to Organisations)
+- po_id (ref to PurchaseOrders), seller (ref to User)
 - date, due_date, created_date, updated_date
 - status_cd: "active" | "cancelled" | "paid" | "unpaid"
 - status: "Active" | "Cancelled" | "Paid" | "Unpaid"

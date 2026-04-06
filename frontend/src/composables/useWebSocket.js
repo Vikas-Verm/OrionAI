@@ -141,6 +141,9 @@ const APP_META = {
   gmail: { label: "Gmail", icon: "📧", color: "#EA4335", route: "gmail" },
   slack: { label: "Slack", icon: "💬", color: "#E01E5A", route: "slack" },
   telegram: { label: "Telegram", icon: "✈️", color: "#229ED9", route: "telegram" },
+  signal: { label: "Signal", icon: "🛡️", color: "#3b82f6", route: "signal" },
+  whatsapp: { label: "WhatsApp", icon: "🟢", color: "#25D366", route: "whatsapp" },
+  google_calendar: { label: "Calendar", icon: "📅", color: "#1a73e8", route: "google_calendar" },
 };
 
 const PRIORITY_COLOR = {
@@ -216,7 +219,9 @@ function persistState() {
         seenItemIdsByApp,
       })
     );
-  } catch {}
+  } catch (err) {
+    console.debug("Failed to persist websocket state:", err?.message || err);
+  }
 }
 
 function resetState() {
@@ -378,7 +383,7 @@ export function useWebSocket() {
         const shouldTriggerBriefingRefresh =
           Number(update.highSignalCount || 0) > 0 ||
           (app === "gmail" && (ai?.priority || "normal") !== "info") ||
-          ["slack", "telegram", "google_calendar"].includes(app);
+          ["slack", "telegram", "signal", "google_calendar"].includes(app);
 
         const color = ai?.priority ? PRIORITY_COLOR[ai.priority] : meta.color;
         const eventId = buildNotificationEventId(app, items);

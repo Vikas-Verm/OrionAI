@@ -2,6 +2,8 @@ const mongoose = require("mongoose");
 const {
   encryptIntegration,
   decryptIntegration,
+  SENSITIVE_FIELDS,
+  encrypt,
 } = require("../services/tokenEncryption");
 
 const integrationSchema = new mongoose.Schema({
@@ -16,6 +18,7 @@ const integrationSchema = new mongoose.Schema({
       "google_calendar",
       "webhook",
       "telegram",
+      "signal",
       "whatsapp",
       "database",
       "razorpay",
@@ -25,6 +28,33 @@ const integrationSchema = new mongoose.Schema({
 
   name: { type: String, default: "" },
   enabled: { type: Boolean, default: true },
+  transport: {
+    type: String,
+    enum: ["native", "mautrix"],
+    default: "mautrix",
+  },
+  matrix: {
+    homeserverUrl: { type: String, default: "http://localhost:8008" },
+    mxid: { type: String, default: "" },
+    accessToken: { type: String, default: "" },
+    deviceId: { type: String, default: "" },
+    managementRoomId: { type: String, default: "" },
+    bridgeBotMxid: { type: String, default: "@signalbot:orion.local" },
+    loginState: {
+      type: String,
+      enum: [
+        "disconnected",
+        "creating_account",
+        "logging_in",
+        "pending_qr",
+        "connected",
+        "error",
+      ],
+      default: "disconnected",
+    },
+    lastError: { type: String, default: "" },
+    connectedAt: { type: Date, default: null },
+  },
 
   // ── Slack OAuth ────────────────────────────────────────────────────────────
   // FIXED: was defined twice — old webhook-only version removed, OAuth version kept
@@ -88,6 +118,21 @@ const integrationSchema = new mongoose.Schema({
     firstName: { type: String, default: "" },
   },
 
+  // ── Signal via mautrix / Matrix ───────────────────────────────────────────
+  signal: {
+    homeserverUrl: { type: String, default: "" },
+    mxid: { type: String, default: "" },
+    password: { type: String, default: "" },
+    accessToken: { type: String, default: "" },
+    deviceId: { type: String, default: "" },
+    deviceDisplayName: { type: String, default: "" },
+    displayName: { type: String, default: "" },
+    avatarUrl: { type: String, default: "" },
+    bridgeBotMxid: { type: String, default: "" },
+    managementRoomId: { type: String, default: "" },
+    connectedAt: { type: Date },
+  },
+
   // ── WhatsApp (Baileys) ─────────────────────────────────────────────────────
   whatsapp: {
     connected: { type: Boolean, default: false },
@@ -123,7 +168,6 @@ const integrationSchema = new mongoose.Schema({
     accountNumber: { type: String, default: "" },
     webhookSecret: { type: String, default: "" },
   },
-
   lastTestedAt: { type: Date },
   lastTestOk: { type: Boolean },
   createdAt: { type: Date, default: Date.now },
@@ -141,6 +185,13 @@ function decryptDoc(doc) {
     );
     Object.assign(doc[type], decrypted);
   }
+  if (type === "signal" && doc.matrix && typeof doc.matrix === "object") {
+    const decryptedMatrix = decryptIntegration(
+      "matrix",
+      doc.matrix.toObject ? doc.matrix.toObject() : doc.matrix
+    );
+    Object.assign(doc.matrix, decryptedMatrix);
+  }
 }
 
 // ── pre save: encrypt before writing ─────────────────────────────────────
@@ -153,6 +204,13 @@ integrationSchema.pre("save", function (next) {
     );
     Object.assign(this[type], encrypted);
   }
+  if (type === "signal" && this.matrix && typeof this.matrix === "object") {
+    const encryptedMatrix = encryptIntegration(
+      "matrix",
+      this.matrix.toObject ? this.matrix.toObject() : this.matrix
+    );
+    Object.assign(this.matrix, encryptedMatrix);
+  }
   next();
 });
 
@@ -161,13 +219,23 @@ integrationSchema.pre("findOneAndUpdate", function (next) {
   const update = this.getUpdate();
   const set = update?.$set || {};
 
-  // Find any integration type fields being updated (e.g. "gmail.accessToken")
-  for (const key of Object.keys(set)) {
+  // Handle both whole integration object updates (e.g. "signal": {...})
+  // and dotted field updates (e.g. "gmail.accessToken").
+  for (const [key, value] of Object.entries(set)) {
     const parts = key.split(".");
+    if (parts.length === 1) {
+      const [type] = parts;
+      if (SENSITIVE_FIELDS[type] && value && typeof value === "object") {
+        set[key] = encryptIntegration(type, value);
+      }
+      if (type === "matrix" && value && typeof value === "object") {
+        set[key] = encryptIntegration("matrix", value);
+      }
+      continue;
+    }
+
     if (parts.length === 2) {
       const [type, field] = parts;
-      const { SENSITIVE_FIELDS } = require("../services/tokenEncryption");
-      const { encrypt } = require("../services/tokenEncryption");
       if (SENSITIVE_FIELDS[type]?.includes(field) && set[key]) {
         set[key] = encrypt(set[key]);
       }

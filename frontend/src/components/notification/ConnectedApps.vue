@@ -84,6 +84,7 @@
     { id: 'gmail',    label: 'Gmail',    icon: '📧', color: '#EA4335' },
     { id: 'slack',    label: 'Slack',    icon: '💬', color: '#4A154B' },
     { id: 'telegram', label: 'Telegram', icon: '✈️', color: '#229ED9' },
+    { id: 'signal',   label: 'Signal',   icon: '🛡️', color: '#3b82f6' },
     { id: 'jira',     label: 'Jira',     icon: '🔷', color: '#0052CC' },
     { id: 'calendar', label: 'Calendar', icon: '📅', color: '#4285F4' },
   ]

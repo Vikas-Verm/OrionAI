@@ -158,6 +158,7 @@
     gmail:    { label: 'Gmail',    icon: '📧', color: '#EA4335', route: 'gmail'    },
     slack:    { label: 'Slack',    icon: '💬', color: '#E01E5A', route: 'slack'    },
     telegram: { label: 'Telegram', icon: '✈️', color: '#229ED9', route: 'telegram' },
+    signal:   { label: 'Signal',   icon: '🛡️', color: '#3b82f6', route: 'signal'   },
   }
   
   // Build live items from inbox
@@ -202,6 +203,7 @@
   function chipText(app, item) {
     if (app === 'gmail')    return (item.subject || item.from || '').slice(0, 36) + '…'
     if (app === 'telegram') return `${item.name}: ${item.unread} msg${item.unread > 1 ? 's' : ''}`
+    if (app === 'signal')   return `${item.name}: ${item.unread} unread`
     if (app === 'slack')    return `${item.type === 'DM' ? '@' : '#'}${item.name}: ${item.unread}`
     return ''
   }

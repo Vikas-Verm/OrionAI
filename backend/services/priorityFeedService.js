@@ -22,6 +22,7 @@ const {
 const {
   checkSlack,
   checkTelegram,
+  checkSignal,
   checkWhatsApp,
 } = require("./inboxSignalsService");
 
@@ -29,6 +30,7 @@ const APP_META = {
   gmail: { label: "Gmail", icon: "📧", module: "gmail" },
   slack: { label: "Slack", icon: "💬", module: "slack" },
   telegram: { label: "Telegram", icon: "✈️", module: "telegram" },
+  signal: { label: "Signal", icon: "🛡️", module: "signal" },
   whatsapp: { label: "WhatsApp", icon: "🟢", module: "whatsapp" },
   jira: { label: "Jira", icon: "🔷", module: "jira" },
   google_calendar: { label: "Calendar", icon: "📅", module: "google_calendar" },
@@ -39,6 +41,7 @@ const COMMUNICATION_ACTION_SOURCES = new Set([
   "gmail",
   "slack",
   "telegram",
+  "signal",
   "whatsapp",
 ]);
 
@@ -213,7 +216,7 @@ function resolveCommunicationFallbackSources(communicationResult = null) {
 
   return {
     includeGmailFallback: !coveredSources.has("gmail"),
-    messagingSources: ["slack", "telegram", "whatsapp"].filter(
+    messagingSources: ["slack", "telegram", "signal", "whatsapp"].filter(
       (source) => !coveredSources.has(source)
     ),
   };
@@ -420,6 +423,12 @@ function buildAppShortcutAction(type) {
 
   if (type === "telegram") {
     return createModuleAction("Open Telegram", "telegram", {
+      focus: "unread",
+    });
+  }
+
+  if (type === "signal") {
+    return createModuleAction("Open Signal", "signal", {
       focus: "unread",
     });
   }
@@ -753,12 +762,13 @@ async function buildMessagingPriorityItems(userId, options = {}) {
   const includeSources = new Set(
     Array.isArray(options.includeSources)
       ? options.includeSources
-      : ["slack", "telegram", "whatsapp"]
+      : ["slack", "telegram", "signal", "whatsapp"]
   );
 
-  const [slackResult, telegramResult, whatsappResult] = await Promise.allSettled([
+  const [slackResult, telegramResult, signalResult, whatsappResult] = await Promise.allSettled([
     includeSources.has("slack") ? checkSlack(userId) : Promise.resolve(null),
     includeSources.has("telegram") ? checkTelegram(userId) : Promise.resolve(null),
+    includeSources.has("signal") ? checkSignal(userId) : Promise.resolve(null),
     includeSources.has("whatsapp") ? checkWhatsApp(userId) : Promise.resolve(null),
   ]);
 
@@ -770,6 +780,10 @@ async function buildMessagingPriorityItems(userId, options = {}) {
 
   if (telegramResult.status === "fulfilled" && telegramResult.value?.previews?.length) {
     items.push(...mapMessageSourceToItems("telegram", telegramResult.value.previews));
+  }
+
+  if (signalResult.status === "fulfilled" && signalResult.value?.previews?.length) {
+    items.push(...mapMessageSourceToItems("signal", signalResult.value.previews));
   }
 
   if (whatsappResult.status === "fulfilled" && whatsappResult.value?.previews?.length) {

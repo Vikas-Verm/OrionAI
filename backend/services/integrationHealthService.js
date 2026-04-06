@@ -6,7 +6,10 @@
 
 const Integration = require("../models/Integration");
 const { getOAuthConfig } = require("./googleOAuthConfig");
-const { isConnectedIntegration } = require("./integrationConnectionState");
+const {
+  isConnectedIntegration,
+  getSignalConnectionState,
+} = require("./integrationConnectionState");
 const { testDatabaseConnection } = require("./connectedDatabaseService");
 const { testRazorpayConnection } = require("./tools/toolRazorpay");
 
@@ -164,6 +167,16 @@ async function checkIntegration(integration) {
           return { healthy: false, error: "Not connected" };
         // Telegram session is valid as long as it exists
         // Real validation happens when the gramjs client connects
+        return { healthy: true };
+      }
+
+      case "signal": {
+        const signalState = getSignalConnectionState(integration);
+        if (!signalState.hasSession) {
+          return { healthy: false, error: "Not connected" };
+        }
+        const { getWhoAmI } = require("./signalMatrixService");
+        await getWhoAmI(userId);
         return { healthy: true };
       }
 

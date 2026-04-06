@@ -8,6 +8,11 @@ const { chatCompleteNoSystem } = require("./llmService");
 const tg = require("./tools/toolTelegramMTProto");
 const { getOrCreateClient } = require("./tools/toolWhatsapp");
 const {
+  listSignalRooms,
+  getSignalRoomTimeline,
+} = require("./signalMatrixService");
+const { getSignalConnectionState } = require("./integrationConnectionState");
+const {
   ACTION_STATES,
   ACTION_STATE_META,
   buildSurfaceEligibility,
@@ -27,6 +32,7 @@ const APP_META = {
   gmail: { label: "Gmail", icon: "📧", module: "gmail" },
   slack: { label: "Slack", icon: "💬", module: "slack" },
   telegram: { label: "Telegram", icon: "✈️", module: "telegram" },
+  signal: { label: "Signal", icon: "🛡️", module: "signal" },
   whatsapp: { label: "WhatsApp", icon: "🟢", module: "whatsapp" },
 };
 
@@ -643,7 +649,7 @@ function maybeLogStateDebug(states = [], options = {}) {
     options.includeDebug ||
     process.env.ORION_CONVERSATION_STATE_DEBUG === "1";
 
-  if (!debugEnabled) return;
+  if (!debugEnabled || !Array.isArray(states) || states.length === 0) return;
 
   console.debug(
     "[conversation-state]",
@@ -1044,6 +1050,59 @@ async function fetchWhatsAppStates(userId, options = {}) {
   return classifyConversationBatch(conversations.filter(Boolean), "whatsapp", options);
 }
 
+async function fetchSignalStates(userId, options = {}) {
+  const integration = await Integration.findOne({
+    userId,
+    type: "signal",
+    enabled: true,
+  });
+  const signalState = getSignalConnectionState(integration);
+  if (!signalState.isConnected) return [];
+
+  const rooms = await listSignalRooms(userId, { limit: 80 }).catch(() => []);
+  const candidates = rooms
+    .filter(
+      (room) =>
+        room.isDirect ||
+        room.isGroup ||
+        Number(room.unreadCount || 0) > 0
+    )
+    .sort((a, b) => {
+      if (Boolean(a.isDirect) !== Boolean(b.isDirect)) {
+        return Number(b.isDirect) - Number(a.isDirect);
+      }
+      if (Number(a.highlightCount || 0) !== Number(b.highlightCount || 0)) {
+        return Number(b.highlightCount || 0) - Number(a.highlightCount || 0);
+      }
+      return Number(b.unreadCount || 0) - Number(a.unreadCount || 0);
+    })
+    .slice(0, SOURCE_THRESHOLDS.signal.maxConversations);
+
+  const me = {
+    mxid: integration.matrix?.mxid || integration.signal?.mxid || "",
+    displayName: integration.signal?.displayName || "",
+  };
+
+  const conversations = await Promise.all(
+    candidates.map(async (room) => {
+      try {
+        const timeline = await getSignalRoomTimeline(userId, room.roomId, {
+          limit: SOURCE_THRESHOLDS.signal.messageLimit,
+        });
+        return conversationSourceAdapters.normalizeSignalConversation(
+          timeline.room || room,
+          timeline.messages || [],
+          me
+        );
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  return classifyConversationBatch(conversations.filter(Boolean), "signal", options);
+}
+
 async function fetchStatesForSource(sourceType, userId, options = {}) {
   switch (sourceType) {
     case "gmail":
@@ -1052,6 +1111,8 @@ async function fetchStatesForSource(sourceType, userId, options = {}) {
       return fetchSlackStates(userId, options);
     case "telegram":
       return fetchTelegramStates(userId, options);
+    case "signal":
+      return fetchSignalStates(userId, options);
     case "whatsapp":
       return fetchWhatsAppStates(userId, options);
     default:
@@ -1081,7 +1142,7 @@ async function getCommunicationActionStates(userId, options = {}) {
   const source = options.source || "all";
   const sources =
     source === "all"
-      ? ["gmail", "slack", "telegram", "whatsapp"]
+      ? ["gmail", "slack", "telegram", "signal", "whatsapp"]
       : [source].filter(Boolean);
 
   const [results, latestActionsByItem] = await Promise.all([

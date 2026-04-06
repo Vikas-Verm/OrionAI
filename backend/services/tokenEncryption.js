@@ -46,6 +46,8 @@ function getKey() {
 // Returns: "iv:tag:encrypted" (all hex) or original value if no key set
 function encrypt(plaintext) {
   if (!plaintext) return plaintext;
+  if (typeof plaintext !== "string") return plaintext;
+  if (plaintext.startsWith("enc:")) return plaintext;
 
   const key = getKey();
   if (!key) return plaintext; // no key = store as-is (backward compat)
@@ -71,6 +73,7 @@ function encrypt(plaintext) {
 // Handles both encrypted ("enc:iv:tag:data") and plain (legacy) values
 function decrypt(value) {
   if (!value) return value;
+  if (typeof value !== "string") return value;
 
   // Plain value (not encrypted yet) — return as-is
   if (!value.startsWith("enc:")) return value;
@@ -129,6 +132,8 @@ const SENSITIVE_FIELDS = {
   google_calendar: ["accessToken", "refreshToken", "clientSecret"],
   slack: ["userToken", "botToken", "accessToken", "clientSecret"],
   telegram: ["sessionString", "pendingSessionString", "apiHash"],
+  signal: ["password", "accessToken"],
+  matrix: ["accessToken"],
   whatsapp: ["sessionData"],
   jira: ["apiToken"],
   notion: ["apiToken"],

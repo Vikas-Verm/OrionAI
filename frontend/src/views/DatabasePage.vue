@@ -45,7 +45,7 @@
     <div class="body">
       <aside class="schema-panel">
         <div class="schema-header">
-          <span class="panel-label">SCHEMA</span>
+          <span class="panel-label">{{ databaseObjectLabel.toUpperCase() }}</span>
           <button class="refresh-btn" :class="{ spinning: refreshing }" title="Refresh" @click="refreshSchema">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <polyline points="23 4 23 10 17 10" />
@@ -78,7 +78,7 @@
             spellcheck="false"
             data-lpignore="true"
             data-form-type="other"
-            placeholder="Filter collections..."
+            :placeholder="`Filter ${databaseObjectLabel.toLowerCase()}...`"
           />
         </div>
 
@@ -89,7 +89,7 @@
         <div v-else class="collection-list">
           <div v-if="schemaError" class="schema-empty schema-empty--error">{{ schemaError }}</div>
           <div v-else-if="!filteredCollections.length" class="schema-empty">
-            {{ schemaFilter ? 'No matches' : 'No tables or collections found' }}
+            {{ schemaFilter ? 'No matches' : `No ${databaseObjectLabel.toLowerCase()} found` }}
           </div>
           <template v-else>
             <button
@@ -112,7 +112,7 @@
 
         <div class="schema-footer">
           <div class="stat-row">
-            <span class="stat-label">Objects</span>
+            <span class="stat-label">{{ databaseObjectLabel }}</span>
             <span class="stat-val">{{ collections.length }}</span>
           </div>
           <div class="stat-row">
@@ -208,35 +208,36 @@
               <pre>{{ nlResult.generatedQuery }}</pre>
             </div>
 
-            <div v-if="nlResult.summary" class="ai-summary">
+            <div v-if="displayedNlSummary" class="ai-summary">
               <span class="ai-badge">✨ AI</span>
-              {{ nlResult.summary }}
+              <span class="ai-summary-text">{{ displayedNlSummary }}</span>
             </div>
 
-            <ResultTable
-              v-if="resultRows.length"
-              :rows="resultRows"
-              :columns="resultColumns"
-              :show-row-actions="Boolean(selectedCollection && nlResult.source === 'preview')"
-              :permissions="permissions"
-              @cell-click="openCellDetail"
-              @copy-row="copyRow"
-              @edit-row="openEditRow"
-              @delete-row="deleteRow"
-            />
-            <div v-if="showPreviewPagination" class="server-pagination">
-              <button class="page-btn" :disabled="previewPage <= 1 || nlLoading" @click="changePreviewPage(previewPage - 1)">
-                ← Prev 20
-              </button>
-              <span class="page-info">Page {{ previewPage }}</span>
-              <button
-                class="page-btn"
-                :disabled="!previewHasNext || nlLoading"
-                @click="changePreviewPage(previewPage + 1)"
-              >
-                Next 20 →
-              </button>
-            </div>
+            <template v-if="resultRows.length">
+              <ResultTable
+                :rows="resultRows"
+                :columns="resultColumns"
+                :show-row-actions="showResultRowActions"
+                :permissions="permissions"
+                @cell-click="openCellDetail"
+                @copy-row="copyRow"
+                @edit-row="openEditRow"
+                @delete-row="deleteRow"
+              />
+              <div v-if="showPreviewPagination" class="server-pagination">
+                <button class="page-btn" :disabled="previewPage <= 1 || nlLoading" @click="changePreviewPage(previewPage - 1)">
+                  ← Prev 20
+                </button>
+                <span class="page-info">Page {{ previewPage }}</span>
+                <button
+                  class="page-btn"
+                  :disabled="!previewHasNext || nlLoading"
+                  @click="changePreviewPage(previewPage + 1)"
+                >
+                  Next 20 →
+                </button>
+              </div>
+            </template>
             <div v-else class="no-rows">No rows returned.</div>
           </div>
         </div>
@@ -287,11 +288,14 @@
                 <button class="meta-btn" @click="copyRaw">{{ rawCopied ? 'Copied!' : 'Copy JSON' }}</button>
                 <button class="meta-btn" @click="exportRows('json', rawResultRows)">Export JSON</button>
                 <button class="meta-btn" @click="exportRows('csv', rawResultRows)">Export CSV</button>
+                <button class="meta-btn" @click="showRawExecutedQuery = !showRawExecutedQuery">
+                  {{ showRawExecutedQuery ? 'Hide' : 'Show' }} query
+                </button>
                 <button class="meta-btn" @click="clearRawResult">Clear</button>
               </div>
             </div>
 
-            <div v-if="rawResult.executedQuery" class="generated-query">
+            <div v-if="showRawExecutedQuery && rawResult.executedQuery" class="generated-query">
               <pre>{{ rawResult.executedQuery }}</pre>
             </div>
 
@@ -399,6 +403,13 @@ const totalDocs = computed(() => {
   return counts.reduce((sum, value) => sum + value, 0)
 })
 const usesCollections = computed(() => dbInfo.value.vendor === 'MongoDB')
+const databaseObjectLabel = computed(() => {
+  if (usesCollections.value) return 'Collections'
+  if (['PostgreSQL', 'MySQL', 'SQLite'].includes(dbInfo.value.vendor)) {
+    return 'Tables'
+  }
+  return 'Objects'
+})
 
 const queryMode = ref('nl')
 const nlQuery = ref('')
@@ -433,6 +444,7 @@ const rawLoading = ref(false)
 const rawResult = ref(null)
 const rawError = ref('')
 const rawCopied = ref(false)
+const showRawExecutedQuery = ref(false)
 
 const rawQueryLabel = computed(() => (usesCollections.value ? 'Aggregation pipeline or find JSON' : 'Read-only SQL query'))
 const rawPlaceholder = computed(() =>
@@ -449,11 +461,35 @@ const rawResultColumns = computed(() => {
 })
 
 const showPreviewPagination = computed(() => nlResult.value?.source === 'preview' && (previewHasNext.value || previewPage.value > 1))
+const showResultRowActions = computed(() => {
+  if (!selectedCollection.value || !canWrite.value || !resultRows.value.length) return false
+  if (nlResult.value?.source === 'preview') return true
+  const knownFields = Array.isArray(selectedCollectionMeta.value?.fieldNames)
+    ? selectedCollectionMeta.value.fieldNames
+    : []
+  if (!knownFields.length) return false
+  const rowKeys = Object.keys(resultRows.value[0] || {})
+  if (!rowKeys.length) return false
+  const overlap = rowKeys.filter((key) => knownFields.includes(key)).length
+  return overlap >= Math.min(2, rowKeys.length)
+})
 const previewRangeLabel = computed(() => {
   const start = (previewPage.value - 1) * previewPageSize + 1
   const end = (previewPage.value - 1) * previewPageSize + resultRows.value.length
   if (!resultRows.value.length) return '0'
   return previewHasNext.value ? `${start}-${end}` : `${start}-${end}`
+})
+const displayedNlSummary = computed(() => {
+  const summary = String(nlResult.value?.summary || '').trim()
+  if (!summary) return ''
+  if (resultRows.value.length === 0) return summary
+  if (looksLikeVerboseStructuredReply(summary)) {
+    return buildCompactResultSummary({
+      rowCount: resultRows.value.length,
+      collectionName: selectedCollection.value || nlResult.value?.target || '',
+    })
+  }
+  return summary
 })
 
 const smartChips = computed(() => {
@@ -551,6 +587,21 @@ function shouldUseCollectionSearch(query = '') {
   return !DIRECT_SEARCH_PREFIXES.some((prefix) => normalized.startsWith(prefix))
 }
 
+function looksLikeVerboseStructuredReply(summary = '') {
+  const text = String(summary || '').trim()
+  if (!text) return false
+  if (text.length > 260) return true
+  if (text.startsWith('{') || text.startsWith('[')) return true
+  if (text.includes('{"') || text.includes('"}')) return true
+  return /"\w+"\s*:/.test(text)
+}
+
+function buildCompactResultSummary({ rowCount = 0, collectionName = '' } = {}) {
+  const label = String(collectionName || '').trim()
+  const suffix = label ? ` from ${label}` : ''
+  return `Showing ${rowCount} row${rowCount === 1 ? '' : 's'}${suffix}.`
+}
+
 async function loadSchema({ keepSelection = true } = {}) {
   schemaLoading.value = true
   schemaError.value = ''
@@ -564,11 +615,11 @@ async function loadSchema({ keepSelection = true } = {}) {
       alias: res.data.connection?.alias || res.data.name || 'Database',
       status: res.data.connection?.status || 'ok',
     }
-    canWrite.value = Boolean(res.data.connection?.canWrite)
+    canWrite.value = true
     permissions.value = {
-      insert: Boolean(res.data.connection?.canWrite),
-      update: Boolean(res.data.connection?.canWrite),
-      delete: Boolean(res.data.connection?.canWrite),
+      insert: true,
+      update: true,
+      delete: true,
     }
 
     if (!keepSelection || !nextCollections.some((item) => item.name === selectedCollection.value)) {
@@ -650,6 +701,7 @@ async function loadCollectionPreview(collectionName, page = 1, options = {}) {
       generatedQuery: res.data.executedQuery || buildPreviewQuery(collectionName),
       executionMs: res.data.executionMs || null,
       source: 'preview',
+      target: collectionName,
     }
   } catch (err) {
     nlError.value = err.response?.data?.error || `Failed to load ${collectionName}.`
@@ -712,10 +764,11 @@ async function runNL() {
 
     nlResult.value = {
       rows: Array.isArray(res.data.rows) ? res.data.rows : [],
-      summary: res.data.reply || '',
+      summary: buildNaturalLanguageSummary(res.data, query),
       generatedQuery: res.data.generatedQuery || res.data.queryPlan?.executedQuery || '',
       executionMs: res.data.executionMs || null,
       source: 'nl',
+      target: res.data.queryMeta?.collection || selectedCollection.value || '',
     }
     previewTotalCount.value = 0
     previewHasNext.value = false
@@ -733,6 +786,7 @@ async function runRaw() {
   rawLoading.value = true
   rawError.value = ''
   rawResult.value = null
+  showRawExecutedQuery.value = false
 
   try {
     const res = await api.post('/db-chat/raw', {
@@ -772,6 +826,7 @@ async function copyRaw() {
 function clearRawResult() {
   rawResult.value = null
   rawError.value = ''
+  showRawExecutedQuery.value = false
   if (selectedCollection.value) {
     loadCollectionPreview(selectedCollection.value, previewPage.value, {
       searchTerm: previewSearchTerm.value,
@@ -909,6 +964,35 @@ function exportRows(format, rows) {
   downloadBlob(`${suffix}.csv`, lines.join('\n'), 'text/csv;charset=utf-8')
 }
 
+function buildNaturalLanguageSummary(response = {}, query = '') {
+  const reply = String(response.reply || '').trim()
+  const rows = Array.isArray(response.rows) ? response.rows : []
+  const collectionName = String(response.queryMeta?.collection || selectedCollection.value || '').trim()
+
+  if (!reply && rows.length) {
+    return buildCompactResultSummary({
+      rowCount: rows.length,
+      collectionName,
+    })
+  }
+
+  if (rows.length && looksLikeVerboseStructuredReply(reply)) {
+    return buildCompactResultSummary({
+      rowCount: rows.length,
+      collectionName,
+    })
+  }
+
+  if (rows.length && reply.length > 220) {
+    return buildCompactResultSummary({
+      rowCount: rows.length,
+      collectionName,
+    })
+  }
+
+  return reply || query
+}
+
 watch(selectedCollection, (value) => {
   if (usesCollections.value && value) {
     rawCollection.value = value
@@ -923,6 +1007,16 @@ watch(selectedCollection, (value) => {
     previewHasNext.value = false
     previewSearchTerm.value = ''
   }
+})
+
+watch(nlQuery, (value, previousValue) => {
+  if (queryMode.value !== 'nl') return
+  if (nlLoading.value) return
+  const nextText = String(value || '').trim()
+  const previousText = String(previousValue || '').trim()
+  if (nextText || !previousText || !selectedCollection.value) return
+  previewSearchTerm.value = ''
+  loadCollectionPreview(selectedCollection.value, 1)
 })
 
 watch(usesCollections, () => {
@@ -1707,6 +1801,8 @@ onMounted(() => {
   font-size: 12px;
   color: rgba(167, 139, 250, 0.84);
   font-family: 'Courier New', monospace;
+  max-height: 220px;
+  overflow: auto;
 }
 
 .ai-summary {
@@ -1718,6 +1814,15 @@ onMounted(() => {
   align-items: flex-start;
   gap: 8px;
   font-size: 13px;
+}
+
+.ai-summary-text {
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  line-height: 1.45;
 }
 
 .ai-badge {

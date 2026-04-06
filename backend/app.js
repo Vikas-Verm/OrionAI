@@ -19,6 +19,7 @@ const gmailModuleRoutes = require("./routes/gmailModuleRoutes");
 const jiraModuleRoutes = require("./routes/jiraModuleRoutes");
 const calendarModuleRoutes = require("./routes/calendarModuleRoutes");
 const slackModuleRoutes = require("./routes/slackModuleRoutes");
+const signalRoutes = require("./routes/signalRoutes");
 
 const { gmailOAuthCallback } = require("./controllers/gmailOauthController");
 const {
@@ -88,6 +89,7 @@ app.use("/api/gmail", gmailModuleRoutes);
 app.use("/api/jira", jiraModuleRoutes);
 app.use("/api/calendar", calendarModuleRoutes);
 app.use("/api/slack", slackModuleRoutes);
+app.use("/api/signal", signalRoutes);
 app.post("/api/webhooks/gmail", handleGmailWebhook);
 app.post("/api/webhooks/slack", handleSlackWebhook);
 

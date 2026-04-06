@@ -5,7 +5,10 @@ const jwt = require("jsonwebtoken");
 const Integration = require("../models/Integration");
 const { chatCompleteNoSystem } = require("./llmService");
 const { getCommunicationNotificationSignal } = require("./communicationActionService");
+const { getSignalConnectionState } = require("./integrationConnectionState");
 const {
+  getGmailClient,
+  getGmailAttentionFromClient,
   getCalendarUpcomingSignal,
 } = require("./workspaceSignalsService");
 
@@ -14,6 +17,7 @@ const pollers = new Map();
 const lastCounts = new Map();
 const lastGmailMsgIds = new Map();
 const lastTelegramCount = new Map();
+const lastSignalCount = new Map();
 const lastSlackCount = new Map();
 const lastCalendarEventIds = new Map();
 const telegramListeners = new Map();
@@ -112,11 +116,12 @@ function init(httpServer) {
 async function pollUser(userId, isFirstRun = false) {
   if (!connections.has(userId)) return;
 
-  const [gmailRes, calendarRes, telegramRes, slackRes, whatsappRes] =
+  const [gmailRes, calendarRes, telegramRes, signalRes, slackRes, whatsappRes] =
     await Promise.allSettled([
       checkGmail(userId, isFirstRun),
       checkCalendar(userId, isFirstRun),
       checkTelegram(userId, isFirstRun),
+      checkSignal(userId, isFirstRun),
       checkSlack(userId, isFirstRun),
       checkWhatsApp(userId),
     ]);
@@ -126,6 +131,7 @@ async function pollUser(userId, isFirstRun = false) {
     google_calendar:
       calendarRes.status === "fulfilled" ? calendarRes.value : null,
     telegram: telegramRes.status === "fulfilled" ? telegramRes.value : null,
+    signal: signalRes.status === "fulfilled" ? signalRes.value : null,
     slack: slackRes.status === "fulfilled" ? slackRes.value : null,
     whatsapp: whatsappRes.status === "fulfilled" ? whatsappRes.value : null,
   };
@@ -202,7 +208,25 @@ async function refreshUserSignals(userId) {
 // ─────────────────────────────────────────────────────────────────────────────
 async function checkGmail(userId, isFirstRun) {
   try {
-    const attention = await getCommunicationNotificationSignal(userId, "gmail");
+    let attention = null;
+    try {
+      const communicationSignal = await getCommunicationNotificationSignal(
+        userId,
+        "gmail"
+      );
+      if (communicationSignal && Number(communicationSignal.count || 0) > 0) {
+        attention = communicationSignal;
+      }
+    } catch {}
+
+    if (!attention) {
+      const client = await getGmailClient(userId);
+      if (!client) return null;
+      attention = await getGmailAttentionFromClient(client.gmail, client.integration, {
+        previewLimit: 5,
+      });
+    }
+
     if (!attention) return null;
     const currentItems = (attention?.items || attention?.previews || []).slice(0, 5);
     const currentIds = new Set(
@@ -338,6 +362,64 @@ async function checkTelegram(userId, isFirstRun) {
       }),
       _isNew: isNew,
       _newCount: isNew ? count - (prevCount || 0) : 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function checkSignal(userId, isFirstRun) {
+  try {
+    const integration = await Integration.findOne({
+      userId,
+      type: "signal",
+      enabled: true,
+    });
+    if (!getSignalConnectionState(integration).isConnected) return null;
+
+    let result = null;
+    try {
+      const communicationSignal = await getCommunicationNotificationSignal(
+        userId,
+        "signal"
+      );
+      if (communicationSignal && Number(communicationSignal.count || 0) > 0) {
+        result = {
+          count: Number(communicationSignal.count || 0) || 0,
+          rooms: communicationSignal.previews || [],
+          summary: communicationSignal.summary || null,
+        };
+      }
+    } catch {}
+
+    if (!result) {
+      const { getSignalUnreadSignal } = require("./signalMatrixService");
+      result = await getSignalUnreadSignal(userId);
+    }
+    const rooms = result?.rooms || [];
+    const count = Number(result?.count || 0) || 0;
+
+    const prevCount = lastSignalCount.get(userId);
+    const isNew = !isFirstRun && prevCount !== undefined && count > prevCount;
+    lastSignalCount.set(userId, count);
+
+    return {
+      count,
+      items: rooms.slice(0, 5).map((room) => ({
+        id: room.roomId,
+        chatId: room.roomId || room.chatId || room.id,
+        senderKey: room.roomId || room.chatId || room.id,
+        name: room.name,
+        unread: room.unreadCount ?? room.unread ?? 0,
+        preview: room.lastMessage || room.preview || "",
+        latestMessageId: room.lastEventId || room.latestMessageId || null,
+        latestMessageAt: room.lastMessageAt || room.latestMessageAt || null,
+        highlight: room.highlightCount || 0,
+      })),
+      summary: result?.summary || null,
+      _isNew: isNew,
+      _newCount: isNew ? count - (prevCount || 0) : 0,
+      highSignalCount: rooms.filter((room) => Number(room.highlightCount || 0) > 0).length,
     };
   } catch {
     return null;
@@ -769,6 +851,10 @@ async function aiProcess(app, items) {
       if (app === "gmail") return `Email from ${i.from}: "${i.subject}"`;
       if (app === "telegram")
         return `Message from ${i.name}: "${
+          i.preview || i.unread + " messages"
+        }"`;
+      if (app === "signal")
+        return `Signal from ${i.name}: "${
           i.preview || i.unread + " messages"
         }"`;
       if (app === "slack")

@@ -3,6 +3,7 @@
 const Integration = require("../models/Integration");
 const { chatCompleteNoSystem } = require("./llmService");
 const { getCommunicationNotificationSignal } = require("./communicationActionService");
+const { getSignalConnectionState } = require("./integrationConnectionState");
 const {
   getGmailAttentionSignal,
   getCalendarUpcomingSignal,
@@ -32,11 +33,12 @@ async function getUnreadSignals(userId) {
     checkCalendar(userId),
     checkSlack(userId),
     checkTelegram(userId),
+    checkSignal(userId),
     checkWhatsApp(userId),
   ]);
 
   const results = {};
-  const [gmail, calendar, slack, telegram, whatsapp] = checks;
+  const [gmail, calendar, slack, telegram, signal, whatsapp] = checks;
 
   if (gmail.status === "fulfilled" && gmail.value) results.gmail = gmail.value;
   if (calendar.status === "fulfilled" && calendar.value) {
@@ -45,6 +47,8 @@ async function getUnreadSignals(userId) {
   if (slack.status === "fulfilled" && slack.value) results.slack = slack.value;
   if (telegram.status === "fulfilled" && telegram.value)
     results.telegram = telegram.value;
+  if (signal.status === "fulfilled" && signal.value)
+    results.signal = signal.value;
   if (whatsapp.status === "fulfilled" && whatsapp.value)
     results.whatsapp = whatsapp.value;
 
@@ -54,26 +58,27 @@ async function getUnreadSignals(userId) {
 async function checkGmail(userId) {
   try {
     const signal = await getCommunicationNotificationSignal(userId, "gmail");
-    if (!signal) return null;
+    if (signal && Number(signal.count || 0) > 0) {
+      return {
+        count: signal.count,
+        previews: signal.previews || [],
+        summary: signal.summary,
+        app: "gmail",
+      };
+    }
+  } catch {}
+
+  try {
+    const fallbackSignal = await getGmailAttentionSignal(userId);
+    if (!fallbackSignal) return null;
     return {
-      count: signal.count,
-      previews: signal.previews || [],
-      summary: signal.summary,
+      count: fallbackSignal.count,
+      previews: fallbackSignal.previews || [],
+      summary: fallbackSignal.summary,
       app: "gmail",
     };
   } catch {
-    try {
-      const fallbackSignal = await getGmailAttentionSignal(userId);
-      if (!fallbackSignal) return null;
-      return {
-        count: fallbackSignal.count,
-        previews: fallbackSignal.previews || [],
-        summary: fallbackSignal.summary,
-        app: "gmail",
-      };
-    } catch {
-      return null;
-    }
+    return null;
   }
 }
 
@@ -273,6 +278,57 @@ async function checkWhatsApp(userId) {
   }
 }
 
+async function checkSignal(userId) {
+  try {
+    const integration = await Integration.findOne({
+      userId,
+      type: "signal",
+      enabled: true,
+    });
+    if (!getSignalConnectionState(integration).isConnected) return null;
+
+    let result = null;
+    try {
+      const communicationSignal = await getCommunicationNotificationSignal(
+        userId,
+        "signal"
+      );
+      if (communicationSignal && Number(communicationSignal.count || 0) > 0) {
+        result = {
+          count: Number(communicationSignal.count || 0) || 0,
+          previews: communicationSignal.previews || [],
+          summary: communicationSignal.summary || null,
+        };
+      }
+    } catch {}
+
+    if (!result) {
+      const { getSignalUnreadSignal } = require("./signalMatrixService");
+      result = await getSignalUnreadSignal(userId);
+    }
+    const previews = (result?.previews || []).slice(0, 3);
+    const count = Number(result?.count || 0) || 0;
+
+    const summary =
+      count > 0 && previews.length
+        ? await aiSummarize(
+            "Signal",
+            count,
+            previews.map((preview) => `${preview.name}: ${preview.unread} unread`)
+          )
+        : null;
+
+    return {
+      count,
+      previews,
+      summary,
+      app: "signal",
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function aiSummarize(app, count, items) {
   try {
     const prompt =
@@ -291,5 +347,6 @@ module.exports = {
   checkCalendar,
   checkSlack,
   checkTelegram,
+  checkSignal,
   checkWhatsApp,
 };

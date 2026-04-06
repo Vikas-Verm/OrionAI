@@ -4,6 +4,24 @@ function hasGoogleConnection(data = {}) {
   return Boolean(data?.refreshToken || data?.accessToken || data?.userEmail);
 }
 
+function getSignalConnectionState(integration = {}) {
+  const matrix = integration?.matrix || {};
+  const legacy = integration?.signal || {};
+  const hasSession = Boolean(
+    (matrix.accessToken && matrix.homeserverUrl && matrix.mxid) ||
+      (legacy.accessToken && legacy.homeserverUrl && legacy.mxid)
+  );
+  const loginState = String(matrix.loginState || "").trim().toLowerCase();
+
+  return {
+    hasSession,
+    loginState: loginState || (legacy.connectedAt ? "connected" : "disconnected"),
+    isConnected: loginState
+      ? loginState === "connected" && hasSession
+      : Boolean(legacy.accessToken && legacy.homeserverUrl && legacy.mxid),
+  };
+}
+
 function isConnectedIntegration(integration = {}) {
   const type = integration?.type;
   if (!type) return false;
@@ -22,6 +40,10 @@ function isConnectedIntegration(integration = {}) {
 
   if (type === "telegram") {
     return Boolean(integration.telegram?.sessionString);
+  }
+
+  if (type === "signal") {
+    return getSignalConnectionState(integration).isConnected;
   }
 
   if (type === "whatsapp") {
@@ -55,4 +77,5 @@ function isConnectedIntegration(integration = {}) {
 
 module.exports = {
   isConnectedIntegration,
+  getSignalConnectionState,
 };

@@ -70,6 +70,8 @@
                         <span v-else-if="getStatus(card.type) === 'connected'" class="badge-connected">
                             <span class="badge-dot green"></span> Connected
                         </span>
+                        <span v-else-if="getStatus(card.type) === 'pending'" class="badge-pending">Connecting</span>
+                        <span v-else-if="getStatus(card.type) === 'error'" class="badge-error">Needs attention</span>
                         <span v-else class="badge-disconnected">Not connected</span>
                         <svg v-if="!card.comingSoon" class="int-chevron"
                             :class="{ rotated: expandedType === card.type }" width="14" height="14" viewBox="0 0 24 24"
@@ -529,6 +531,103 @@
                                 </div>
                             </div>
                         </template>
+                        <!-- SIGNAL -->
+                        <template v-else-if="card.type === 'signal'">
+                            <div v-if="signalCardState === 'connected'" class="int-oauth-connected">
+                                <div class="int-oauth-connected-row">
+                                    <span class="int-oauth-connected-icon">✅</span>
+                                    <div class="int-oauth-connected-info">
+                                        <div class="int-oauth-connected-title">Signal connected</div>
+                                        <div class="int-oauth-connected-email">
+                                            {{ signalStatus?.profile?.displayName || 'Linked successfully' }}
+                                            <span v-if="signalStatus?.roomCount" style="color:var(--text-muted);font-weight:400">
+                                                · {{ signalStatus?.roomCount }} chat{{ signalStatus?.roomCount === 1 ? '' : 's' }}
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <button class="int-oauth-reconnect-btn" :disabled="signalConnecting" @click.stop="startSignalConnect({ reconnect: true })">
+                                        <span v-if="signalConnecting" class="int-oauth-spinner"></span>
+                                        <span v-else>Reconnect</span>
+                                    </button>
+                                </div>
+                                <div class="int-actions" style="margin-top:10px">
+                                    <button class="int-btn int-btn-test" @click.stop="emit('openModule', 'signal')">
+                                        Open chats ↗
+                                    </button>
+                                    <button class="int-btn int-btn-test" @click.stop="refreshSignalStatus">
+                                        Refresh status
+                                    </button>
+                                    <button class="int-btn int-btn-remove" :disabled="removing === 'signal'" @click.stop="removeIntegration('signal')">
+                                        <span v-if="removing === 'signal'" class="int-spinner int-spinner-danger"></span>
+                                        <span v-else>Disconnect</span>
+                                    </button>
+                                </div>
+                            </div>
+                            <div v-else-if="signalCardState === 'pending'" class="int-signal-panel">
+                                <div class="int-signal-panel-head">
+                                    <div class="int-oauth-text">
+                                        <div class="int-oauth-title">Finish linking Signal</div>
+                                        <div class="int-oauth-desc">OrionAI is preparing your secure Signal session. Scan the QR code here to complete setup.</div>
+                                    </div>
+                                    <span class="badge-pending">Waiting for scan</span>
+                                </div>
+                                <div class="int-signal-qr-preview">
+                                    <img
+                                        v-if="signalStatus?.qrImageUrl"
+                                        :src="signalStatus.qrImageUrl"
+                                        alt="Signal QR code"
+                                        class="int-signal-qr-image"
+                                    />
+                                    <div v-else class="int-signal-qr-placeholder">
+                                        <span class="int-spinner"></span>
+                                        <span>Preparing QR code...</span>
+                                    </div>
+                                    <ol class="int-steps-list int-steps-list--compact">
+                                        <li>Open Signal on your phone</li>
+                                        <li>Go to Linked Devices</li>
+                                        <li>Scan this QR code</li>
+                                    </ol>
+                                </div>
+                                <div class="int-actions">
+                                    <button class="int-btn int-btn-save" @click.stop="openSignalQrModal">Open QR</button>
+                                    <button class="int-btn int-btn-test" @click.stop="refreshSignalStatus">Check status</button>
+                                    <button class="int-btn int-btn-remove" :disabled="removing === 'signal'" @click.stop="removeIntegration('signal')">
+                                        <span v-if="removing === 'signal'" class="int-spinner int-spinner-danger"></span>
+                                        <span v-else>Cancel</span>
+                                    </button>
+                                </div>
+                            </div>
+                            <div v-else-if="signalCardState === 'error'" class="int-signal-panel int-signal-panel--error">
+                                <div class="int-oauth-text">
+                                    <div class="int-oauth-title">Signal needs attention</div>
+                                    <div class="int-oauth-desc">
+                                        {{ signalStatus?.lastError || signalStatus?.error || 'We could not finish linking Signal. Try again to generate a fresh QR code.' }}
+                                    </div>
+                                </div>
+                                <div class="int-actions">
+                                    <button class="int-btn int-btn-save" :disabled="signalConnecting" @click.stop="startSignalConnect({ reconnect: true })">
+                                        <span v-if="signalConnecting" class="int-spinner"></span>
+                                        <span v-else>Retry</span>
+                                    </button>
+                                    <button class="int-btn int-btn-test" @click.stop="refreshSignalStatus">Check status</button>
+                                    <button class="int-btn int-btn-remove" :disabled="removing === 'signal'" @click.stop="removeIntegration('signal')">
+                                        <span v-if="removing === 'signal'" class="int-spinner int-spinner-danger"></span>
+                                        <span v-else>Disconnect</span>
+                                    </button>
+                                </div>
+                            </div>
+                            <div v-else class="int-oauth-block">
+                                <span style="font-size:36px;flex-shrink:0">🛡️</span>
+                                <div class="int-oauth-text">
+                                    <div class="int-oauth-title">Connect Signal securely</div>
+                                    <div class="int-oauth-desc">Link Signal in OrionAI, view live chats, upload files, and surface urgent messages in WorkspaceBriefing without any extra setup.</div>
+                                </div>
+                                <button class="int-oauth-btn-google" :disabled="signalConnecting" @click.stop="startSignalConnect()">
+                                    <span v-if="signalConnecting" class="int-oauth-spinner"></span>
+                                    <span v-else>Connect Signal</span>
+                                </button>
+                            </div>
+                        </template>
                         <!-- WHATSAPP — QR code connect -->
                         <template v-if="card.type === 'whatsapp'">
                             <div v-if="getStatus('whatsapp') === 'connected'" class="int-oauth-connected">
@@ -591,7 +690,7 @@
                         </template>
 
                         <!-- Action buttons: only for manual-token integrations -->
-                        <div v-if="!['gmail', 'google_calendar', 'telegram', 'slack', 'whatsapp'].includes(card.type)" class="int-actions">
+                        <div v-if="!['gmail', 'google_calendar', 'telegram', 'signal', 'slack', 'whatsapp'].includes(card.type)" class="int-actions">
                             <button class="int-btn int-btn-test" :disabled="testing === card.type"
                                 @click.stop="testConnection(card.type)">
                                 <span v-if="testing === card.type" class="int-spinner"></span>
@@ -628,6 +727,57 @@
                 </transition>
             </div>
         </div>
+
+        <transition name="fade">
+            <div v-if="showSignalQrModal" class="int-modal-backdrop" @click.self="closeSignalQrModal">
+                <div class="int-modal">
+                    <div class="int-modal-head">
+                        <div>
+                            <h3>Link Signal</h3>
+                            <p>Scan this QR code from Signal to finish linking your OrionAI workspace.</p>
+                        </div>
+                        <button class="int-modal-close" type="button" @click="closeSignalQrModal">✕</button>
+                    </div>
+
+                    <div class="int-modal-body">
+                        <div v-if="signalStatus?.qrImageUrl" class="int-signal-qr-modal">
+                            <img :src="signalStatus.qrImageUrl" alt="Signal QR code" class="int-signal-qr-image int-signal-qr-image--modal" />
+                        </div>
+                        <div v-else class="int-signal-qr-placeholder int-signal-qr-placeholder--modal">
+                            <span class="int-spinner"></span>
+                            <span>Preparing QR code...</span>
+                        </div>
+
+                        <ol class="int-steps-list int-steps-list--compact">
+                            <li>Open Signal on your phone</li>
+                            <li>Open Linked Devices</li>
+                            <li>Scan this QR code</li>
+                        </ol>
+
+                        <div v-if="signalStatus?.lastError || signalStatus?.error" class="int-test-result fail">
+                            {{ signalStatus?.lastError || signalStatus?.error }}
+                        </div>
+                    </div>
+
+                    <div class="int-actions">
+                        <button class="int-btn int-btn-test" @click.stop="refreshSignalStatus">Check status</button>
+                        <button
+                            v-if="signalCardState === 'error'"
+                            class="int-btn int-btn-save"
+                            :disabled="signalConnecting"
+                            @click.stop="startSignalConnect({ reconnect: true })"
+                        >
+                            <span v-if="signalConnecting" class="int-spinner"></span>
+                            <span v-else>Retry</span>
+                        </button>
+                        <button class="int-btn int-btn-remove" :disabled="removing === 'signal'" @click.stop="removeIntegration('signal')">
+                            <span v-if="removing === 'signal'" class="int-spinner int-spinner-danger"></span>
+                            <span v-else>{{ signalCardState === 'connected' ? 'Disconnect' : 'Cancel' }}</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </transition>
     </div>
 </template>
 
@@ -648,6 +798,9 @@ const connected    = reactive({})
 
 const oauthEmails = reactive({ gmail: null, google_calendar: null })
 const secretVisibility = reactive({})
+const signalStatus = ref(null)
+const signalQrModalOpen = ref(false)
+let signalPollTimer = null
 
 const cards = [
   {
@@ -714,6 +867,13 @@ const cards = [
     img:   'https://upload.wikimedia.org/wikipedia/commons/thumb/8/82/Telegram_logo.svg/2048px-Telegram_logo.svg.png',
   },
   {
+    type:  'signal',
+    name:  'Signal',
+    desc:  'Connect Signal securely inside OrionAI',
+    color: '#3b82f6',
+    emoji: '🛡️',
+  },
+  {
     type:  'whatsapp',
     name:  'WhatsApp',
     desc:  'Read and send messages via WhatsApp Web',
@@ -727,6 +887,7 @@ const INITIAL_FORMS = {
     jira:    { domain: '', email: '', apiToken: '', projectKey: '' },
     database:{ vendor: 'postgres', connectionString: '', filePath: '', ssl: false, defaultSchema: 'public', readOnly: true },
     razorpay:{ keyId: '', keySecret: '', accountNumber: '', webhookSecret: '' },
+    signal:  {},
     webhook: { url: '', method: 'POST', secret: '' },
 }
 
@@ -735,6 +896,7 @@ const forms = reactive({
     jira:    { ...INITIAL_FORMS.jira },
     database:{ ...INITIAL_FORMS.database },
     razorpay:{ ...INITIAL_FORMS.razorpay },
+    signal:  { ...INITIAL_FORMS.signal },
     webhook: { ...INITIAL_FORMS.webhook },
 })
 
@@ -743,9 +905,81 @@ const filteredCards  = computed(() =>
         ? cards.filter(c => c.name.toLowerCase().includes(search.value.toLowerCase()) || c.desc.toLowerCase().includes(search.value.toLowerCase()))
         : cards
 )
-const connectedCount = computed(() => Object.keys(connected).length)
+const SIGNAL_PENDING_STATES = new Set(['creating_account', 'logging_in', 'pending_qr'])
+const connectedCount = computed(() => cards.filter(card => getStatus(card.type) === 'connected').length)
+const signalCardState = computed(() => getStatus('signal'))
+const showSignalQrModal = computed(() =>
+    signalQrModalOpen.value && ['pending', 'error'].includes(signalCardState.value)
+)
 
-function getStatus(type) { return connected[type] ? 'connected' : 'disconnected' }
+function getStatus(type) {
+    if (type === 'signal') {
+        if (signalStatus.value?.connected) return 'connected'
+        const loginState = String(signalStatus.value?.loginState || connected.signal?.matrix?.loginState || '').trim()
+        if (loginState === 'connected') return 'connected'
+        if (SIGNAL_PENDING_STATES.has(loginState)) return 'pending'
+        if (loginState === 'error') return 'error'
+        return 'disconnected'
+    }
+    return connected[type] ? 'connected' : 'disconnected'
+}
+
+function applySignalIntegrationState(statusData = signalStatus.value) {
+    const loginState = String(
+        statusData?.connected
+            ? 'connected'
+            : statusData?.loginState || connected.signal?.matrix?.loginState || 'disconnected'
+    ).trim()
+    if (!statusData && !connected.signal) return
+
+    if (statusData?.connected || connected.signal || SIGNAL_PENDING_STATES.has(loginState) || loginState === 'error') {
+        connected.signal = {
+            ...(connected.signal || {}),
+            type: 'signal',
+            name: 'Signal',
+            enabled: true,
+            transport: 'mautrix',
+            connected: Boolean(statusData?.connected),
+            matrix: {
+                ...(connected.signal?.matrix || {}),
+                loginState,
+                lastError: statusData?.lastError || statusData?.error || '',
+                connectedAt: statusData?.connectedAt || connected.signal?.matrix?.connectedAt || null,
+            },
+        }
+    }
+}
+
+function stopSignalPolling() {
+    if (signalPollTimer) {
+        clearInterval(signalPollTimer)
+        signalPollTimer = null
+    }
+}
+
+function syncSignalPolling() {
+    const loginState = String(signalStatus.value?.loginState || '').trim()
+    if (!SIGNAL_PENDING_STATES.has(loginState)) {
+        stopSignalPolling()
+        return
+    }
+    if (signalPollTimer) return
+    signalPollTimer = setInterval(async () => {
+        try {
+            await refreshSignalStatus()
+        } catch (err) {
+            console.debug('Failed to refresh Signal status:', err?.message || err)
+        }
+    }, 2500)
+}
+
+function openSignalQrModal() {
+    signalQrModalOpen.value = true
+}
+
+function closeSignalQrModal() {
+    signalQrModalOpen.value = false
+}
 
 function secretKey(section, field) {
     return `${section}.${field}`
@@ -830,11 +1064,30 @@ async function loadIntegrations() {
     Object.keys(connected).forEach((key) => delete connected[key])
     oauthEmails.gmail = null
     oauthEmails.google_calendar = null
+    signalStatus.value = null
     for (const int of res.data) {
         connected[int.type] = int
         const email = extractEmail(int)
         if (email) oauthEmails[int.type] = email
         if (forms[int.type] && int[int.type]) Object.assign(forms[int.type], int[int.type])
+        if (int.type === 'signal' && !signalStatus.value) {
+            signalStatus.value = {
+                connected: Boolean(int.connected || int.matrix?.loginState === 'connected'),
+                loginState: int.matrix?.loginState || 'disconnected',
+                lastError: int.matrix?.lastError || '',
+                error: int.matrix?.lastError || '',
+                connectedAt: int.matrix?.connectedAt || null,
+                roomCount: 0,
+                unreadCount: 0,
+                profile: null,
+                qrImageUrl: null,
+            }
+        }
+    }
+    try {
+        await refreshSignalStatus()
+    } catch (err) {
+        console.debug('Failed to refresh Signal status during integrations load:', err?.message || err)
     }
     await nextTick()
     applyAutofillGuards()
@@ -870,7 +1123,10 @@ async function saveIntegration(type) {
     } finally { saving.value = null }
 }
 
-onUnmounted(() => { clearInterval(whatsappPollTimer) })
+onUnmounted(() => {
+    clearInterval(whatsappPollTimer)
+    stopSignalPolling()
+})
 
 async function testConnection(type) {
     await saveIntegration(type)
@@ -912,6 +1168,84 @@ function openOAuthPopup(url, windowName, successType) {
 
 // ── Gmail OAuth ───────────────────────────────────────────
 const gmailConnecting = ref(false)
+const signalConnecting = ref(false)
+
+async function refreshSignalStatus() {
+    const previousConnected = Boolean(signalStatus.value?.connected)
+    const previousState = String(signalStatus.value?.loginState || '').trim()
+    try {
+        const { data } = await api.get('/api/signal/status')
+        signalStatus.value = data
+    } catch (err) {
+        signalStatus.value = {
+            connected: false,
+            loginState: 'error',
+            lastError: err.response?.data?.error || err.message || 'Signal status unavailable',
+            error: err.response?.data?.error || err.message || 'Signal status unavailable',
+            roomCount: 0,
+            unreadCount: 0,
+            profile: null,
+            qrImageUrl: null,
+        }
+    }
+    applySignalIntegrationState(signalStatus.value)
+    if (
+        signalCardState.value === 'pending' &&
+        (!SIGNAL_PENDING_STATES.has(previousState) || signalConnecting.value)
+    ) {
+        signalQrModalOpen.value = true
+    }
+    if (signalCardState.value === 'connected') {
+        signalQrModalOpen.value = false
+    }
+    syncSignalPolling()
+    if (
+        previousConnected !== Boolean(signalStatus.value?.connected) ||
+        previousState !== String(signalStatus.value?.loginState || '').trim()
+    ) {
+        notifyIntegrationsUpdated()
+    }
+    if (
+        signalStatus.value?.connected &&
+        (!previousConnected || previousState !== 'connected')
+    ) {
+        testResults.signal = { ok: true, message: 'Signal connected successfully!' }
+    }
+}
+
+async function startSignalConnect(options = {}) {
+    const reconnect = Boolean(options?.reconnect)
+    signalConnecting.value = true
+    testResults.signal = null
+    signalQrModalOpen.value = true
+    try {
+        const { data } = await api.post('/api/signal/connect', {
+            reconnect,
+        })
+        if (data.integration) connected.signal = data.integration
+        signalStatus.value = data.status || null
+        applySignalIntegrationState(signalStatus.value)
+        syncSignalPolling()
+        if (signalCardState.value === 'connected') {
+            signalQrModalOpen.value = false
+            testResults.signal = { ok: true, message: 'Signal connected successfully!' }
+        } else if (signalCardState.value === 'pending') {
+            testResults.signal = { ok: true, message: 'Scan the QR code to finish linking Signal.' }
+        } else if (signalCardState.value === 'error') {
+            testResults.signal = {
+                ok: false,
+                error: signalStatus.value?.lastError || signalStatus.value?.error || 'Signal connect failed',
+            }
+        }
+        notifyIntegrationsUpdated()
+    } catch (err) {
+        testResults.signal = { ok: false, error: err.response?.data?.error || 'Signal connect failed' }
+        await refreshSignalStatus()
+    } finally {
+        signalConnecting.value = false
+    }
+}
+
 async function startGmailOAuth() {
     gmailConnecting.value = true
     try {
@@ -994,7 +1328,23 @@ async function removeIntegration(type) {
     removing.value    = type
     testResults[type] = null
     try {
-        await api.delete(`/api/integrations/${type}`)
+        if (type === 'signal') {
+            await api.post('/api/signal/disconnect')
+            stopSignalPolling()
+            signalQrModalOpen.value = false
+            signalStatus.value = {
+                connected: false,
+                loginState: 'disconnected',
+                lastError: '',
+                error: '',
+                roomCount: 0,
+                unreadCount: 0,
+                profile: null,
+                qrImageUrl: null,
+            }
+        } else {
+            await api.delete(`/api/integrations/${type}`)
+        }
         delete connected[type]
         oauthEmails[type] = null
         if (INITIAL_FORMS[type]) Object.assign(forms[type], INITIAL_FORMS[type])
@@ -1111,6 +1461,24 @@ async function removeIntegration(type) {
 .int-chevron { color: var(--text-muted); transition: transform 0.2s; }
 .int-chevron.rotated { transform: rotate(180deg); }
 .badge-connected { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--success); font-weight: 600; }
+.badge-pending {
+    font-size: 11px;
+    color: #f7c96b;
+    font-weight: 600;
+    padding: 4px 9px;
+    border-radius: 999px;
+    border: 1px solid rgba(247, 201, 107, 0.2);
+    background: rgba(247, 201, 107, 0.08);
+}
+.badge-error {
+    font-size: 11px;
+    color: var(--danger);
+    font-weight: 600;
+    padding: 4px 9px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 107, 127, 0.18);
+    background: rgba(255, 107, 127, 0.08);
+}
 .badge-disconnected { font-size: 11px; color: var(--text-muted); }
 .badge-soon { font-size: 10px; font-weight: 700; background: rgba(242, 198, 109, 0.12); color: var(--accent-warm); padding: 4px 9px; border-radius: 999px; border: 1px solid rgba(242, 198, 109, 0.18); }
 .badge-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); display: inline-block; }
@@ -1180,6 +1548,66 @@ select.int-input { cursor: pointer; }
 .int-oauth-text { flex: 1; }
 .int-oauth-title { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 2px; }
 .int-oauth-desc { font-size: 12px; color: var(--text-muted); }
+.int-signal-panel {
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid var(--border-subtle);
+    border-radius: 22px;
+    padding: 18px;
+    margin-bottom: 14px;
+}
+.int-signal-panel--error {
+    border-color: rgba(255, 107, 127, 0.18);
+    background: rgba(255, 107, 127, 0.06);
+}
+.int-signal-panel-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+.int-signal-qr-preview {
+    display: grid;
+    grid-template-columns: 144px 1fr;
+    gap: 14px;
+    align-items: center;
+}
+.int-signal-qr-image {
+    width: 144px;
+    height: 144px;
+    object-fit: contain;
+    border-radius: 18px;
+    padding: 10px;
+    background: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.int-signal-qr-image--modal {
+    width: 240px;
+    height: 240px;
+}
+.int-signal-qr-placeholder {
+    width: 144px;
+    height: 144px;
+    border-radius: 18px;
+    border: 1px dashed var(--border-default);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-secondary);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    text-align: center;
+    font-size: 12px;
+}
+.int-signal-qr-placeholder--modal {
+    width: 240px;
+    height: 240px;
+}
+.int-steps-list--compact {
+    padding-left: 18px;
+    margin: 0;
+}
 
 .int-actions { display: flex; gap: 8px; margin-top: 4px; }
 .int-btn {
@@ -1272,6 +1700,77 @@ select.int-input { cursor: pointer; }
 }
 @keyframes oauth-spin { to { transform: rotate(360deg); } }
 
+.int-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(5, 10, 20, 0.72);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    z-index: 120;
+}
+
+.int-modal {
+    width: min(100%, 520px);
+    background: linear-gradient(180deg, rgba(17, 24, 39, 0.98), rgba(10, 15, 27, 0.98));
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 28px;
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.42);
+    padding: 22px;
+}
+
+.int-modal-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 18px;
+}
+
+.int-modal-head h3 {
+    margin: 0 0 6px;
+    font-size: 22px;
+    color: var(--text-primary);
+}
+
+.int-modal-head p {
+    margin: 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.int-modal-close {
+    width: 38px;
+    height: 38px;
+    border-radius: 999px;
+    border: 1px solid var(--border-default);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.int-modal-close:hover {
+    background: rgba(255, 255, 255, 0.07);
+    color: var(--text-primary);
+}
+
+.int-modal-body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 18px;
+    margin-bottom: 18px;
+}
+
+.int-signal-qr-modal {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
 [data-theme="light"] .int-input { background: white; }
 [data-theme="light"] .int-setup-steps { background: #f8f8fc; }
 [data-theme="light"] .int-card-icon--gmail .int-logo {
@@ -1279,5 +1778,29 @@ select.int-input { cursor: pointer; }
 }
 [data-theme="light"] .int-secret-toggle:hover {
     background: #f6f7ff;
+}
+
+@media (max-width: 780px) {
+    .int-signal-qr-preview {
+        grid-template-columns: 1fr;
+    }
+
+    .int-signal-qr-image,
+    .int-signal-qr-placeholder {
+        width: 100%;
+        max-width: 220px;
+        justify-self: center;
+    }
+
+    .int-modal {
+        padding: 18px;
+    }
+
+    .int-signal-qr-image--modal,
+    .int-signal-qr-placeholder--modal {
+        width: min(100%, 240px);
+        height: auto;
+        aspect-ratio: 1;
+    }
 }
 </style>

@@ -252,7 +252,7 @@ function buildAgentQuickPrompts(apps = []) {
     })
   }
 
-  if (apps.includes('slack') || apps.includes('telegram') || apps.includes('whatsapp')) {
+  if (apps.includes('slack') || apps.includes('telegram') || apps.includes('signal') || apps.includes('whatsapp')) {
     prompts.push({
       id: 'agent-messages',
       icon: '💬',
@@ -323,6 +323,7 @@ function formatAppLabel(type = '') {
     gmail: 'Gmail',
     slack: 'Slack',
     telegram: 'Telegram',
+    signal: 'Signal',
     whatsapp: 'WhatsApp',
     jira: 'Jira',
     google_calendar: 'Calendar',

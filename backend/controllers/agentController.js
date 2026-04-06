@@ -250,7 +250,6 @@ async function parseIntent(req, res) {
   try {
     const { message, history = [] } = req.body;
     const plan = await parseAgentIntent(message, history, req.user?.username);
-    console.log("Parsed agent intent:", plan);
     res.json(plan);
   } catch (err) {
     console.error("Agent parse error:", err.message);
@@ -298,7 +297,6 @@ async function runPlan(req, res) {
 
     // ── FIX: autoInferSingleTool removed — graceful fallback ─────────────────
     if (!executionSteps.length) {
-      console.log("⚠️ Planner returned empty steps — cannot execute");
       send({
         type: "complete",
         success: false,
@@ -407,7 +405,6 @@ async function runPlan(req, res) {
     }
 
     // ── Normal single-agent run ───────────────────────────────────────────────
-    console.log("Agent executing steps:", normalizedSteps);
 
     const results = await runAgent(
       normalizedSteps,

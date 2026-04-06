@@ -55,16 +55,12 @@ async function chatCompleteNoSystem(
   temperature = 0.1
 ) {
   try {
-    console.log("chatCompleteNoSystem input:", userMessage);
     const response = await azureClient.post("chat/completions", {
       messages: [{ role: "user", content: userMessage }],
       max_tokens: maxTokens,
       temperature,
     });
-    console.log(
-      "chatCompleteNoSystem response:",
-      JSON.stringify(response.data, null, 2)
-    );
+
     return response.data.choices[0].message.content;
   } catch (err) {
     console.error(
