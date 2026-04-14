@@ -658,6 +658,14 @@ body::after {
   align-items: center;
 }
 
+.main-header-actions-floating {
+  position: absolute;
+  top: 16px;
+  right: 28px;
+  z-index: 14;
+  pointer-events: auto;
+}
+
 .export-btn {
   display: flex; align-items: center; gap: 6px;
   background: rgba(255, 255, 255, 0.04);
@@ -917,7 +925,7 @@ body::after {
    
    /* ── Input Area ──────────────────────────────────────────── */
 .input-area {
-  padding: 18px 28px 24px;
+  padding: 12px 24px 16px;
   background:
     linear-gradient(180deg, rgba(5, 8, 22, 0), rgba(5, 8, 22, 0.74) 22%, rgba(5, 8, 22, 0.92) 100%);
   backdrop-filter: blur(22px);
@@ -927,22 +935,22 @@ body::after {
 }
 
 .input-box {
-  display: flex; align-items: flex-end; gap: 10px;
+  display: flex; align-items: center; gap: 10px;
   background: var(--surface-glass-strong);
   border: 1px solid var(--border-default);
-  border-radius: 28px;
-  padding: 12px 14px;
+  border-radius: 24px;
+  padding: 10px 12px;
   box-shadow: var(--shadow-sm);
   backdrop-filter: blur(24px);
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .input-box:focus-within { border-color: var(--border-strong); box-shadow: 0 0 0 4px rgba(82, 212, 255, 0.08), var(--shadow-accent); }
-.input-box textarea { flex: 1; background: transparent; border: none; outline: none; color: var(--text-primary); font-size: 14px; font-family: var(--font-ui); line-height: 1.6; resize: none; min-height: 22px; max-height: 160px; }
+.input-box textarea { flex: 1; display: block; margin: 0; padding: 0; background: transparent; border: none; outline: none; color: var(--text-primary); font-size: 13px; font-family: var(--font-ui); line-height: 1.4; resize: none; min-height: 20px; max-height: 136px; }
 .input-box textarea::placeholder { color: var(--text-muted); }
    
 .send-btn {
-  width: 40px; height: 40px;
+  width: 36px; height: 36px;
   background: linear-gradient(135deg, rgba(82, 212, 255, 0.94), rgba(139, 125, 255, 0.84));
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 50%;
@@ -954,12 +962,12 @@ body::after {
 
 .send-btn:hover:not(:disabled) { box-shadow: var(--shadow-accent); transform: translateY(-1px) scale(1.03); }
 .send-btn:disabled { opacity: 0.3; cursor: not-allowed; }
-.input-hint { font-size: 11px; color: var(--text-faint); text-align: center; margin-top: 10px; }
+.input-hint { font-size: 10px; color: var(--text-faint); text-align: center; margin-top: 8px; }
    
    /* ── Attach Button & Menu ────────────────────────────────── */
    .attach-wrapper { position: relative; flex-shrink: 0; }
    
-.attach-btn { width: 36px; height: 36px; border-radius: 999px; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-default); color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
+.attach-btn { width: 34px; height: 34px; border-radius: 999px; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-default); color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
 .attach-btn:hover { background: rgba(255, 255, 255, 0.06); border-color: var(--border-strong); color: var(--text-secondary); }
 
 .attach-menu { position: absolute; bottom: calc(100% + 12px); left: 0; background: var(--surface-glass-strong); border: 1px solid var(--border-default); border-radius: 24px; padding: 8px; min-width: 260px; box-shadow: var(--shadow-lg); animation: menuPop 0.18s cubic-bezier(0.16,1,0.3,1); z-index: 100; backdrop-filter: blur(22px); }
@@ -1090,7 +1098,7 @@ body::after {
    .scroll-btn-fade-enter-from, .scroll-btn-fade-leave-to { opacity: 0; transform: translateX(-50%) translateY(8px); }
    
    /* ── Voice button ────────────────────────────────────────── */
-.voice-btn { width: 36px; height: 36px; border-radius: 999px; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-default); color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; flex-shrink: 0; }
+.voice-btn { width: 34px; height: 34px; border-radius: 999px; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-default); color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; flex-shrink: 0; }
 .voice-btn:hover { background: rgba(255, 255, 255, 0.06); border-color: var(--border-strong); color: var(--text-secondary); }
    .voice-btn.recording { background: rgba(239,68,68,0.1); border-color: var(--danger); color: var(--danger); animation: recordingPulse 1s ease infinite; }
    

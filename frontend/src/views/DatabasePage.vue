@@ -8,7 +8,7 @@
     <div class="topbar">
       <div class="topbar-left">
         <button class="back-btn" @click="emit('close')">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
             <polyline points="15 18 9 12 15 6" />
           </svg>
           Back
@@ -31,7 +31,7 @@
           ✨ Natural language
         </button>
         <button class="mode-toggle" :class="{ active: queryMode === 'raw' }" @click="queryMode = 'raw'">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="16 18 22 12 16 6" />
             <polyline points="8 6 2 12 8 18" />
           </svg>
@@ -43,22 +43,39 @@
     </div>
 
     <div class="body">
-      <aside class="schema-panel">
+      <aside class="schema-panel" :class="{ collapsed: schemaCollapsed }">
         <div class="schema-header">
-          <span class="panel-label">{{ databaseObjectLabel.toUpperCase() }}</span>
-          <button class="refresh-btn" :class="{ spinning: refreshing }" title="Refresh" @click="refreshSchema">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <polyline points="23 4 23 10 17 10" />
-              <polyline points="1 20 1 14 7 14" />
-              <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
-            </svg>
-          </button>
+          <template v-if="!schemaCollapsed">
+            <span class="panel-label">{{ databaseObjectLabel.toUpperCase() }}</span>
+            <div class="schema-header-actions">
+              <button class="refresh-btn" :class="{ spinning: refreshing }" title="Refresh" @click="refreshSchema">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
+                  <polyline points="23 4 23 10 17 10" />
+                  <polyline points="1 20 1 14 7 14" />
+                  <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
+                </svg>
+              </button>
+              <button class="collapse-btn" title="Collapse sidebar" @click="toggleSchemaCollapse">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                  <polyline points="15 18 9 12 15 6" />
+                </svg>
+              </button>
+            </div>
+          </template>
+
+          <template v-else>
+            <button class="collapse-btn collapse-btn--icon-only" title="Expand sidebar" @click="toggleSchemaCollapse">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+            </button>
+          </template>
         </div>
 
-        <div class="schema-search-wrap">
+        <div v-if="!schemaCollapsed" class="schema-search-wrap">
           <svg
-            width="12"
-            height="12"
+            width="11"
+            height="11"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
@@ -83,10 +100,10 @@
         </div>
 
         <div v-if="schemaLoading" class="schema-loading">
-          <div v-for="i in 6" :key="i" class="skeleton" />
+          <div v-for="i in schemaCollapsed ? 4 : 6" :key="i" class="skeleton" />
         </div>
 
-        <div v-else class="collection-list">
+        <div v-else class="collection-list" :class="{ 'collection-list--collapsed': schemaCollapsed }">
           <div v-if="schemaError" class="schema-empty schema-empty--error">{{ schemaError }}</div>
           <div v-else-if="!filteredCollections.length" class="schema-empty">
             {{ schemaFilter ? 'No matches' : `No ${databaseObjectLabel.toLowerCase()} found` }}
@@ -96,7 +113,8 @@
               v-for="col in filteredCollections"
               :key="col.name"
               class="collection-item"
-              :class="{ active: selectedCollection === col.name }"
+              :class="{ active: selectedCollection === col.name, compact: schemaCollapsed }"
+              :title="schemaCollapsed ? `${col.name} (${formatCount(resolveCollectionCount(col))})` : ''"
               @click="selectCollection(col)"
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="col-icon">
@@ -104,13 +122,15 @@
                 <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
                 <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
               </svg>
-              <span class="col-name">{{ col.name }}</span>
-              <span class="col-count">{{ formatCount(col.count) }}</span>
+              <template v-if="!schemaCollapsed">
+                <span class="col-name">{{ col.name }}</span>
+                <span class="col-count">{{ formatCount(resolveCollectionCount(col)) }}</span>
+              </template>
             </button>
           </template>
         </div>
 
-        <div class="schema-footer">
+        <div v-if="!schemaCollapsed" class="schema-footer">
           <div class="stat-row">
             <span class="stat-label">{{ databaseObjectLabel }}</span>
             <span class="stat-val">{{ collections.length }}</span>
@@ -136,7 +156,7 @@
 
           <div class="nl-input-wrap">
             <div class="nl-input-inner">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="nl-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="nl-icon">
                 <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
               </svg>
               <input
@@ -146,8 +166,15 @@
                 :disabled="nlLoading"
                 @keydown.enter.exact.prevent="runNL"
               />
+              <button
+                class="nl-clear-btn"
+                :disabled="nlLoading || (!nlQuery.trim() && !nlResult && !nlError)"
+                @click="clearNlResult"
+              >
+                Clear
+              </button>
               <button class="nl-send" :class="{ loading: nlLoading }" :disabled="!nlQuery.trim() || nlLoading" @click="runNL">
-                <svg v-if="!nlLoading" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <svg v-if="!nlLoading" width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
                 </svg>
                 <span v-else class="btn-spinner" />
@@ -174,33 +201,30 @@
           </div>
 
           <div v-else-if="nlResult" class="result-section">
-            <div class="result-meta-bar">
-              <span class="result-meta-label">
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-                {{ resultRows.length }} row{{ resultRows.length !== 1 ? 's' : '' }}
-                <span v-if="showPreviewPagination" class="ms-badge">
-                  {{ previewRangeLabel }}
-                </span>
-                <span v-if="nlResult.executionMs" class="ms-badge">{{ nlResult.executionMs }}ms</span>
-              </span>
-              <div class="result-meta-actions">
-                <button
-                  v-if="selectedCollection"
-                  class="meta-btn"
-                  :disabled="!permissions.insert"
-                  @click="openAddRow"
-                >
-                  Add row
-                </button>
-                <button class="meta-btn" @click="copyResult">{{ copied ? 'Copied!' : 'Copy' }}</button>
-                <button class="meta-btn" @click="exportRows('json', resultRows)">Export JSON</button>
-                <button class="meta-btn" @click="exportRows('csv', resultRows)">Export CSV</button>
-                <button class="meta-btn" @click="showGeneratedQuery = !showGeneratedQuery">
-                  {{ showGeneratedQuery ? 'Hide' : 'Show' }} query
-                </button>
-                <button class="meta-btn" @click="clearNlResult">Clear</button>
+            <div class="result-meta-bar result-meta-bar--menu-only">
+              <div class="result-meta-actions result-meta-actions--menu">
+                <div class="result-menu-wrap">
+                  <button class="result-menu-btn" @click="toggleResultMenu">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                      <circle cx="12" cy="5" r="1.8" />
+                      <circle cx="12" cy="12" r="1.8" />
+                      <circle cx="12" cy="19" r="1.8" />
+                    </svg>
+                  </button>
+                  <div v-if="showResultMenu" class="result-menu-dropdown">
+                    <button
+                      v-if="selectedCollection"
+                      class="result-menu-item"
+                      :disabled="!permissions.insert"
+                      @click="handleAddRow"
+                    >
+                      Add row
+                    </button>
+                    <button class="result-menu-item" @click="handleCopyResult">Copy</button>
+                    <button class="result-menu-item" @click="handleExportResult('json')">Export JSON</button>
+                    <button class="result-menu-item" @click="handleExportResult('csv')">Export CSV</button>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -208,10 +232,10 @@
               <pre>{{ nlResult.generatedQuery }}</pre>
             </div>
 
-            <div v-if="displayedNlSummary" class="ai-summary">
-              <span class="ai-badge">✨ AI</span>
-              <span class="ai-summary-text">{{ displayedNlSummary }}</span>
-            </div>
+            <!-- <div v-if="displayedNlSummaryText" class="ai-summary ai-summary--compact">
+              <span class="ai-badge">✨</span>
+              <span class="ai-summary-text">{{ displayedNlSummaryText }}</span>
+            </div> -->
 
             <template v-if="resultRows.length">
               <ResultTable
@@ -224,20 +248,53 @@
                 @edit-row="openEditRow"
                 @delete-row="deleteRow"
               />
-              <div v-if="showPreviewPagination" class="server-pagination">
-                <button class="page-btn" :disabled="previewPage <= 1 || nlLoading" @click="changePreviewPage(previewPage - 1)">
-                  ← Prev 20
-                </button>
-                <span class="page-info">Page {{ previewPage }}</span>
-                <button
-                  class="page-btn"
-                  :disabled="!previewHasNext || nlLoading"
-                  @click="changePreviewPage(previewPage + 1)"
-                >
-                  Next 20 →
-                </button>
+
+              <div v-if="showPreviewPagination" class="floating-pagination-shell">
+                <div class="floating-pagination compact">
+                  <button
+                    class="floating-pagination__nav-btn"
+                    :disabled="previewPage <= 1 || nlLoading"
+                    @click="changePreviewPage(previewPage - 1)"
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                      <polyline points="15 18 9 12 15 6" />
+                    </svg>
+                    <span>Prev</span>
+                  </button>
+
+                  <div class="floating-pagination__pages">
+                    <template v-for="(item, index) in previewVisiblePages" :key="`${item}-${index}`">
+                      <span v-if="item === 'ellipsis'" class="floating-pagination__ellipsis">…</span>
+                      <button
+                        v-else
+                        class="floating-pagination__page-btn"
+                        :class="{ active: Number(item) === previewPage }"
+                        :disabled="Number(item) === previewPage || nlLoading"
+                        @click="goToPreviewPage(Number(item))"
+                      >
+                        {{ item }}
+                      </button>
+                    </template>
+                  </div>
+
+                  <button
+                    class="floating-pagination__nav-btn"
+                    :disabled="!previewHasNext || nlLoading"
+                    @click="changePreviewPage(previewPage + 1)"
+                  >
+                    <span>Next</span>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                      <polyline points="9 18 15 12 9 6" />
+                    </svg>
+                  </button>
+
+                  <div class="floating-pagination__summary">
+                    {{ previewRangeLabel }}
+                  </div>
+                </div>
               </div>
             </template>
+
             <div v-else class="no-rows">No rows returned.</div>
           </div>
         </div>
@@ -383,6 +440,7 @@ const schemaLoading = ref(false)
 const schemaError = ref('')
 const refreshing = ref(false)
 const schemaFilter = ref('')
+const schemaCollapsed = ref(false)
 const selectedCollection = ref('')
 const selectedCollectionMeta = computed(() => collections.value.find((item) => item.name === selectedCollection.value) || null)
 
@@ -396,12 +454,21 @@ const filteredCollections = computed(() => {
 })
 
 const totalDocs = computed(() => {
-  const counts = collections.value
-    .map((item) => Number(item.count))
-    .filter((value) => Number.isFinite(value))
-  if (!counts.length) return null
-  return counts.reduce((sum, value) => sum + value, 0)
+  if (!collections.value.length) return null
+
+  let total = 0
+  let hasKnownCounts = false
+
+  for (const item of collections.value) {
+    const count = resolveCollectionCount(item)
+    if (count === null) return null
+    total += count
+    hasKnownCounts = true
+  }
+
+  return hasKnownCounts ? total : null
 })
+
 const usesCollections = computed(() => dbInfo.value.vendor === 'MongoDB')
 const databaseObjectLabel = computed(() => {
   if (usesCollections.value) return 'Collections'
@@ -418,11 +485,14 @@ const nlResult = ref(null)
 const nlError = ref('')
 const showGeneratedQuery = ref(false)
 const copied = ref(false)
+const showResultMenu = ref(false)
+
 const previewPage = ref(1)
-const previewPageSize = 20
+const previewPageSize = 25
 const previewTotalCount = ref(0)
 const previewHasNext = ref(false)
 const previewSearchTerm = ref('')
+
 const selectedCell = ref(null)
 const rowEditorOpen = ref(false)
 const rowEditorMode = ref('add')
@@ -434,7 +504,7 @@ const activeRow = ref(null)
 const resultRows = computed(() => Array.isArray(nlResult.value?.rows) ? nlResult.value.rows : [])
 const resultColumns = computed(() => {
   const keys = new Set()
-  resultRows.value.slice(0, 20).forEach((row) => Object.keys(row || {}).forEach((key) => keys.add(key)))
+  resultRows.value.slice(0, 25).forEach((row) => Object.keys(row || {}).forEach((key) => keys.add(key)))
   return [...keys].filter((key) => key !== '__v')
 })
 
@@ -449,48 +519,87 @@ const showRawExecutedQuery = ref(false)
 const rawQueryLabel = computed(() => (usesCollections.value ? 'Aggregation pipeline or find JSON' : 'Read-only SQL query'))
 const rawPlaceholder = computed(() =>
   usesCollections.value
-    ? '[\n  { "$match": {} },\n  { "$limit": 20 }\n]'
-    : 'SELECT * FROM your_table\nLIMIT 20'
+    ? '[\n  { "$match": {} },\n  { "$limit": 25 }\n]'
+    : 'SELECT * FROM your_table\nLIMIT 25'
 )
 
 const rawResultRows = computed(() => Array.isArray(rawResult.value?.rows) ? rawResult.value.rows : [])
 const rawResultColumns = computed(() => {
   const keys = new Set()
-  rawResultRows.value.slice(0, 20).forEach((row) => Object.keys(row || {}).forEach((key) => keys.add(key)))
+  rawResultRows.value.slice(0, 25).forEach((row) => Object.keys(row || {}).forEach((key) => keys.add(key)))
   return [...keys].filter((key) => key !== '__v')
 })
 
-const showPreviewPagination = computed(() => nlResult.value?.source === 'preview' && (previewHasNext.value || previewPage.value > 1))
+const previewResolvedTotalCount = computed(() => {
+  const explicitTotal = Number(previewTotalCount.value)
+  if (Number.isFinite(explicitTotal) && explicitTotal > 0) return explicitTotal
+
+  const responseEstimated = Number(nlResult.value?.table?.estimated_rows)
+  if (Number.isFinite(responseEstimated) && responseEstimated > 0) return responseEstimated
+
+  const selectedCount = Number(resolveCollectionCount(selectedCollectionMeta.value))
+  if (Number.isFinite(selectedCount) && selectedCount > 0) return selectedCount
+
+  return resultRows.value.length
+})
+
+const previewPageCount = computed(() => {
+  const total = previewResolvedTotalCount.value
+  if (Number.isFinite(total) && total > 0) {
+    return Math.max(1, Math.ceil(total / previewPageSize))
+  }
+  return previewHasNext.value ? previewPage.value + 1 : previewPage.value
+})
+
+const showPreviewPagination = computed(() => {
+  return nlResult.value?.source === 'preview' && (previewPageCount.value > 1 || previewHasNext.value || previewPage.value > 1)
+})
+
 const showResultRowActions = computed(() => {
-  if (!selectedCollection.value || !canWrite.value || !resultRows.value.length) return false
+  if (!selectedCollection.value || !resultRows.value.length) return false
+
   if (nlResult.value?.source === 'preview') return true
+  if (!canWrite.value) return false
+
   const knownFields = Array.isArray(selectedCollectionMeta.value?.fieldNames)
     ? selectedCollectionMeta.value.fieldNames
-    : []
+    : Array.isArray(selectedCollectionMeta.value?.columns)
+      ? selectedCollectionMeta.value.columns
+      : []
+
   if (!knownFields.length) return false
+
   const rowKeys = Object.keys(resultRows.value[0] || {})
   if (!rowKeys.length) return false
+
   const overlap = rowKeys.filter((key) => knownFields.includes(key)).length
   return overlap >= Math.min(2, rowKeys.length)
 })
+
 const previewRangeLabel = computed(() => {
-  const start = (previewPage.value - 1) * previewPageSize + 1
-  const end = (previewPage.value - 1) * previewPageSize + resultRows.value.length
   if (!resultRows.value.length) return '0'
-  return previewHasNext.value ? `${start}-${end}` : `${start}-${end}`
-})
-const displayedNlSummary = computed(() => {
-  const summary = String(nlResult.value?.summary || '').trim()
-  if (!summary) return ''
-  if (resultRows.value.length === 0) return summary
-  if (looksLikeVerboseStructuredReply(summary)) {
-    return buildCompactResultSummary({
-      rowCount: resultRows.value.length,
-      collectionName: selectedCollection.value || nlResult.value?.target || '',
-    })
+
+  const start = (previewPage.value - 1) * previewPageSize + 1
+  const total = previewResolvedTotalCount.value
+  const end = start + resultRows.value.length - 1
+
+  if (Number.isFinite(total) && total > 0) {
+    return `${start}–${Math.min(end, total)} of ${formatCountExact(total)}`
   }
-  return summary
+
+  return `${start}–${end}`
 })
+
+const previewVisiblePages = computed(() => buildPreviewPageItems(previewPage.value, previewPageCount.value))
+
+// const displayedNlSummary = computed(() => {
+//   const summary = String(nlResult.value?.summary || '').trim()
+//   if (!summary) return ''
+//   if (resultRows.value.length === 0) return summary
+//   return summary
+// })
+
+// const displayedNlSummaryText = computed(() => stripBasicMarkdown(displayedNlSummary.value))
 
 const smartChips = computed(() => {
   if (selectedCollection.value) {
@@ -529,6 +638,59 @@ const DIRECT_SEARCH_PREFIXES = [
   'get ',
 ]
 
+function toggleSchemaCollapse() {
+  schemaCollapsed.value = !schemaCollapsed.value
+}
+
+function toggleResultMenu() {
+  showResultMenu.value = !showResultMenu.value
+}
+
+function closeResultMenu() {
+  showResultMenu.value = false
+}
+
+function handleAddRow() {
+  closeResultMenu()
+  openAddRow()
+}
+
+async function handleCopyResult() {
+  closeResultMenu()
+  await copyResult()
+}
+
+function handleExportResult(format) {
+  closeResultMenu()
+  exportRows(format, resultRows.value)
+}
+
+// function stripBasicMarkdown(text = '') {
+//   return String(text || '')
+//     .replace(/\*\*(.*?)\*\*/g, '$1')
+//     .replace(/__(.*?)__/g, '$1')
+//     .trim()
+// }
+
+function buildPreviewPageItems(currentPage, totalPages) {
+  const current = Math.max(1, Number(currentPage) || 1)
+  const total = Math.max(1, Number(totalPages) || 1)
+
+  if (total <= 7) {
+    return Array.from({ length: total }, (_, index) => index + 1)
+  }
+
+  if (current <= 4) {
+    return [1, 2, 3, 4, 5, 'ellipsis', total]
+  }
+
+  if (current >= total - 3) {
+    return [1, 'ellipsis', total - 4, total - 3, total - 2, total - 1, total]
+  }
+
+  return [1, 'ellipsis', current - 1, current, current + 1, 'ellipsis', total]
+}
+
 function quoteSqlIdentifier(identifier = '') {
   const parts = String(identifier)
     .split('.')
@@ -552,6 +714,21 @@ function formatCount(value) {
   return String(n)
 }
 
+function resolveCollectionCount(collection) {
+  const raw = collection?.count ?? collection?.estimatedRows
+  if (raw === null || raw === undefined || raw === '') return null
+
+  const numeric = Number(raw)
+  if (!Number.isFinite(numeric) || numeric < 0) return null
+
+  return numeric
+}
+
+function formatCountExact(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '—'
+  return Number(value).toLocaleString('en-IN')
+}
+
 function normalizeVendor(vendor = '') {
   const map = {
     postgres: 'PostgreSQL',
@@ -564,9 +741,9 @@ function normalizeVendor(vendor = '') {
 
 function defaultRawQuery() {
   if (usesCollections.value) {
-    return '[\n  { "$match": {} },\n  { "$limit": 20 }\n]'
+    return '[\n  { "$match": {} },\n  { "$limit": 25 }\n]'
   }
-  return 'SELECT *\nFROM your_table\nLIMIT 20'
+  return 'SELECT *\nFROM your_table\nLIMIT 25'
 }
 
 function toPrettyText(value) {
@@ -585,21 +762,6 @@ function shouldUseCollectionSearch(query = '') {
   if (text.length < 3) return false
   const normalized = text.toLowerCase()
   return !DIRECT_SEARCH_PREFIXES.some((prefix) => normalized.startsWith(prefix))
-}
-
-function looksLikeVerboseStructuredReply(summary = '') {
-  const text = String(summary || '').trim()
-  if (!text) return false
-  if (text.length > 260) return true
-  if (text.startsWith('{') || text.startsWith('[')) return true
-  if (text.includes('{"') || text.includes('"}')) return true
-  return /"\w+"\s*:/.test(text)
-}
-
-function buildCompactResultSummary({ rowCount = 0, collectionName = '' } = {}) {
-  const label = String(collectionName || '').trim()
-  const suffix = label ? ` from ${label}` : ''
-  return `Showing ${rowCount} row${rowCount === 1 ? '' : 's'}${suffix}.`
 }
 
 async function loadSchema({ keepSelection = true } = {}) {
@@ -656,14 +818,15 @@ function selectCollection(collection) {
 
 function buildPreviewQuery(collectionName) {
   if (usesCollections.value) {
-    return '[\n  { "$limit": 20 }\n]'
+    return '[\n  { "$limit": 25 }\n]'
   }
 
-  return `SELECT *\nFROM ${quoteSqlIdentifier(collectionName)}\nLIMIT 20`
+  return `SELECT *\nFROM ${quoteSqlIdentifier(collectionName)}\nLIMIT 25`
 }
 
 async function loadCollectionPreview(collectionName, page = 1, options = {}) {
   const searchTerm = String(options.searchTerm || '').trim()
+
   if (!collectionName) {
     nlResult.value = null
     nlError.value = ''
@@ -676,6 +839,7 @@ async function loadCollectionPreview(collectionName, page = 1, options = {}) {
   nlError.value = ''
   nlResult.value = null
   showGeneratedQuery.value = false
+  closeResultMenu()
 
   try {
     const res = await api.post('/db-chat/preview', {
@@ -685,23 +849,54 @@ async function loadCollectionPreview(collectionName, page = 1, options = {}) {
       searchTerm,
     })
 
-    previewPage.value = Number(res.data.page || page)
-    previewTotalCount.value = Number(res.data.totalCount || 0)
-    previewHasNext.value = Boolean(res.data.hasNext)
+    const incomingPage = Number(res.data.page || page)
+    const rows = Array.isArray(res.data.rows) ? res.data.rows : []
+
+    const explicitTotal = Number(res.data.totalCount)
+    const estimatedTotal = Number(
+      res.data.table?.estimated_rows ??
+      resolveCollectionCount(selectedCollectionMeta.value) ??
+      0
+    )
+
+    const resolvedTotal =
+      Number.isFinite(explicitTotal) && explicitTotal > 0
+        ? explicitTotal
+        : Number.isFinite(estimatedTotal) && estimatedTotal > 0
+          ? estimatedTotal
+          : 0
+
+    previewPage.value = incomingPage
+    previewTotalCount.value = resolvedTotal
     previewSearchTerm.value = searchTerm
-    permissions.value = {
-      insert: Boolean(res.data.permissions?.insert),
-      update: Boolean(res.data.permissions?.update),
-      delete: Boolean(res.data.permissions?.delete),
+
+    if (typeof res.data.hasNext === 'boolean') {
+      previewHasNext.value = res.data.hasNext
+    } else if (resolvedTotal > 0) {
+      previewHasNext.value = incomingPage * previewPageSize < resolvedTotal
+    } else {
+      previewHasNext.value = rows.length === previewPageSize
     }
-    canWrite.value = permissions.value.insert || permissions.value.update || permissions.value.delete
+
+    const nextPermissions = {
+      insert: res.data.permissions?.insert ?? permissions.value.insert ?? true,
+      update: res.data.permissions?.update ?? permissions.value.update ?? true,
+      delete: res.data.permissions?.delete ?? permissions.value.delete ?? true,
+    }
+
+    permissions.value = nextPermissions
+    canWrite.value = nextPermissions.insert || nextPermissions.update || nextPermissions.delete
+
     nlResult.value = {
-      rows: Array.isArray(res.data.rows) ? res.data.rows : [],
-      summary: searchTerm ? `Showing matches for "${searchTerm}" in ${collectionName}.` : `Showing ${collectionName}.`,
+      rows,
+      summary: searchTerm
+        ? `Showing matches for "${searchTerm}" in ${collectionName}.`
+        : `Showing ${collectionName}.`,
       generatedQuery: res.data.executedQuery || buildPreviewQuery(collectionName),
       executionMs: res.data.executionMs || null,
       source: 'preview',
       target: collectionName,
+      table: res.data.table || null,
     }
   } catch (err) {
     nlError.value = err.response?.data?.error || `Failed to load ${collectionName}.`
@@ -715,9 +910,15 @@ async function loadCollectionPreview(collectionName, page = 1, options = {}) {
 async function changePreviewPage(page) {
   if (!selectedCollection.value || page < 1) return
   if (page > previewPage.value && !previewHasNext.value) return
+  if (page === previewPage.value) return
+
   await loadCollectionPreview(selectedCollection.value, page, {
     searchTerm: previewSearchTerm.value,
   })
+}
+
+async function goToPreviewPage(page) {
+  await changePreviewPage(page)
 }
 
 function runSuggestedQuery(text) {
@@ -729,6 +930,7 @@ function clearNlResult() {
   nlQuery.value = ''
   showGeneratedQuery.value = false
   previewSearchTerm.value = ''
+  closeResultMenu()
   if (selectedCollection.value) {
     loadCollectionPreview(selectedCollection.value, 1)
     return
@@ -752,6 +954,7 @@ async function runNL() {
   nlError.value = ''
   nlResult.value = null
   showGeneratedQuery.value = false
+  closeResultMenu()
 
   try {
     const focusedQuery = selectedCollection.value
@@ -769,7 +972,9 @@ async function runNL() {
       executionMs: res.data.executionMs || null,
       source: 'nl',
       target: res.data.queryMeta?.collection || selectedCollection.value || '',
+      table: res.data.table || null,
     }
+
     previewTotalCount.value = 0
     previewHasNext.value = false
   } catch (err) {
@@ -969,31 +1174,29 @@ function buildNaturalLanguageSummary(response = {}, query = '') {
   const rows = Array.isArray(response.rows) ? response.rows : []
   const collectionName = String(response.queryMeta?.collection || selectedCollection.value || '').trim()
 
-  if (!reply && rows.length) {
+  if (reply) return reply
+
+  if (rows.length) {
     return buildCompactResultSummary({
       rowCount: rows.length,
       collectionName,
     })
   }
 
-  if (rows.length && looksLikeVerboseStructuredReply(reply)) {
-    return buildCompactResultSummary({
-      rowCount: rows.length,
-      collectionName,
-    })
-  }
+  return query
+}
 
-  if (rows.length && reply.length > 220) {
-    return buildCompactResultSummary({
-      rowCount: rows.length,
-      collectionName,
-    })
-  }
-
-  return reply || query
+function buildCompactResultSummary({ rowCount = 0, collectionName = '' } = {}) {
+  const label = String(collectionName || '').trim()
+  const suffix = label ? ` from ${label}` : ''
+  return `Showing ${rowCount} row${rowCount === 1 ? '' : 's'}${suffix}.`
 }
 
 watch(selectedCollection, (value) => {
+  nlQuery.value = ''
+  showGeneratedQuery.value = false
+  closeResultMenu()
+
   if (usesCollections.value && value) {
     rawCollection.value = value
   }
@@ -1267,19 +1470,19 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 16px 22px;
+  gap: 10px;
+  padding: 10px 16px;
   border-bottom: 1px solid var(--db-panel-border);
   flex-shrink: 0;
-  background: rgba(7, 13, 28, 0.42);
-  backdrop-filter: blur(18px);
+  background: rgba(7, 13, 28, 0.32);
+  backdrop-filter: blur(16px);
 }
 
 .topbar-left,
 .topbar-right {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 .back-btn,
@@ -1292,7 +1495,10 @@ onMounted(() => {
 .btn-run,
 .page-btn,
 .chip,
-.nl-send {
+.nl-send,
+.collapse-btn,
+.nl-clear-btn,
+.result-menu-btn {
   cursor: pointer;
 }
 
@@ -1300,16 +1506,17 @@ onMounted(() => {
 .mode-toggle,
 .settings-btn,
 .meta-btn,
-.page-btn {
+.page-btn,
+.nl-clear-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 9px 14px;
+  gap: 5px;
+  padding: 7px 12px;
   background: rgba(255, 255, 255, 0.035);
   border: 1px solid var(--db-border-soft);
   border-radius: 999px;
   color: var(--db-text-soft);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   transition: all 0.15s;
 }
@@ -1318,14 +1525,15 @@ onMounted(() => {
 .mode-toggle:hover,
 .settings-btn:hover,
 .meta-btn:hover,
-.page-btn:hover:not(:disabled) {
+.page-btn:hover:not(:disabled),
+.nl-clear-btn:hover:not(:disabled) {
   border-color: rgba(120, 100, 255, 0.35);
   color: var(--db-text-strong);
 }
 
 .topbar-divider {
   width: 1px;
-  height: 18px;
+  height: 16px;
   background: var(--db-divider);
 }
 
@@ -1338,23 +1546,23 @@ onMounted(() => {
 .db-vendor-badge {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 4px 10px;
+  gap: 4px;
+  padding: 3px 9px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   border: 1px solid;
 }
 
 .db-alias {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 700;
   color: var(--db-text-strong);
 }
 
 .db-status-dot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
 }
 
@@ -1384,13 +1592,13 @@ onMounted(() => {
   border: none;
   border-radius: 999px;
   color: white;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   transition: all 0.15s;
 }
 
 .btn-open-data {
-  padding: 10px 16px;
+  padding: 8px 14px;
   background: linear-gradient(135deg, rgba(82, 212, 255, 0.94), rgba(139, 125, 255, 0.84));
   box-shadow: var(--shadow-accent);
 }
@@ -1416,28 +1624,53 @@ onMounted(() => {
   background: var(--db-panel-bg);
   overflow: hidden;
   backdrop-filter: blur(18px);
+  transition: width 0.22s ease;
+}
+
+.schema-panel.collapsed {
+  width: 72px;
 }
 
 .schema-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 16px 10px;
+  padding: 14px 14px 8px;
+}
+
+.schema-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .panel-label {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: 1px;
   color: var(--db-panel-label);
 }
 
-.refresh-btn {
+.refresh-btn,
+.collapse-btn,
+.result-menu-btn {
   background: none;
   border: none;
   color: var(--db-panel-label);
   padding: 4px;
-  border-radius: 6px;
+  border-radius: 8px;
+}
+
+.refresh-btn:hover,
+.collapse-btn:hover,
+.result-menu-btn:hover {
+  background: rgba(124, 111, 255, 0.08);
+  color: var(--db-text-strong);
+}
+
+.collapse-btn--icon-only {
+  margin: 0 auto;
+  padding: 8px;
 }
 
 .refresh-btn.spinning svg {
@@ -1451,7 +1684,7 @@ onMounted(() => {
 
 .schema-search-icon {
   position: absolute;
-  left: 20px;
+  left: 19px;
   top: 50%;
   transform: translateY(-50%);
   color: var(--db-input-placeholder);
@@ -1464,8 +1697,8 @@ onMounted(() => {
   background: var(--db-input-bg);
   border: 1px solid var(--db-input-border);
   border-radius: 9px;
-  padding: 10px 10px 10px 32px;
-  font-size: 13px;
+  padding: 9px 10px 9px 30px;
+  font-size: 12px;
   line-height: 1.2;
   color: var(--db-text-strong);
   outline: none;
@@ -1494,7 +1727,7 @@ onMounted(() => {
 }
 
 .skeleton {
-  height: 12px;
+  height: 11px;
   border-radius: 999px;
   background: var(--db-border-soft);
   animation: shimmer 1.3s infinite;
@@ -1505,6 +1738,11 @@ onMounted(() => {
   overflow-y: auto;
   padding: 0 8px 12px;
   scrollbar-width: thin;
+}
+
+.collection-list--collapsed {
+  padding-left: 10px;
+  padding-right: 10px;
 }
 
 .schema-empty {
@@ -1530,6 +1768,11 @@ onMounted(() => {
   color: var(--db-text-soft);
   text-align: left;
   transition: background 0.12s;
+}
+
+.collection-item.compact {
+  justify-content: center;
+  padding: 10px 0;
 }
 
 .collection-item:hover {
@@ -1620,16 +1863,16 @@ onMounted(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  padding: 18px 24px 0;
+  padding: 14px 24px 0;
 }
 
 .chip {
-  padding: 7px 14px;
+  padding: 6px 12px;
   border-radius: 999px;
   border: 1px solid var(--db-chip-border);
   background: var(--db-chip-bg);
   color: var(--db-chip-text);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .chip:hover {
@@ -1640,18 +1883,19 @@ onMounted(() => {
 .nl-input-wrap,
 .raw-toolbar,
 .raw-editor-wrap {
-  padding: 16px 24px 0;
+  padding: 12px 24px 0;
   flex-shrink: 0;
 }
 
 .nl-input-inner {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   background: var(--db-input-bg);
   border: 1px solid var(--db-input-border);
   border-radius: 12px;
-  padding: 12px 13px;
+  padding: 8px 10px;
+  min-height: 46px;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
@@ -1662,16 +1906,22 @@ onMounted(() => {
 
 .nl-input {
   flex: 1;
+  min-width: 0;
   background: none;
   border: none;
   outline: none;
   color: var(--db-text-strong);
-  font-size: 15px;
+  font-size: 14px;
+}
+
+.nl-clear-btn {
+  padding: 6px 10px;
+  font-size: 11px;
 }
 
 .nl-send {
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1681,16 +1931,19 @@ onMounted(() => {
 
 .nl-send:disabled,
 .btn-run:disabled,
-.page-btn:disabled {
+.page-btn:disabled,
+.result-menu-item:disabled,
+.result-menu-btn:disabled,
+.nl-clear-btn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
 }
 
 .nl-hint,
 .raw-label {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--db-text-faint);
-  padding-top: 7px;
+  padding-top: 6px;
 }
 
 .nl-hint strong {
@@ -1699,7 +1952,7 @@ onMounted(() => {
 
 .result-loading,
 .result-error {
-  margin: 14px 24px 0;
+  margin: 12px 24px 0;
 }
 
 .result-loading {
@@ -1743,7 +1996,7 @@ onMounted(() => {
 .result-section {
   flex: 1;
   overflow: hidden;
-  padding-top: 14px;
+  padding-top: 10px;
 }
 
 .result-section.no-top-pad {
@@ -1754,9 +2007,13 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 0 24px 12px;
+  gap: 10px;
+  padding: 0 24px 8px;
   flex-shrink: 0;
+}
+
+.result-meta-bar--menu-only {
+  justify-content: flex-end;
 }
 
 .result-meta-label {
@@ -1781,9 +2038,60 @@ onMounted(() => {
   gap: 6px;
 }
 
+.result-meta-actions--menu {
+  position: relative;
+}
+
+.result-menu-wrap {
+  position: relative;
+}
+
+.result-menu-btn {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--db-border-soft);
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 10px;
+}
+
+.result-menu-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 150px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  background: rgba(10, 16, 31, 0.96);
+  border: 1px solid rgba(124, 111, 255, 0.18);
+  border-radius: 12px;
+  box-shadow: 0 18px 40px rgba(1, 5, 16, 0.36);
+  z-index: 8;
+}
+
+.result-menu-item {
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--db-text-soft);
+  padding: 8px 10px;
+  font-size: 12px;
+  border-radius: 8px;
+}
+
+.result-menu-item:hover:not(:disabled) {
+  background: rgba(124, 111, 255, 0.1);
+  color: var(--db-text-strong);
+}
+
 .generated-query,
 .ai-summary {
-  margin: 0 24px 12px;
+  margin: 0 24px 10px;
   border-radius: 10px;
   flex-shrink: 0;
 }
@@ -1806,23 +2114,24 @@ onMounted(() => {
 }
 
 .ai-summary {
-  padding: 10px 12px;
+  padding: 9px 11px;
   background: var(--db-summary-bg);
   border: 1px solid var(--db-summary-border);
   color: var(--db-summary-text);
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  font-size: 13px;
+  font-size: 12px;
+}
+
+.ai-summary--compact {
+  max-width: fit-content;
 }
 
 .ai-summary-text {
   min-width: 0;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  overflow: hidden;
-  line-height: 1.45;
+  white-space: pre-line;
+  line-height: 1.5;
 }
 
 .ai-badge {
@@ -1890,7 +2199,7 @@ onMounted(() => {
 :deep(.table-wrap) {
   flex: 1;
   overflow: auto;
-  padding: 0 0 18px 24px;
+  padding: 0 0 12px 24px;
   scrollbar-width: thin;
 }
 
@@ -1907,9 +2216,9 @@ onMounted(() => {
   position: sticky;
   top: 0;
   background: var(--db-table-head-bg);
-  padding: 10px 12px;
+  padding: 9px 12px;
   text-align: left;
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.5px;
   color: var(--db-table-head-text);
@@ -1918,7 +2227,7 @@ onMounted(() => {
 }
 
 :deep(.result-table td) {
-  padding: 9px 12px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--db-table-border);
   color: var(--db-table-cell-text);
   white-space: nowrap;
@@ -2059,12 +2368,109 @@ onMounted(() => {
   cursor: not-allowed;
 }
 
-.server-pagination {
+.floating-pagination-shell {
   display: flex;
+  justify-content: center;
+  padding: 4px 24px 12px;
+  flex-shrink: 0;
+}
+
+.floating-pagination {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 16px;
+  border: 1px solid rgba(120, 100, 255, 0.14);
+  background: linear-gradient(180deg, rgba(12, 18, 35, 0.82), rgba(9, 14, 28, 0.72));
+  box-shadow: 0 10px 24px rgba(1, 5, 16, 0.22);
+  backdrop-filter: blur(16px);
+}
+
+.floating-pagination.compact {
+  max-width: calc(100% - 12px);
+}
+
+.floating-pagination__nav-btn,
+.floating-pagination__page-btn {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  padding: 0 24px 18px;
+  gap: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--db-text-strong);
+  transition: all 0.18s ease;
+  backdrop-filter: blur(10px);
+}
+
+.floating-pagination__nav-btn {
+  min-width: 76px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.floating-pagination__page-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.floating-pagination__pages {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.floating-pagination__summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 96px;
+  height: 34px;
+  padding: 0 8px;
+  border-left: 1px solid rgba(120, 100, 255, 0.12);
+  color: rgba(255, 255, 255, 0.48);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.floating-pagination__nav-btn:hover:not(:disabled),
+.floating-pagination__page-btn:hover:not(:disabled) {
+  border-color: rgba(139, 125, 255, 0.42);
+  background: rgba(139, 125, 255, 0.12);
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.floating-pagination__page-btn.active {
+  border-color: rgba(139, 125, 255, 0.5);
+  background: linear-gradient(180deg, rgba(139, 125, 255, 0.18), rgba(108, 95, 255, 0.08));
+  color: #ffffff;
+}
+
+.floating-pagination__nav-btn:disabled,
+.floating-pagination__page-btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.floating-pagination__ellipsis {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  color: rgba(255, 255, 255, 0.26);
+  font-size: 18px;
+  line-height: 1;
+  user-select: none;
 }
 
 .db-modal-backdrop {
@@ -2210,6 +2616,10 @@ onMounted(() => {
   .schema-panel {
     width: 230px;
   }
+
+  .schema-panel.collapsed {
+    width: 66px;
+  }
 }
 
 @media (max-width: 900px) {
@@ -2217,7 +2627,8 @@ onMounted(() => {
     flex-direction: column;
   }
 
-  .schema-panel {
+  .schema-panel,
+  .schema-panel.collapsed {
     width: 100%;
     max-height: 280px;
     border-right: none;
@@ -2228,6 +2639,29 @@ onMounted(() => {
   .raw-toolbar {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .floating-pagination {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+  }
+
+  .floating-pagination__summary {
+    border-left: none;
+    min-width: auto;
+    width: 100%;
+    height: auto;
+    padding-top: 2px;
+  }
+
+  .floating-pagination__pages {
+    order: 3;
+    width: 100%;
+    justify-content: center;
+    overflow-x: auto;
+    padding-bottom: 2px;
   }
 }
 </style>

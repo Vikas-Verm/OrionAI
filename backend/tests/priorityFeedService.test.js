@@ -12,6 +12,7 @@ const {
     buildPrioritySummary,
     buildHeadline,
     sortByPriority,
+    sortByLatestActivity,
     mapCalendarEventToPriorityItem,
     dedupePriorityItems,
     buildEffectiveCommunicationSummary,
@@ -165,6 +166,41 @@ test("priority feed sorts earlier meetings first inside the meetings lane", () =
 
   assert.equal(sorted[0].id, "meeting-earlier");
   assert.equal(sorted[1].id, "meeting-later");
+});
+
+test("priority feed sorts newest activity first across connected app items", () => {
+  const sorted = sortByLatestActivity([
+    {
+      id: "signal:room-1",
+      title: "Signal update",
+      category: "communication",
+      priority: "Medium",
+      priorityScore: 52,
+      meta: { latestMessageAt: "2026-03-29T10:10:00.000Z" },
+    },
+    {
+      id: "telegram:chat-1",
+      title: "Telegram update",
+      category: "communication",
+      priority: "Low",
+      priorityScore: 18,
+      meta: { latestMessageAt: "2026-03-29T10:12:00.000Z" },
+    },
+    {
+      id: "calendar:event-1",
+      title: "Upcoming meeting",
+      category: "meetings",
+      priority: "High",
+      priorityScore: 70,
+      meta: { startsAt: "2026-03-29T10:11:00.000Z" },
+    },
+  ]);
+
+  assert.deepEqual(sorted.map((item) => item.id), [
+    "telegram:chat-1",
+    "calendar:event-1",
+    "signal:room-1",
+  ]);
 });
 
 test("calendar priority ignores per-user RSVP differences for the same meeting", () => {

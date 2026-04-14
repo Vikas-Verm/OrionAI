@@ -1,10 +1,35 @@
 import { ref, nextTick } from "vue";
 import { store } from "../stores/app";
 import { agentAPI, streamAgentRun } from "../services/api";
+import { buildSessionTitle, upsertVisibleSession } from "../utils/sessionTitles";
 
 export function useAgent() {
   const agentRunning = ref(false);
   const pendingParams = ref(null);
+
+  function revealCurrentSession(message) {
+    if (!store.currentSessionId) return;
+
+    const priorUserMessageCount = store.messages.filter(
+      (entry) => entry.role === "user"
+    ).length;
+    if (priorUserMessageCount > 0) return;
+
+    const title = buildSessionTitle(message);
+    if (title === "New Chat") return;
+
+    const currentSession = store.sessions.find(
+      (session) => session.sessionId === store.currentSessionId
+    );
+    const currentTitle = String(currentSession?.title || "").trim();
+    if (currentSession && currentTitle && currentTitle !== "New Chat") return;
+
+    store.sessions = upsertVisibleSession(store.sessions, {
+      sessionId: store.currentSessionId,
+      title,
+      mode: currentSession?.mode || store.mode || "agent",
+    });
+  }
 
   // ── Step missing param check ───────────────────────────
   function getMissingParams(steps) {
@@ -19,6 +44,7 @@ export function useAgent() {
 
   // ── Push user message to chat ─────────────────────────
   async function pushUserMsg(message, scrollToBottom) {
+    revealCurrentSession(message);
     store.messages.push({ role: "user", content: message });
     await nextTick();
     scrollToBottom?.();

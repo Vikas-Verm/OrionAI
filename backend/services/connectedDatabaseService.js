@@ -25,6 +25,7 @@ const orchestrator = new DataModeOrchestrator(chatCompleteNoSystem);
 const snapshotService = new SchemaSnapshotService();
 
 const SUPPORTED_DATABASE_VENDORS = ["mongodb", "postgres", "mysql", "sqlite"];
+const EXACT_SCHEMA_COUNT_TABLE_LIMIT = 20;
 
 // ─── Integration helpers ───────────────────────────────────────────────────────
 
@@ -59,6 +60,7 @@ function requireDatabaseConfig(database = {}) {
   if (vendor !== "sqlite" && !database.connectionString) {
     throw new Error("Connection string is required for this database.");
   }
+  // console.log(database);
   return {
     vendor,
     connectionString: database.connectionString || "",
@@ -82,9 +84,35 @@ async function loadDatabaseSchema(config, options = {}) {
 
 async function getSchemaTableCounts(config, schema) {
   const tables = Array.isArray(schema?.tables) ? schema.tables : [];
-  return Object.fromEntries(
-    tables.map((t) => [t.name, t.estimatedRows ?? null])
+  const fallbackCounts = Object.fromEntries(
+    tables.map((table) => [table.name, _normalizeCount(table?.estimatedRows)])
   );
+
+  if (!tables.length) {
+    return fallbackCounts;
+  }
+
+  const vendor = String(config?.vendor || "")
+    .trim()
+    .toLowerCase();
+
+  try {
+    if (vendor === "postgres") {
+      return {
+        ...fallbackCounts,
+        ...(await loadPostgresTableCounts(config, tables)),
+      };
+    }
+
+    if (vendor === "mysql" || vendor === "sqlite") {
+      return {
+        ...fallbackCounts,
+        ...(await loadRelationalTableCounts(config, tables)),
+      };
+    }
+  } catch {}
+
+  return fallbackCounts;
 }
 
 // ─── Natural language query ────────────────────────────────────────────────────
@@ -145,21 +173,30 @@ async function queryConnectedDatabase(userId, question, options = {}) {
 // ─── Preview ──────────────────────────────────────────────────────────────────
 
 async function previewConnectedDatabase(userId, input = {}) {
+  // console.log("Previewing connected database with input:", input);
   const integration = await getDatabaseIntegration(userId);
   if (!integration)
     throw new Error("No database integration is connected yet.");
   const config = requireDatabaseConfig(integration.database || {});
+  // console.log(config);
+  // console.log("Using database config for preview:", config);
   const result = await orchestrator.previewTable(userId, config, input);
+  // console.log("Preview result:", result.rows);
   return {
     vendor: config.vendor,
     integrationName: getDatabaseDisplayName(integration),
     rows: result.rows || [],
-    hasNext: false,
-    page: 1,
-    pageSize: result.rows?.length || 0,
+    hasNext: result.hasNext === true,
+    page: result.page || input.page || 1,
+    pageSize: result.pageSize || result.rows?.length || 0,
+    totalCount:
+      Number.isFinite(Number(result.totalCount)) &&
+      Number(result.totalCount) >= 0
+        ? Number(result.totalCount)
+        : null,
     table: result.table || null,
-    canWrite: false,
-    permissions: { insert: false, update: false, delete: false },
+    canWrite: true,
+    permissions: { insert: true, update: true, delete: true },
     executedQuery: "",
   };
 }
@@ -230,6 +267,177 @@ function _snapshotToLegacy(snapshot) {
   };
 }
 
+async function loadRelationalTableCounts(config, tables) {
+  if (!_shouldProbeExactSchemaCounts(tables)) {
+    return {};
+  }
+
+  const adapter = createAdapter(config);
+  if (
+    typeof adapter?._withConnection !== "function" ||
+    typeof adapter?._countRows !== "function"
+  ) {
+    return {};
+  }
+
+  return adapter._withConnection(async (handle) => {
+    const counts = {};
+    for (const table of tables) {
+      try {
+        counts[table.name] = _normalizeCount(
+          await adapter._countRows(handle, table.name)
+        );
+      } catch {
+        counts[table.name] = _normalizeCount(table?.estimatedRows);
+      }
+    }
+    return counts;
+  });
+}
+
+async function loadPostgresTableCounts(configOrHandle, tablesOrConfig, maybeTables) {
+  if (Array.isArray(maybeTables)) {
+    return _loadPostgresTableCountsWithHandle(
+      configOrHandle,
+      tablesOrConfig,
+      maybeTables
+    );
+  }
+
+  const config = configOrHandle;
+  const tables = Array.isArray(tablesOrConfig) ? tablesOrConfig : [];
+  const adapter = createAdapter(config);
+
+  if (typeof adapter?._withConnection !== "function") {
+    return {};
+  }
+
+  return adapter._withConnection((handle) =>
+    _loadPostgresTableCountsWithHandle(handle, config, tables, adapter)
+  );
+}
+
+async function _loadPostgresTableCountsWithHandle(
+  handle,
+  config,
+  tables,
+  adapter = createAdapter({ ...(config || {}), vendor: "postgres" })
+) {
+  const counts = {};
+  const schemaName = _inferSchemaName(config, tables);
+  const params = schemaName ? [schemaName] : [];
+  const where = schemaName ? "AND ns.nspname = $1" : "";
+
+  const result = await handle.query(
+    `SELECT ns.nspname AS schema_name,
+            cls.relname AS table_name,
+            GREATEST(COALESCE(cls.reltuples, 0), 0)::bigint AS row_count
+       FROM pg_class cls
+       JOIN pg_namespace ns
+         ON ns.oid = cls.relnamespace
+      WHERE cls.relkind IN ('r', 'p')
+        AND ns.nspname NOT IN ('pg_catalog', 'information_schema')
+        ${where}
+      ORDER BY ns.nspname, cls.relname`,
+    params
+  );
+
+  const estimateMap = new Map();
+  for (const row of result?.rows || []) {
+    const shortName = String(row?.table_name || "").trim();
+    const fullName = row?.schema_name
+      ? `${row.schema_name}.${shortName}`
+      : shortName;
+    const normalized = _normalizeCount(row?.row_count);
+    if (shortName) {
+      estimateMap.set(shortName, normalized);
+    }
+    if (fullName) {
+      estimateMap.set(fullName, normalized);
+    }
+  }
+
+  for (const table of tables) {
+    counts[table.name] =
+      estimateMap.get(table.name) ??
+      estimateMap.get(_qualifiedNameParts(table.name).table) ??
+      _normalizeCount(table?.estimatedRows);
+  }
+
+  if (!_shouldProbeExactSchemaCounts(tables)) {
+    return counts;
+  }
+
+  for (const table of tables) {
+    try {
+      counts[table.name] = _normalizeCount(
+        await adapter._countRows(handle, table.name)
+      );
+    } catch {
+      counts[table.name] =
+        counts[table.name] ?? _normalizeCount(table?.estimatedRows);
+    }
+  }
+
+  return counts;
+}
+
+function _normalizeCount(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return null;
+  }
+
+  return numeric;
+}
+
+function _inferSchemaName(config, tables) {
+  const configuredSchema = String(config?.defaultSchema || "").trim();
+  if (configuredSchema && configuredSchema !== "*") {
+    return configuredSchema;
+  }
+
+  for (const table of tables || []) {
+    const parts = _qualifiedNameParts(table?.name);
+    if (parts.schema) {
+      return parts.schema;
+    }
+  }
+
+  return "";
+}
+
+function _qualifiedNameParts(name = "") {
+  const parts = String(name)
+    .split(".")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (parts.length > 1) {
+    return {
+      schema: parts.slice(0, -1).join("."),
+      table: parts.at(-1),
+    };
+  }
+
+  return {
+    schema: "",
+    table: parts[0] || "",
+  };
+}
+
+function _shouldProbeExactSchemaCounts(tables) {
+  return (
+    Array.isArray(tables) &&
+    tables.length > 0 &&
+    tables.length <= EXACT_SCHEMA_COUNT_TABLE_LIMIT
+  );
+}
+
 module.exports = {
   SUPPORTED_DATABASE_VENDORS,
   getDatabaseIntegration,
@@ -242,4 +450,7 @@ module.exports = {
   mutateConnectedDatabase,
   runRawConnectedDatabaseQuery,
   testDatabaseConnection,
+  __test: {
+    loadPostgresTableCounts,
+  },
 };

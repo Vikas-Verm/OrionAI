@@ -31,6 +31,26 @@ function resolveField(type) {
   return type === "google_calendar" ? "googleCalendar" : type;
 }
 
+function canAttemptGoogleAutoRecovery(integration, type) {
+  if (type !== "gmail" && type !== "google_calendar") return false;
+  const field = resolveField(type);
+  return Boolean(integration?.[field]?.refreshToken);
+}
+
+async function markGoogleHealthy(integration, type, patch = {}) {
+  const field = resolveField(type);
+  await Integration.findByIdAndUpdate(integration._id, {
+    $set: {
+      enabled: true,
+      lastTestOk: true,
+      updatedAt: new Date(),
+      ...Object.fromEntries(
+        Object.entries(patch || {}).map(([key, value]) => [`${field}.${key}`, value])
+      ),
+    },
+  }).catch(() => {});
+}
+
 function isInvalidGrantError(err) {
   const haystack = [
     err?.response?.data?.error,
@@ -73,12 +93,9 @@ async function refreshGoogleToken(integration, type) {
     const { credentials } = await oauth2.refreshAccessToken();
 
     // Always write back using the actual DB field name
-    await Integration.findByIdAndUpdate(integration._id, {
-      $set: {
-        [`${field}.accessToken`]: credentials.access_token,
-        [`${field}.expiresAt`]: new Date(credentials.expiry_date),
-        updatedAt: new Date(),
-      },
+    await markGoogleHealthy(integration, type, {
+      accessToken: credentials.access_token,
+      expiresAt: new Date(credentials.expiry_date),
     });
 
     console.log(`🔄 Refreshed ${type} token for ${integration.userId}`);
@@ -114,8 +131,8 @@ async function checkIntegration(integration) {
         if (!data?.refreshToken)
           return { healthy: false, error: "Not connected" };
 
-        // Auto-refresh if expired
-        if (isTokenExpired(data.expiresAt)) {
+        // Auto-refresh if expired or missing an access token entirely
+        if (!data.accessToken || isTokenExpired(data.expiresAt)) {
           return await refreshGoogleToken(integration, type);
         }
 
@@ -141,6 +158,9 @@ async function checkIntegration(integration) {
         } else {
           const cal = google.calendar({ version: "v3", auth: oauth2 });
           await cal.calendarList.list({ maxResults: 1 });
+        }
+        if (integration.enabled === false || integration.lastTestOk !== true) {
+          await markGoogleHealthy(integration, type);
         }
         return { healthy: true };
       }
@@ -212,7 +232,12 @@ async function checkIntegration(integration) {
     }
   } catch (err) {
     // If 401 on Google, try to refresh
-    if ((type === "gmail" || type === "google_calendar") && err.code === 401) {
+    if (
+      (type === "gmail" || type === "google_calendar") &&
+      (err.code === 401 ||
+        err?.response?.status === 401 ||
+        isInvalidGrantError(err))
+    ) {
       return await refreshGoogleToken(integration, type);
     }
     return { healthy: false, error: err.message };
@@ -227,9 +252,11 @@ async function checkUserIntegrations(userId) {
 
     for (const intg of integrations) {
       if (!isConnectedIntegration(intg)) continue;
+      const shouldAttemptAutoRecovery =
+        intg.enabled === false && canAttemptGoogleAutoRecovery(intg, intg.type);
 
       const result =
-        intg.enabled === false
+        intg.enabled === false && !shouldAttemptAutoRecovery
           ? { healthy: false, error: "Reconnect needed" }
           : await checkIntegration(intg).catch((err) => ({
               healthy: false,
@@ -263,7 +290,7 @@ async function getAllHealthStatuses(userId) {
   for (const intg of integrations) {
     if (!isConnectedIntegration(intg)) continue;
 
-    if (intg.enabled === false) {
+    if (intg.enabled === false && !canAttemptGoogleAutoRecovery(intg, intg.type)) {
       const result = { healthy: false, error: "Reconnect needed" };
       healthCache.set(`${userId}:${intg.type}`, {
         ...result,

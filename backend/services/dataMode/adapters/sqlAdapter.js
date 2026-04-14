@@ -48,25 +48,83 @@ class SQLAdapter {
   }
 
   async profileObjects(objects, options = {}) {
+    console.log(
+      "Profiling objects:",
+      objects.map((o) => o.name)
+    );
+
     return this._withConnection(async (handle) => {
       const result = {};
+
+      const sampleSize = Math.min(
+        Number(options.sampleSize) || PROFILE_SAMPLE_N,
+        100
+      );
+
+      const page = Math.max(Number(options.page) || 1, 1);
+
+      const rawOffset =
+        options.offset !== undefined
+          ? Number(options.offset)
+          : (page - 1) * sampleSize;
+
+      const offset = Math.max(Number.isFinite(rawOffset) ? rawOffset : 0, 0);
+      const fieldSampleLimit = Math.min(sampleSize, 5);
+
       for (const obj of objects) {
-        const samples = await this._fetchSampleRows(
-          handle,
-          obj.name,
-          PROFILE_SAMPLE_N
-        );
-        const fieldSamples = {};
-        for (const row of samples) {
-          for (const [k, v] of Object.entries(row)) {
-            if (!fieldSamples[k]) fieldSamples[k] = [];
-            if (v !== null && v !== undefined && fieldSamples[k].length < 5) {
-              fieldSamples[k].push(v instanceof Date ? v.toISOString() : v);
+        try {
+          const previewRows = await this._fetchSampleRows(
+            handle,
+            obj.name,
+            sampleSize,
+            offset
+          );
+
+          const totalCount = await this._countRows(handle, obj.name);
+
+          const fieldSamples = {};
+          for (const row of previewRows) {
+            for (const [k, v] of Object.entries(row)) {
+              if (!fieldSamples[k]) fieldSamples[k] = [];
+              if (
+                v !== null &&
+                v !== undefined &&
+                fieldSamples[k].length < fieldSampleLimit
+              ) {
+                fieldSamples[k].push(v instanceof Date ? v.toISOString() : v);
+              }
             }
           }
+
+          result[obj.name] = {
+            samples: fieldSamples,
+            previewRows: previewRows.map((row) =>
+              Object.fromEntries(
+                Object.entries(row).map(([k, v]) => [
+                  k,
+                  v instanceof Date ? v.toISOString() : v,
+                ])
+              )
+            ),
+            row_estimate: totalCount,
+            totalCount,
+            page,
+            pageSize: sampleSize,
+            topValues: {},
+          };
+        } catch (err) {
+          console.error(`Failed profiling ${obj.name}:`, err);
+          result[obj.name] = {
+            samples: {},
+            previewRows: [],
+            topValues: {},
+            totalCount: 0,
+            page,
+            pageSize: sampleSize,
+          };
         }
-        result[obj.name] = { samples: fieldSamples, topValues: {} };
       }
+
       return result;
     });
   }
@@ -80,6 +138,72 @@ class SQLAdapter {
     });
   }
 
+  async _runSql(handle, sql, params = []) {
+    // PostgreSQL
+    if (typeof handle?.query === "function") {
+      const result = await handle.query(sql, params);
+
+      // pg => { rows: [...] }
+      if (result && Array.isArray(result.rows)) {
+        return result.rows;
+      }
+
+      // mysql2/promise => [rows, fields]
+      if (Array.isArray(result)) {
+        return Array.isArray(result[0]) ? result[0] : result;
+      }
+
+      // fallback
+      return Array.isArray(result) ? result : [];
+    }
+
+    // better-sqlite3 style
+    if (typeof handle?.prepare === "function") {
+      const stmt = handle.prepare(sql);
+      return stmt.all(...params);
+    }
+
+    // sqlite3 callback style
+    if (typeof handle?.all === "function") {
+      return await new Promise((resolve, reject) => {
+        handle.all(sql, params, (err, rows) => {
+          if (err) reject(err);
+          else resolve(rows || []);
+        });
+      });
+    }
+
+    throw new Error(
+      "Unsupported SQL handle: no query/prepare/all method found."
+    );
+  }
+
+  async _countRows(handle, tableName) {
+    const vendor = this._getVendorName();
+    const quotedTable = this._quoteQualifiedName(tableName);
+
+    let sql;
+    let params = [];
+
+    if (vendor === "postgres" || vendor === "postgresql") {
+      sql = `SELECT COUNT(*)::bigint AS total_count FROM ${quotedTable}`;
+    } else {
+      sql = `SELECT COUNT(*) AS total_count FROM ${quotedTable}`;
+    }
+
+    const rows = await this._runSql(handle, sql, params);
+    const firstRow = Array.isArray(rows) ? rows[0] : null;
+
+    if (!firstRow) return 0;
+
+    const rawValue =
+      firstRow.total_count ??
+      firstRow.TOTAL_COUNT ??
+      firstRow.count ??
+      Object.values(firstRow)[0];
+
+    return Number(rawValue) || 0;
+  }
   // ─── Schema introspection ───────────────────────────────────────────────────
 
   async _fetchSchemaRows(handle) {
@@ -188,21 +312,29 @@ class SQLAdapter {
 
   // ─── Sample rows ────────────────────────────────────────────────────────────
 
-  async _fetchSampleRows(handle, tableName, n) {
-    const qt = this._quoteName(tableName);
-    try {
-      if (this._vendor === "postgres") {
-        const r = await handle.query(`SELECT * FROM ${qt} LIMIT ${n}`);
-        return r.rows || [];
-      }
-      if (this._vendor === "mysql") {
-        const [rows] = await handle.query(`SELECT * FROM ${qt} LIMIT ${n}`);
-        return Array.isArray(rows) ? rows : [];
-      }
-      return handle.prepare(`SELECT * FROM ${qt} LIMIT ${n}`).all();
-    } catch {
-      return [];
+  async _fetchSampleRows(
+    handle,
+    tableName,
+    limit = PROFILE_SAMPLE_N,
+    offset = 0
+  ) {
+    const safeLimit = Math.min(Number(limit) || PROFILE_SAMPLE_N, 100);
+    const safeOffset = Math.max(Number(offset) || 0, 0);
+    const vendor = this._getVendorName();
+    const quotedTable = this._quoteQualifiedName(tableName);
+
+    let sql;
+    let params;
+
+    if (vendor === "postgres" || vendor === "postgresql") {
+      sql = `SELECT * FROM ${quotedTable} LIMIT $1 OFFSET $2`;
+      params = [safeLimit, safeOffset];
+    } else {
+      sql = `SELECT * FROM ${quotedTable} LIMIT ? OFFSET ?`;
+      params = [safeLimit, safeOffset];
     }
+
+    return await this._runSql(handle, sql, params);
   }
 
   // ─── Query execution ────────────────────────────────────────────────────────
@@ -291,6 +423,31 @@ class SQLAdapter {
     const parts = name.split(".");
     const q = (p) => (this._vendor === "mysql" ? `\`${p}\`` : `"${p}"`);
     return parts.map(q).join(".");
+  }
+  _quoteIdentifierPart(part) {
+    const vendor = this._getVendorName();
+
+    if (vendor === "mysql" || vendor === "mariadb") {
+      return `\`${String(part).replace(/`/g, "``")}\``;
+    }
+
+    return `"${String(part).replace(/"/g, '""')}"`;
+  }
+
+  _quoteQualifiedName(name) {
+    return String(name)
+      .split(".")
+      .map((part) => this._quoteIdentifierPart(part))
+      .join(".");
+  }
+  _getVendorName() {
+    return String(
+      this.vendor ||
+        this._vendor ||
+        this.dbConfig?.vendor ||
+        this.config?.vendor ||
+        ""
+    ).toLowerCase();
   }
 }
 

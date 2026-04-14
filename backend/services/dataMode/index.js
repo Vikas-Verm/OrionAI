@@ -307,37 +307,114 @@ class DataModeOrchestrator {
    * Preview a table/collection (paginated).
    * Delegates to adapter directly — no NL pipeline needed.
    */
-  async previewTable(userId, dbConfig, input = {}) {
-    const adapter = createAdapter(dbConfig);
-    const snapshot = await snapshotService.getSnapshot(userId, adapter);
-    const target = String(input.target || "").trim();
-    const obj = (snapshot.objects || []).find(
-      (o) => o.name === target || o.name.split(".").pop() === target
-    );
-    if (!obj) throw new Error(`Table "${target}" not found in schema.`);
-    // Delegate to adapter's profiling (simple sample)
-    const profiles = await adapter.profileObjects([obj], {});
-    const samples = profiles[obj.name]?.samples || {};
-    // Build rows from samples
-    const fieldNames = obj.fields.map((f) => f.name);
-    const maxRows = Math.min(Number(input.pageSize) || 20, 100);
-    const rows = [];
-    const sampleArrays = Object.values(samples);
-    const maxLen = Math.max(...sampleArrays.map((a) => a.length), 0);
-    for (let i = 0; i < Math.min(maxLen, maxRows); i++) {
-      const row = {};
-      for (const fn of fieldNames) {
-        row[fn] = (samples[fn] || [])[i] ?? null;
-      }
-      rows.push(row);
-    }
-    return { rows, rowCount: rows.length, table: obj };
-  }
+  // async previewTable(userId, dbConfig, input = {}) {
+  //   const adapter = createAdapter(dbConfig);
+  //   const snapshot = await snapshotService.getSnapshot(userId, adapter);
+
+  //   const target = String(input.target || "").trim();
+  //   const obj = (snapshot.objects || []).find(
+  //     (o) => o.name === target || o.name.split(".").pop() === target
+  //   );
+
+  //   if (!obj) throw new Error(`Table "${target}" not found in schema.`);
+
+  //   const pageSize = Math.min(Number(input.pageSize) || 20, 100);
+  //   const page = Math.max(Number(input.page) || 1, 1);
+  //   const offset =
+  //     input.offset !== undefined ? Number(input.offset) : (page - 1) * pageSize;
+
+  //   const profiles = await adapter.profileObjects([obj], {
+  //     sampleSize: pageSize,
+  //     page,
+  //     offset,
+  //   });
+
+  //   const profile = profiles[obj.name] || {};
+  //   const rows = Array.isArray(profile.previewRows) ? profile.previewRows : [];
+  //   const totalCount = Number(profile.totalCount || 0);
+  //   const hasNext = page * pageSize < totalCount;
+
+  //   return {
+  //     rows,
+  //     rowCount: rows.length,
+  //     totalCount,
+  //     page,
+  //     pageSize,
+  //     hasNext,
+  //     table: obj,
+  //   };
+  // }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // INTERNAL HELPERS
   // ═══════════════════════════════════════════════════════════════════════════
 
+  // async previewTable(userId, dbConfig, input = {}) {
+  //   const adapter = createAdapter(dbConfig);
+  //   const snapshot = await snapshotService.getSnapshot(userId, adapter);
+
+  //   const target = String(input.target || "").trim();
+  //   const obj = (snapshot.objects || []).find(
+  //     (o) => o.name === target || o.name.split(".").pop() === target
+  //   );
+
+  //   if (!obj) throw new Error(`Table "${target}" not found in schema.`);
+
+  //   const maxRows = Math.min(Number(input.pageSize) || 20, 100);
+  //   const offset = Number(input.offset) || 0;
+
+  //   const rows = await adapter.previewTableRows(obj, {
+  //     limit: maxRows,
+  //     offset,
+  //   });
+
+  //   return {
+  //     rows,
+  //     rowCount: rows.length,
+  //     table: obj,
+  //   };
+  // }
+  async previewTable(userId, dbConfig, input = {}) {
+    const adapter = createAdapter(dbConfig);
+    const snapshot = await snapshotService.getSnapshot(userId, adapter);
+
+    const target = String(input.target || "").trim();
+    const obj = (snapshot.objects || []).find(
+      (o) => o.name === target || o.name.split(".").pop() === target
+    );
+    if (!obj) {
+      throw new Error(`Table "${target}" not found in schema.`);
+    }
+
+    const pageSize = Math.min(Number(input.pageSize) || 20, 100);
+    const page = Math.max(Number(input.page) || 1, 1);
+
+    const rawOffset =
+      input.offset !== undefined ? Number(input.offset) : (page - 1) * pageSize;
+
+    const offset = Math.max(Number.isFinite(rawOffset) ? rawOffset : 0, 0);
+
+    const profiles = await adapter.profileObjects([obj], {
+      sampleSize: pageSize,
+      page,
+      offset,
+    });
+
+    const profile = profiles[obj.name] || {};
+    const rows = Array.isArray(profile.previewRows) ? profile.previewRows : [];
+    const totalCount = Number(profile.totalCount || 0);
+    const hasNext = page * pageSize < totalCount;
+
+    return {
+      rows,
+      rowCount: rows.length,
+      totalCount,
+      page,
+      pageSize,
+      hasNext,
+      table: obj,
+    };
+  }
   _compile(logicalPlan, vendor, capabilities) {
     if (vendor === "mongodb") {
       const compiler = new MongoCompiler(capabilities);
@@ -381,7 +458,10 @@ function _shortName(name = "") {
 }
 
 function _displayExplanation(text = "") {
-  return String(text || "").replace(/\b([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)\b/g, "$2");
+  return String(text || "").replace(
+    /\b([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)\b/g,
+    "$2"
+  );
 }
 
 module.exports = { DataModeOrchestrator };

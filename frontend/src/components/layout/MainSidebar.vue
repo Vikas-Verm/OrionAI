@@ -6,16 +6,23 @@
       <span class="sidebar-brand-icon">🔭</span>
       <span class="sidebar-brand-name">OrionAI</span>
       <span class="sidebar-beta">BETA</span>
-      <button class="sidebar-bell" :class="{ 'bell-active': unreadNotifCount > 0, 'bell-urgent': hasUrgent }"
-        @click.stop="bellOpen = !bellOpen" title="Notifications">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9" />
-          <path d="M13.73 21a2 2 0 01-3.46 0" />
-        </svg>
-        <span v-if="unreadNotifCount > 0" class="sidebar-bell-badge">
-          {{ unreadNotifCount > 9 ? '9+' : unreadNotifCount }}
-        </span>
-      </button>
+      <div class="sidebar-brand-actions">
+        <button class="sidebar-bell" :class="{ 'bell-active': unreadNotifCount > 0, 'bell-urgent': hasUrgent }"
+          @click.stop="bellOpen = !bellOpen" title="Notifications">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9" />
+            <path d="M13.73 21a2 2 0 01-3.46 0" />
+          </svg>
+          <span v-if="unreadNotifCount > 0" class="sidebar-bell-badge">
+            {{ unreadNotifCount > 9 ? '9+' : unreadNotifCount }}
+          </span>
+        </button>
+        <button class="sidebar-close" @click.stop="closeSidebar" title="Close sidebar">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
+        </button>
+      </div>
     </div>
     <!-- Bell dropdown panel (positioned relative to sidebar) -->
     <Transition name="bell-panel">
@@ -51,32 +58,89 @@
         </div>
       </div>
     </Transition>
-    <!-- Search -->
-    <div class="search-box">
-      <input v-model="searchQuery" ref="searchInputRef" placeholder="Search chats..." class="search-input"
-        @input="onSearch" @keydown.enter.prevent="runChatSearch" />
-      <button class="search-action-btn" type="button" title="Search chats" @click="runChatSearch">
+    <div class="sidebar-quickbar" @click.stop>
+      <div class="sidebar-search-inline" :class="{ open: searchExpanded }">
+        <button
+          v-if="!searchExpanded"
+          class="sidebar-quick-btn"
+          type="button"
+          data-tooltip="Search"
+          aria-label="Search"
+          @click="focusSearch"
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="7" />
+            <path d="M20 20l-3.5-3.5" />
+          </svg>
+        </button>
+
+        <Transition name="sidebar-search-expand">
+          <div v-if="searchExpanded" class="sidebar-search-shell">
+            <svg class="sidebar-search-shell-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="7" />
+              <path d="M20 20l-3.5-3.5" />
+            </svg>
+            <input
+              ref="searchInputRef"
+              v-model="searchQuery"
+              placeholder="Search chats..."
+              class="sidebar-search-field"
+              @input="onSearch"
+              @keydown.enter.prevent="runChatSearch"
+              @blur="handleSearchBlur"
+            />
+            <button
+              v-if="searchQuery"
+              class="sidebar-search-inline-btn"
+              type="button"
+              aria-label="Clear search"
+              title="Clear search"
+              @click="clearSearch"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M18 6L6 18" />
+                <path d="M6 6l12 12" />
+              </svg>
+            </button>
+            <button
+              class="sidebar-search-inline-btn"
+              type="button"
+              aria-label="Close search"
+              title="Close search"
+              @click="closeSearch({ clear: true })"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M18 6L6 18" />
+                <path d="M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </Transition>
+      </div>
+
+      <button
+        class="sidebar-quick-btn sidebar-quick-btn-primary"
+        type="button"
+        data-tooltip="New Chat"
+        aria-label="New Chat"
+        @click="emit('newChat')"
+      >
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="11" cy="11" r="7" />
-          <path d="M20 20l-3.5-3.5" />
+          <path d="M12 5v14" />
+          <path d="M5 12h14" />
         </svg>
       </button>
     </div>
 
-    <!-- New Chat -->
-    <div class="new-chat-wrap">
-      <button class="new-chat-btn" @click="emit('newChat')">+ New Chat</button>
-    </div>
-
     <!-- Sessions -->
     <div class="sessions-list">
-      <div v-for="session in store.sessions" :key="session.sessionId"
+      <div v-for="session in visibleSessions" :key="session.sessionId"
         :class="['session-item', session.sessionId === store.currentSessionId ? 'active' : '']"
         @click="emit('switchSession', session.sessionId)">
         <span class="session-icon">
           {{ session.mode === 'db' ? '🗄️' : session.mode === 'rag' ? '📄' : session.mode === 'agent' ? '🤖' : '💬' }}
         </span>
-        <span class="session-title">{{ session.title }}</span>
+        <span class="session-title">{{ displaySessionTitle(session) }}</span>
         <button class="delete-session-btn" @click.stop="emit('deleteSession', session.sessionId)">✕</button>
       </div>
     </div>
@@ -134,6 +198,17 @@
           <div class="int-list-scroll">
             <div v-if="filteredConnectedApps.length === 0" class="int-empty">No connected apps match your search</div>
             <template v-else>
+              <!-- Reconnect banners first so broken apps stay visible without scrolling -->
+              <div v-for="app in filteredConnectedApps.filter(a => getStatus(a.apiType) === 'error')" :key="app.id + '-error'"
+                class="reconnect-banner" :style="{ borderLeftColor: app.color }">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                  <line x1="12" y1="9" x2="12" y2="13" />
+                  <line x1="12" y1="17" x2="12.01" y2="17" />
+                </svg>
+                <span>{{ app.label }} disconnected</span>
+                <button @click="emit('openIntegrations')">Fix →</button>
+              </div>
               <div v-for="app in filteredConnectedApps" :key="app.id" class="int-row" :style="activeView === app.id
                 ? { background: app.color + '18', borderColor: app.color + '30' }
                 : { background: 'transparent', borderColor: 'transparent' }">
@@ -152,17 +227,6 @@
                 <button class="int-row-x" @click.stop="removeApp(app.id)">×</button>
               </div>
             </template>
-            <!-- Reconnect banners for any broken integrations -->
-            <div v-for="app in filteredConnectedApps.filter(a => getStatus(a.apiType) === 'error')" :key="app.id + '-error'"
-              class="reconnect-banner" :style="{ borderLeftColor: app.color }">
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-                <line x1="12" y1="9" x2="12" y2="13" />
-                <line x1="12" y1="17" x2="12.01" y2="17" />
-              </svg>
-              <span>{{ app.label }} disconnected</span>
-              <button @click="emit('openIntegrations')">Fix →</button>
-            </div>
             <!-- AI summary strip -->
             <div v-if="filteredFirstSummary" class="int-ai-summary">
               <span class="int-ai-icon">✨</span>
@@ -226,17 +290,19 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, reactive, defineComponent, h } from 'vue'
+import { ref, computed, onMounted, onUnmounted, reactive, defineComponent, h, nextTick } from 'vue'
 import { store } from '../../stores/app'
 import { useSession } from '../../composables/useSession'
 import { useWebSocket } from '../../composables/useWebSocket'
 import api from '../../services/api'
 import { useIntegrationHealth } from '../../composables/useIntegrationHealth'
+import { buildSessionTitle, shouldHideDraftSession } from '../../utils/sessionTitles'
+import { useDisclosure } from '../../composables/useDisclosure'
 
 
 const emit = defineEmits([
   'newChat', 'switchSession', 'deleteSession', 'logout',
-  'openIntegrations', 'openIntegration'
+  'openIntegrations', 'openIntegration', 'closeSidebar'
 ])
 
 const props = defineProps({
@@ -255,9 +321,10 @@ const searchQuery = ref('')
 const searchInputRef = ref(null)
 const connectedAppQuery = ref('')
 const showUserMenu = ref(false)
-const intOpen = ref(true)   // collapsed by default — shows icon grid
+const intOpen = ref(false)   // collapsed by default — shows icon grid
 const connectedMap = reactive({})
 const bellOpen = ref(false)
+const { isOpen: searchExpanded, open: openSearchDisclosure, close: closeSearchDisclosure } = useDisclosure(false)
 
 // const themeOptions = [
 //   { value: 'dark', icon: '🌙', label: 'Dark' },
@@ -349,7 +416,12 @@ const connectedApps = computed(() =>
       ...a,
       unread: unreadByApp[a.id]?.displayCount ?? unreadByApp[a.id]?.count ?? 0,
     }))
-    .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }))
+    .sort((a, b) => {
+      const aBroken = getStatus(a.apiType) === 'error' ? 0 : 1
+      const bBroken = getStatus(b.apiType) === 'error' ? 0 : 1
+      if (aBroken !== bBroken) return aBroken - bBroken
+      return a.label.localeCompare(b.label, undefined, { sensitivity: 'base' })
+    })
 )
 const filteredConnectedApps = computed(() => {
   const query = connectedAppQuery.value.trim().toLowerCase()
@@ -365,8 +437,27 @@ const filteredFirstSummary = computed(() => {
   const found = filteredConnectedApps.value.find(a => unreadByApp[a.id]?.summary && a.unread > 0)
   return found ? unreadByApp[found.id]?.summary : ''
 })
+const visibleSessions = computed(() =>
+  store.sessions.filter((session) => {
+    if (!shouldHideDraftSession(session)) return true
+    if (session.sessionId !== store.currentSessionId) return false
+    return store.messages.some((message) => message.role === 'user')
+  })
+)
 function appSummary(appId) {
   return unreadByApp[appId]?.summary || ''
+}
+
+function displaySessionTitle(session) {
+  if (
+    shouldHideDraftSession(session) &&
+    session?.sessionId === store.currentSessionId
+  ) {
+    const firstUserMessage = store.messages.find((message) => message.role === 'user')?.content
+    const optimisticTitle = buildSessionTitle(firstUserMessage)
+    if (optimisticTitle !== 'New Chat') return optimisticTitle
+  }
+  return session?.title || 'New Chat'
 }
 
 function openApp(appId) {
@@ -430,22 +521,58 @@ function removeApp(id) {
 let searchTimer = null
 function onSearch() {
   clearTimeout(searchTimer)
+  if (!searchExpanded.value) openSearchDisclosure()
   searchTimer = setTimeout(() => loadSessions(searchQuery.value), 300)
 }
 function runChatSearch() {
   clearTimeout(searchTimer)
   loadSessions(searchQuery.value)
 }
+function focusSearch() {
+  openSearchDisclosure()
+  nextTick(() => searchInputRef.value?.focus())
+}
+function clearSearch() {
+  searchQuery.value = ''
+  clearTimeout(searchTimer)
+  loadSessions('')
+  closeSearchDisclosure()
+}
+function closeSearch({ clear = false } = {}) {
+  clearTimeout(searchTimer)
+  if (clear) {
+    if (searchQuery.value) loadSessions('')
+    searchQuery.value = ''
+  }
+  if (!searchQuery.value.trim() || clear) {
+    closeSearchDisclosure()
+  }
+}
+function handleSearchBlur() {
+  requestAnimationFrame(() => {
+    if (searchQuery.value.trim()) return
+    if (document.activeElement?.closest('.sidebar-search-inline')) return
+    closeSearchDisclosure()
+  })
+}
 function onOutsideClick(e) {
   if (!e.target.closest('.user-row-wrapper')) showUserMenu.value = false
   if (!e.target.closest('.sidebar-brand') && !e.target.closest('.bell-panel')) {
     bellOpen.value = false
+  }
+  if (!e.target.closest('.sidebar-quickbar') && !searchQuery.value.trim()) {
+    closeSearchDisclosure()
   }
 }
 
 function openAppFromBell(route) {
   bellOpen.value = false
   emit('openIntegration', route)
+}
+
+function closeSidebar() {
+  bellOpen.value = false
+  emit('closeSidebar')
 }
 
 function dismissBellNotification(id) {
@@ -496,7 +623,7 @@ onUnmounted(() => {
   stopAutoCheck()
 })
 
-defineExpose({ searchInputRef, refreshConnected })
+defineExpose({ searchInputRef, refreshConnected, focusSearch })
 </script>
 
 <style scoped>
@@ -510,7 +637,7 @@ defineExpose({ searchInputRef, refreshConnected })
   flex-direction: column;
   flex-shrink: 0;
   height: 100vh;
-  overflow: visible;
+  overflow: hidden;
   padding: 14px 12px;
   gap: 10px;
   backdrop-filter: blur(24px);
@@ -518,15 +645,23 @@ defineExpose({ searchInputRef, refreshConnected })
 }
 
 .sidebar-brand {
-  padding: 14px 14px 14px;
-  display: flex;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   border: 1px solid var(--border-default);
   border-radius: 24px;
   background: rgba(255, 255, 255, 0.035);
   flex-shrink: 0;
   box-shadow: var(--shadow-sm);
+  min-width: 0;
+}
+
+.sidebar-brand-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .sidebar-brand-icon {
@@ -537,13 +672,16 @@ defineExpose({ searchInputRef, refreshConnected })
 
 .sidebar-brand-name {
   font-family: var(--font-brand);
-  font-size: 20px;
+  font-size: 18px;
   letter-spacing: -0.45px;
   color: var(--text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sidebar-beta {
-  margin-left: auto;
   font-size: 10px;
   background: rgba(242, 198, 109, 0.12);
   color: var(--accent-warm);
@@ -554,84 +692,145 @@ defineExpose({ searchInputRef, refreshConnected })
   letter-spacing: 0.12em;
 }
 
-.search-box {
-  position: relative;
+.sidebar-quickbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
   padding: 0 2px;
   flex-shrink: 0;
 }
 
-.search-input {
-  width: 100%;
+.sidebar-search-inline {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+
+.sidebar-search-inline.open {
+  flex: 1;
+}
+
+.sidebar-quick-btn {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border-radius: 16px;
+  border: 1px solid rgba(176, 201, 255, 0.12);
   background: rgba(255, 255, 255, 0.04);
-  border: 1px solid var(--border-default);
-  border-radius: 999px;
-  padding: 12px 50px 12px 16px;
-  color: var(--text-primary);
-  font-size: 13px;
-  outline: none;
-  box-sizing: border-box;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
-  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
-}
-
-.search-input::placeholder {
-  color: var(--text-muted);
-}
-
-.search-input:focus {
-  border-color: var(--border-strong);
-  box-shadow: 0 0 0 4px rgba(82, 212, 255, 0.08);
-}
-
-.search-action-btn {
-  position: absolute;
-  top: 50%;
-  right: 10px;
-  width: 28px;
-  height: 28px;
-  transform: translateY(-50%);
-  border: 1px solid rgba(82, 212, 255, 0.16);
-  border-radius: 999px;
-  background: linear-gradient(135deg, rgba(82, 212, 255, 0.16), rgba(139, 125, 255, 0.16));
-  color: var(--text-primary);
+  color: rgba(226, 232, 240, 0.88);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: 0 10px 18px rgba(4, 8, 20, 0.28);
-  transition: transform 0.15s, border-color 0.15s, background 0.15s;
+  flex-shrink: 0;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
 }
 
-.search-action-btn:hover {
-  transform: translateY(calc(-50% - 1px));
+.sidebar-quick-btn::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%) translateY(4px);
+  opacity: 0;
+  pointer-events: none;
+  white-space: nowrap;
+  padding: 5px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(176, 201, 255, 0.14);
+  background: rgba(8, 14, 28, 0.95);
+  color: rgba(226, 232, 240, 0.84);
+  font-size: 10px;
+  font-weight: 700;
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+
+.sidebar-quick-btn:hover,
+.sidebar-quick-btn:focus-visible {
+  transform: translateY(-1px);
   border-color: rgba(82, 212, 255, 0.24);
-  background: linear-gradient(135deg, rgba(82, 212, 255, 0.24), rgba(139, 125, 255, 0.2));
+  background: rgba(82, 212, 255, 0.12);
+  box-shadow: 0 10px 20px rgba(4, 8, 20, 0.24);
+  outline: none;
 }
 
-.new-chat-wrap {
-  padding: 0 2px;
+.sidebar-quick-btn:hover::after,
+.sidebar-quick-btn:focus-visible::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.sidebar-quick-btn-primary {
+  background: linear-gradient(135deg, rgba(82, 212, 255, 0.16), rgba(139, 125, 255, 0.14));
+  border-color: rgba(82, 212, 255, 0.22);
+}
+
+.sidebar-search-shell {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 40px;
+  padding: 0 8px 0 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(176, 201, 255, 0.14);
+  background: rgba(255, 255, 255, 0.045);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.sidebar-search-shell-icon {
+  color: var(--text-muted);
   flex-shrink: 0;
 }
 
-.new-chat-btn {
-  width: 100%;
-  padding: 12px 14px;
-  background: linear-gradient(135deg, rgba(82, 212, 255, 0.16), rgba(139, 125, 255, 0.14));
-  border: 1px solid rgba(82, 212, 255, 0.2);
-  border-radius: 20px;
+.sidebar-search-field {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
   color: var(--text-primary);
-  font-weight: 600;
   font-size: 12.5px;
-  cursor: pointer;
-  text-align: left;
-  box-shadow: var(--shadow-sm);
-  transition: background 0.15s, transform 0.15s, border-color 0.15s;
+  outline: none;
 }
 
-.new-chat-btn:hover {
-  background: linear-gradient(135deg, rgba(82, 212, 255, 0.22), rgba(139, 125, 255, 0.18));
-  border-color: rgba(82, 212, 255, 0.28);
-  transform: translateY(-1px);
+.sidebar-search-field::placeholder {
+  color: var(--text-muted);
+}
+
+.sidebar-search-inline-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+}
+
+.sidebar-search-inline-btn:hover,
+.sidebar-search-inline-btn:focus-visible {
+  border-color: rgba(82, 212, 255, 0.18);
+  background: rgba(82, 212, 255, 0.08);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.sidebar-search-expand-enter-active,
+.sidebar-search-expand-leave-active {
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.sidebar-search-expand-enter-from,
+.sidebar-search-expand-leave-to {
+  opacity: 0;
+  transform: scaleX(0.96);
 }
 
 .sessions-list {
@@ -652,21 +851,22 @@ defineExpose({ searchInputRef, refreshConnected })
 .session-item {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 10px 11px;
-  border-radius: 18px;
+  gap: 8px;
+  padding: 9px 10px;
+  border-radius: 16px;
   cursor: pointer;
-  border: 1px solid transparent;
+  border: 1px solid rgba(255, 255, 255, 0.02);
   color: var(--text-secondary);
-  font-size: 12px;
-  background: rgba(255, 255, 255, 0.025);
-  transition: background 0.12s, border-color 0.12s, transform 0.12s;
+  font-size: 11.5px;
+  background: rgba(255, 255, 255, 0.02);
+  transition: background 0.12s, border-color 0.12s, transform 0.12s, box-shadow 0.12s;
 }
 
 .session-item:hover {
   background: rgba(255, 255, 255, 0.05);
-  border-color: var(--border-subtle);
+  border-color: rgba(176, 201, 255, 0.1);
   transform: translateY(-1px);
+  box-shadow: 0 10px 18px rgba(4, 8, 20, 0.16);
 }
 
 .session-item.active {
@@ -692,13 +892,15 @@ defineExpose({ searchInputRef, refreshConnected })
 
 .delete-session-btn {
   display: none;
-  background: none;
-  border: none;
+  width: 22px;
+  height: 22px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid transparent;
   color: var(--text-faint);
   cursor: pointer;
   font-size: 11px;
-  padding: 2px 4px;
-  border-radius: 4px;
+  padding: 0;
+  border-radius: 8px;
   flex-shrink: 0;
 }
 
@@ -709,14 +911,15 @@ defineExpose({ searchInputRef, refreshConnected })
 .delete-session-btn:hover {
   color: #ef4444;
   background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.18);
 }
 
 /* ── Integrations ── */
 .int-section {
   border: 1px solid var(--border-default);
-  padding: 14px 14px 10px;
+  padding: 12px 12px 8px;
   flex-shrink: 0;
-  border-radius: 26px;
+  border-radius: 22px;
   background: rgba(255, 255, 255, 0.03);
   box-shadow: var(--shadow-sm);
 }
@@ -907,7 +1110,7 @@ defineExpose({ searchInputRef, refreshConnected })
 }
 
 .int-list-scroll {
-  max-height: 176px;
+  max-height: 164px;
   overflow-y: auto;
   padding-right: 4px;
   scrollbar-width: thin;
@@ -1023,9 +1226,9 @@ defineExpose({ searchInputRef, refreshConnected })
 /* ── Footer ── */
 .sidebar-footer {
   border: 1px solid var(--border-default);
-  padding: 12px;
+  padding: 10px;
   flex-shrink: 0;
-  border-radius: 24px;
+  border-radius: 22px;
   background: rgba(255, 255, 255, 0.03);
   box-shadow: var(--shadow-sm);
 }
@@ -1042,8 +1245,8 @@ defineExpose({ searchInputRef, refreshConnected })
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 10px;
-  border-radius: 16px;
+  padding: 9px 10px;
+  border-radius: 14px;
   cursor: pointer;
   border: 1px solid transparent;
   color: var(--text-secondary);
@@ -1082,10 +1285,10 @@ defineExpose({ searchInputRef, refreshConnected })
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 10px 10px 6px;
+  padding: 10px;
   border-top: 1px solid rgba(255, 255, 255, 0.05);
   cursor: pointer;
-  border-radius: 18px;
+  border-radius: 16px;
   transition: background 0.12s;
 }
 
@@ -1232,9 +1435,8 @@ defineExpose({ searchInputRef, refreshConnected })
 /* ── Sidebar bell ──────────────────────────────────────────────────────────── */
 .sidebar-bell {
   position: relative;
-  margin-left: 6px;
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--border-default);
@@ -1247,9 +1449,30 @@ defineExpose({ searchInputRef, refreshConnected })
   transition: all 0.15s;
 }
 
+.sidebar-close {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid var(--border-default);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted, rgba(255, 255, 255, 0.35));
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+
 .sidebar-bell:hover {
   background: rgba(255, 255, 255, 0.07);
   color: var(--text-primary);
+}
+
+.sidebar-close:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-primary);
+  border-color: rgba(176, 201, 255, 0.18);
 }
 
 .sidebar-bell.bell-active {

@@ -114,8 +114,23 @@ class MongoAdapter {
 
   async profileObjects(objects, options = {}) {
     return this._withConnection(async (conn) => {
-      const db = conn.db;
       const result = {};
+
+      const sampleSize = Math.min(
+        Number(options.sampleSize) || PROFILE_SAMPLE_N,
+        100
+      );
+
+      const page = Math.max(Number(options.page) || 1, 1);
+
+      const rawOffset =
+        options.offset !== undefined
+          ? Number(options.offset)
+          : (page - 1) * sampleSize;
+
+      const skip = Math.max(Number.isFinite(rawOffset) ? rawOffset : 0, 0);
+
+      const fieldSampleLimit = Math.min(sampleSize, 5);
 
       for (const obj of objects) {
         try {
@@ -123,17 +138,27 @@ class MongoAdapter {
             conn,
             obj.name
           );
-          const samples = await coll
-            .find({}, { sort: { _id: -1 } })
-            .limit(PROFILE_SAMPLE_N)
+
+          const totalCount = await coll.countDocuments({});
+
+          const previewRows = await coll
+            .find({})
+            .sort({ _id: -1 })
+            .skip(skip)
+            .limit(sampleSize)
             .toArray();
 
           const fieldSamples = {};
           const topValues = {};
-          for (const doc of samples) {
+
+          for (const doc of previewRows) {
             for (const [k, v] of Object.entries(doc)) {
               if (!fieldSamples[k]) fieldSamples[k] = [];
-              if (v !== null && v !== undefined && fieldSamples[k].length < 5) {
+              if (
+                v !== null &&
+                v !== undefined &&
+                fieldSamples[k].length < fieldSampleLimit
+              ) {
                 fieldSamples[k].push(_safeValue(v));
               }
             }
@@ -141,17 +166,251 @@ class MongoAdapter {
 
           result[obj.name] = {
             samples: fieldSamples,
+            previewRows: previewRows.map((doc) =>
+              Object.fromEntries(
+                Object.entries(doc).map(([k, v]) => [
+                  k,
+                  serializePreviewValue(v),
+                ])
+              )
+            ),
             row_estimate: obj.estimated_rows,
+            totalCount,
+            page,
+            pageSize: sampleSize,
             topValues,
           };
         } catch {
-          result[obj.name] = { samples: {}, topValues: {} };
+          result[obj.name] = {
+            samples: {},
+            previewRows: [],
+            topValues: {},
+            totalCount: 0,
+            page,
+            pageSize: sampleSize,
+          };
         }
       }
+
       return result;
     });
   }
+  // async profileObjects(objects, options = {}) {
+  //   return this._withConnection(async (conn) => {
+  //     const result = {};
 
+  //     const sampleSize = Math.min(
+  //       Number(options.sampleSize) || PROFILE_SAMPLE_N,
+  //       100
+  //     );
+  //     const page = Math.max(Number(options.page) || 1, 1);
+  //     const rawOffset =
+  //       options.offset !== undefined
+  //         ? Number(options.offset)
+  //         : (page - 1) * sampleSize;
+  //     const skip = Math.max(Number.isFinite(rawOffset) ? rawOffset : 0, 0);
+
+  //     const fieldSampleLimit = Math.min(sampleSize, 5);
+
+  //     for (const obj of objects) {
+  //       try {
+  //         const { collection: coll } = await _resolveCollectionHandle(
+  //           conn,
+  //           obj.name
+  //         );
+  //         const totalCount = await coll.countDocuments({});
+
+  //         const previewRows = await coll
+  //           .find({})
+  //           .sort({ _id: -1 })
+  //           .skip(skip)
+  //           .limit(sampleSize)
+  //           .toArray();
+  //         console.log(previewRows, skip, sampleSize, coll, "previewRows");
+  //         const fieldSamples = {};
+  //         const topValues = {};
+
+  //         for (const doc of previewRows) {
+  //           for (const [k, v] of Object.entries(doc)) {
+  //             if (!fieldSamples[k]) fieldSamples[k] = [];
+  //             if (
+  //               v !== null &&
+  //               v !== undefined &&
+  //               fieldSamples[k].length < fieldSampleLimit
+  //             ) {
+  //               fieldSamples[k].push(_safeValue(v));
+  //             }
+  //           }
+  //         }
+
+  //         result[obj.name] = {
+  //           samples: fieldSamples,
+  //           previewRows: previewRows.map((doc) =>
+  //             Object.fromEntries(
+  //               Object.entries(doc).map(([k, v]) => [
+  //                 k,
+  //                 serializePreviewValue(v),
+  //               ])
+  //             )
+  //           ),
+  //           row_estimate: obj.estimated_rows,
+  //           totalCount,
+  //           page,
+  //           pageSize: sampleSize,
+  //           topValues,
+  //         };
+  //       } catch {
+  //         result[obj.name] = {
+  //           samples: {},
+  //           previewRows: [],
+  //           topValues: {},
+  //           totalCount: 0,
+  //           page,
+  //           pageSize: sampleSize,
+  //         };
+  //       }
+  //     }
+
+  //     return result;
+  //   });
+  // }
+
+  // async profileObjects(objects, options = {}) {
+  //   return this._withConnection(async (conn) => {
+  //     const db = conn.db;
+  //     const result = {};
+  //     const sampleSize = Math.min(
+  //       Number(options.sampleSize) || PROFILE_SAMPLE_N,
+  //       100
+  //     );
+  //     const page = Math.max(Number(options.page) || 1, 1);
+  //     const skip = Math.max(
+  //       Number(options.offset) ?? (page - 1) * sampleSize,
+  //       0
+  //     );
+  //     const fieldSampleLimit = Math.min(sampleSize, 5);
+  //     for (const obj of objects) {
+  //       try {
+  //         const { collection: coll } = await _resolveCollectionHandle(
+  //           conn,
+  //           obj.name
+  //         );
+  //         const previewRows = await coll
+  //           .find({})
+  //           .sort({ _id: -1 })
+  //           .skip(skip)
+  //           .limit(sampleSize)
+  //           .toArray();
+  //         // console.log("previewRows", previewRows.length);
+  //         const fieldSamples = {};
+  //         const topValues = {};
+  //         for (const doc of previewRows) {
+  //           for (const [k, v] of Object.entries(doc)) {
+  //             if (!fieldSamples[k]) fieldSamples[k] = [];
+  //             if (
+  //               v !== null &&
+  //               v !== undefined &&
+  //               fieldSamples[k].length < fieldSampleLimit
+  //             ) {
+  //               fieldSamples[k].push(_safeValue(v));
+  //             }
+  //           }
+  //         }
+  //         console.log("fieldSamples", fieldSamples);
+  //         result[obj.name] = {
+  //           samples: fieldSamples,
+  //           previewRows: previewRows.map((doc) =>
+  //             Object.fromEntries(
+  //               Object.entries(doc).map(([k, v]) => [k, _safeValue(v)])
+  //             )
+  //           ),
+  //           row_estimate: obj.estimated_rows,
+  //           totalCount,
+  //           page,
+  //           pageSize: sampleSize,
+  //           topValues,
+  //         };
+  //       } catch {
+  //         result[obj.name] = { samples: {}, previewRows: [], topValues: {} };
+  //       }
+  //     }
+  //     return result;
+  //   });
+  // }
+  // async profileObjects(objects, options = {}) {
+  //   return this._withConnection(async (conn) => {
+  //     const result = {};
+
+  //     const sampleSize = Math.min(
+  //       Number(options.sampleSize) || PROFILE_SAMPLE_N,
+  //       100
+  //     );
+  //     const offset =
+  //       options.offset !== undefined
+  //         ? Number(options.offset)
+  //         : (page - 1) * sampleSize;
+  //     const page = Math.max(Number(options.page) || 1, 1);
+  //     const skip = Math.max(Number.isFinite(offset) ? offset : 0, 0);
+
+  //     const fieldSampleLimit = Math.min(sampleSize);
+  //     for (const obj of objects) {
+  //       try {
+  //         const { collection: coll } = await _resolveCollectionHandle(
+  //           conn,
+  //           obj.name
+  //         );
+
+  //         const totalCount = await coll.countDocuments({});
+
+  //         const previewRows = await coll
+  //           .find({})
+  //           .sort({ _id: -1 })
+  //           .skip(skip)
+  //           .limit(sampleSize)
+  //           .toArray();
+  //         const fieldSamples = {};
+  //         const topValues = {};
+
+  //         for (const doc of previewRows) {
+  //           for (const [k, v] of Object.entries(doc)) {
+  //             if (!fieldSamples[k]) fieldSamples[k] = [];
+  //             if (
+  //               v !== null &&
+  //               v !== undefined &&
+  //               fieldSamples[k].length < fieldSampleLimit
+  //             ) {
+  //               fieldSamples[k].push(_safeValue(v));
+  //             }
+  //           }
+  //         }
+  //         result[obj.name] = {
+  //           samples: fieldSamples,
+  //           previewRows: previewRows.map((doc) =>
+  //             Object.fromEntries(
+  //               Object.entries(doc).map(([k, v]) => [
+  //                 k,
+  //                 serializePreviewValue(v),
+  //               ])
+  //             )
+  //           ),
+  //           row_estimate: obj.estimated_rows,
+  //           totalCount,
+  //           page,
+  //           pageSize: sampleSize,
+  //           topValues,
+  //         };
+  //       } catch {
+  //         result[obj.name] = {
+  //           samples: {},
+  //           previewRows: [],
+  //           topValues: {},
+  //         };
+  //       }
+  //     }
+
+  //     return result;
+  //   });
+  // }
   async executePlan(physicalPlan) {
     return this._withConnection(async (conn) => {
       const { collection: coll } = await _resolveCollectionHandle(
@@ -214,6 +473,49 @@ class MongoAdapter {
     return { connection, db: connection.db, client: connection.getClient() };
   }
 }
+
+function serializePreviewValue(v) {
+  if (v instanceof Date) return v.toISOString();
+
+  if (typeof v === "object" && v !== null) {
+    if (v._bsontype === "ObjectID" || v._bsontype === "ObjectId") {
+      return v.toString();
+    }
+
+    if (Array.isArray(v)) {
+      return v.map((item) => serializePreviewValue(item));
+    }
+
+    const out = {};
+    for (const [k, val] of Object.entries(v)) {
+      out[k] = serializePreviewValue(val);
+    }
+    return out;
+  }
+
+  return v;
+}
+// function serializePreviewValue(v) {
+//   if (v instanceof Date) return v.toISOString();
+
+//   if (typeof v === "object" && v !== null) {
+//     if (v._bsontype === "ObjectID" || v._bsontype === "ObjectId") {
+//       return v.toString();
+//     }
+
+//     if (Array.isArray(v)) {
+//       return v.map((item) => serializePreviewValue(item));
+//     }
+
+//     const out = {};
+//     for (const [k, val] of Object.entries(v)) {
+//       out[k] = serializePreviewValue(val);
+//     }
+//     return out;
+//   }
+
+//   return v;
+// }
 
 async function _resolveCollectionHandle(conn, namespace) {
   const fullName = String(namespace || "").trim();

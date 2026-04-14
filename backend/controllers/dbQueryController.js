@@ -245,6 +245,7 @@ async function handleDbChat(req, res) {
   let result;
   try {
     result = await queryConnectedDatabase(userId, message);
+    // console.log(result, "klsdflkjsfljdsdlfjljk");
   } catch (err) {
     const { reply, status } = classifyError(err);
     await persistConversationTurn(
@@ -303,7 +304,7 @@ async function handleDbChat(req, res) {
       : null,
     temporalField: analysis.temporalField?.name || null,
   }).catch(() => {});
-
+  console.log(result.rows, "klsdflkjsfljdsdlfjljk");
   // ── Response ────────────────────────────────────────────────────────────────
   return res.json({
     reply,
@@ -371,7 +372,7 @@ async function handleDbPreview(req, res) {
   const page = Math.max(1, Number(req.body?.page) || 1);
   const pageSize = Math.max(1, Math.min(Number(req.body?.pageSize) || 20, 100));
   const searchTerm = String(req.body?.searchTerm || "").trim();
-
+  // console.log(userId, startedAt, target, page, pageSize, "klsdjfjdsfjlsldfjk");
   if (!target) {
     return res
       .status(400)
@@ -385,7 +386,7 @@ async function handleDbPreview(req, res) {
       pageSize,
       searchTerm,
     });
-
+    // console.log(result, "klsdjfjdsfjlsldfjk");
     return res.json({
       ok: true,
       rows: result.rows || [],

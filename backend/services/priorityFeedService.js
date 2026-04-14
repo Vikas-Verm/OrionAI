@@ -322,6 +322,42 @@ function sortByPriority(items = []) {
   });
 }
 
+function getPriorityItemActivityTime(item = {}) {
+  const candidates = [
+    item?.meta?.latestMessageAt,
+    item?.meta?.latestInboundAt,
+    item?.meta?.lastMessageAt,
+    item?.meta?.updatedAt,
+    item?.meta?.startsAt,
+    item?.updatedAt,
+    item?.createdAt,
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const timestamp = new Date(candidate).getTime();
+    if (Number.isFinite(timestamp) && timestamp > 0) {
+      return timestamp;
+    }
+  }
+
+  return 0;
+}
+
+function sortByLatestActivity(items = []) {
+  return [...items].sort((a, b) => {
+    const activityDelta =
+      getPriorityItemActivityTime(b) - getPriorityItemActivityTime(a);
+    if (activityDelta !== 0) return activityDelta;
+
+    if ((b.priorityScore || 0) !== (a.priorityScore || 0)) {
+      return (b.priorityScore || 0) - (a.priorityScore || 0);
+    }
+
+    return String(a.title || "").localeCompare(String(b.title || ""));
+  });
+}
+
 function countItemsForFilter(items = [], filterId = "all", communicationSummary = null) {
   if (filterId === "all") return items.length;
   if (filterId === "urgent") {
@@ -610,6 +646,7 @@ function mapCalendarEventToPriorityItem(event) {
       endsAt: event.end || null,
       time: event.time,
       date: event.date,
+      meetLink: event.meet || null,
       attendeeCount,
       responseStatus: event.responseStatus || null,
     },
@@ -790,7 +827,7 @@ async function buildMessagingPriorityItems(userId, options = {}) {
     items.push(...mapMessageSourceToItems("whatsapp", whatsappResult.value.previews));
   }
 
-  return sortByPriority(items).slice(0, 3);
+  return sortByLatestActivity(items);
 }
 
 function mapMessageSourceToItems(sourceApp, previews = []) {
@@ -1102,7 +1139,7 @@ async function getHomeDashboard(userId) {
     ...calendarItems,
     ...jiraSignals.personalItems,
   ]);
-  const activeItems = sortByPriority(
+  const activeItems = sortByLatestActivity(
     filterActiveItems(allItems, latestActionsByItem)
   );
   const summary = buildPrioritySummary(
@@ -1194,6 +1231,7 @@ module.exports = {
     buildHeadline,
     countItemsForFilter,
     sortByPriority,
+    sortByLatestActivity,
     mapCalendarEventToPriorityItem,
     dedupePriorityItems,
     buildEffectiveCommunicationSummary,

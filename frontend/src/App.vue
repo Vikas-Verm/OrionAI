@@ -7,12 +7,45 @@
       <div class="app-grid-glow" aria-hidden="true"></div>
       <OnboardingFlow ref="onboardingRef" @done="() => { }" @openIntegrations="onOpenIntegrations"
         @runCommand="onOnboardingCommand" />
-      <Sidebar ref="sidebarRef" :activeView="activeModule || (showingIntegrations ? 'settings' : (store.mode === 'db' ? 'database' : 'agent'))"
-        :showingIntegrations="showingIntegrations"
-        @newChat="() => { activeModule = null; showingIntegrations = false; setMode('chat'); store.webMode = false; startNewChat() }"
-        @switchSession="switchSession" @deleteSession="deleteSession" @logout="logout"
-        @openIntegrations="onOpenIntegrations" @openIntegration="onOpenIntegration" />
-       
+      <div class="sidebar-shell" :class="{ 'sidebar-shell-collapsed': sidebarCollapsed }">
+        <Sidebar
+          ref="sidebarRef"
+          class="sidebar-panel"
+          :class="{ 'sidebar-panel-collapsed': sidebarCollapsed }"
+          :activeView="activeModule || (showingIntegrations ? 'settings' : (store.mode === 'db' ? 'database' : 'agent'))"
+          :showingIntegrations="showingIntegrations"
+          @newChat="() => { activeModule = null; showingIntegrations = false; setMode('chat'); store.webMode = false; startNewChat() }"
+          @switchSession="switchSession"
+          @deleteSession="deleteSession"
+          @logout="logout"
+          @openIntegrations="onOpenIntegrations"
+          @openIntegration="onOpenIntegration"
+          @closeSidebar="sidebarCollapsed = true"
+        />
+
+        <div v-if="sidebarCollapsed" class="sidebar-float-dock">
+          <button class="sidebar-float-brand" type="button" title="Open sidebar" @click="openSidebar">
+            <span class="sidebar-float-brand-mark">🔭</span>
+            <span class="sidebar-float-tooltip">Open sidebar</span>
+          </button>
+
+          <button
+            class="sidebar-float-bell"
+            :class="{ 'bell-active': unreadNotifCount > 0, 'bell-urgent': hasUrgent }"
+            type="button"
+            title="Open sidebar"
+            @click="openSidebar"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9" />
+              <path d="M13.73 21a2 2 0 01-3.46 0" />
+            </svg>
+            <span v-if="unreadNotifCount > 0" class="sidebar-float-bell-badge">
+              {{ unreadNotifCount > 9 ? '9+' : unreadNotifCount }}
+            </span>
+          </button>
+        </div>
+      </div>
 
       <div class="main">
 
@@ -116,9 +149,10 @@ const { loadSessions, startNewChat, switchSession: _switchSession, deleteSession
 const { sendMessage, regenerate } = useChat()
 const { handleFileSelect, removeAttachment, connectDatabase } = useFiles()
 const { handleAgentMessage, provideMissingParams, pendingParams } = useAgent()
-const { start, stop } = useWebSocket()
+const { start, stop, unreadNotifCount, hasUrgent } = useWebSocket()
 // Refs
 const sidebarRef = ref(null)
+const sidebarCollapsed = ref(false)
 const showingIntegrations = ref(false)
 const activeModule = ref(null)   // null | 'telegram' | 'gmail' | 'slack' | 'jira' | 'calendar'
 const messageListRef = ref(null)
@@ -199,6 +233,10 @@ function logout() {
   stop()
   clearAuth()
   delete api.defaults.headers.common['Authorization']
+}
+
+function openSidebar() {
+  sidebarCollapsed.value = false
 }
 
 // ── Navigation ────────────────────────────────────────────
@@ -321,7 +359,12 @@ function handleKeyboard(e) {
   }
   if ((e.metaKey || e.ctrlKey) && e.key === '/') {
     e.preventDefault()
-    sidebarRef.value?.searchInputRef?.focus()
+    if (sidebarCollapsed.value) {
+      openSidebar()
+      nextTick(() => sidebarRef.value?.focusSearch?.())
+      return
+    }
+    sidebarRef.value?.focusSearch?.()
   }
   if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'E') {
     e.preventDefault()
@@ -388,6 +431,138 @@ function onOnboardingCommand(command) {
   background: var(--bg-base);
   position: relative;
   isolation: isolate;
+}
+
+.sidebar-shell {
+  position: relative;
+  flex-shrink: 0;
+  z-index: 2;
+  transition: width 180ms ease;
+}
+
+.sidebar-shell-collapsed {
+  width: 0;
+}
+
+.sidebar-panel {
+  position: relative;
+  transition: transform 180ms ease, opacity 180ms ease;
+}
+
+.sidebar-panel-collapsed {
+  position: absolute;
+  top: 0;
+  left: 0;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(calc(-100% - 18px));
+}
+
+.sidebar-float-dock {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  z-index: 12;
+}
+
+.sidebar-float-brand,
+.sidebar-float-bell {
+  position: relative;
+  border: 1px solid rgba(176, 201, 255, 0.16);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015)),
+    rgba(8, 14, 30, 0.88);
+  color: var(--text-primary);
+  box-shadow: 0 18px 42px rgba(2, 6, 23, 0.28);
+  backdrop-filter: blur(24px);
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.sidebar-float-brand:hover,
+.sidebar-float-bell:hover {
+  transform: translateY(-1px);
+  border-color: rgba(82, 212, 255, 0.24);
+}
+
+.sidebar-float-brand {
+  width: 48px;
+  height: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 18px;
+  cursor: pointer;
+}
+
+.sidebar-float-brand-mark {
+  font-size: 21px;
+  line-height: 1;
+  filter: drop-shadow(0 8px 16px rgba(82, 212, 255, 0.18));
+}
+
+.sidebar-float-tooltip {
+  position: absolute;
+  left: 18px;
+  top: calc(100% + 8px);
+  opacity: 0;
+  transform: translateY(-4px);
+  pointer-events: none;
+  padding: 7px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(176, 201, 255, 0.14);
+  background: rgba(9, 16, 34, 0.94);
+  color: rgba(226, 232, 240, 0.82);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.sidebar-float-brand:hover .sidebar-float-tooltip {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.sidebar-float-bell {
+  width: 46px;
+  height: 46px;
+  border-radius: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.sidebar-float-bell.bell-active {
+  border-color: rgba(82, 212, 255, 0.28);
+  color: var(--accent-hover);
+}
+
+.sidebar-float-bell.bell-urgent {
+  border-color: rgba(255, 107, 127, 0.38);
+  color: #ff8ea1;
+}
+
+.sidebar-float-bell-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(82, 212, 255, 0.92), rgba(139, 125, 255, 0.84));
+  color: white;
+  font-size: 8px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid rgba(8, 14, 30, 0.94);
 }
 
 .main {

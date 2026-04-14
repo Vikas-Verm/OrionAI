@@ -164,12 +164,17 @@
   // Build live items from inbox
   const liveItems = computed(() =>
     Object.entries(unreadByApp)
-      .filter(([, v]) => v?.count > 0)
       .map(([app, v]) => ({
         app,
-        count:   v.count,
+        displayCount: Number(v?.displayCount ?? v?.count ?? 0) || 0,
+        entry: v || {},
+      }))
+      .filter(({ displayCount }) => displayCount > 0)
+      .map(({ app, displayCount, entry: v }) => ({
+        app,
+        count:   displayCount,
         items:   v.items || [],
-        summary: v.summary || `${v.count} unread`,
+        summary: v.summary || `${displayCount} unread`,
         ai:      v.ai || null,
         ...(APP_META[app] || { label: app, icon: '🔔', color: '#6366f1', route: app }),
       }))

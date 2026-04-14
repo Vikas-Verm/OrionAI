@@ -14,7 +14,6 @@ async function getCalendarClient(userId) {
   const doc = await Integration.findOne({
     userId,
     type: "google_calendar",
-    enabled: true,
   });
   if (!doc?.googleCalendar?.accessToken && !doc?.googleCalendar?.refreshToken) {
     throw new Error(
@@ -28,7 +27,7 @@ async function getCalendarClient(userId) {
     clientId: oauth.clientId,
     clientSecret: oauth.clientSecret,
   };
-  const accessToken = await refreshAccessToken(cfg);
+  const accessToken = await refreshAccessToken(userId, cfg);
   return {
     client: axios.create({
       baseURL: "https://www.googleapis.com/calendar/v3",
@@ -41,7 +40,50 @@ async function getCalendarClient(userId) {
   };
 }
 
-async function refreshAccessToken(cfg) {
+async function markCalendarHealthy(userId, patch = {}) {
+  await Integration.findOneAndUpdate(
+    { userId, type: "google_calendar" },
+    {
+      $set: {
+        enabled: true,
+        lastTestOk: true,
+        updatedAt: new Date(),
+        ...Object.fromEntries(
+          Object.entries(patch || {}).map(([key, value]) => [`googleCalendar.${key}`, value])
+        ),
+      },
+    }
+  ).catch(() => {});
+}
+
+async function markCalendarReconnectRequired(userId) {
+  await Integration.findOneAndUpdate(
+    { userId, type: "google_calendar" },
+    {
+      $set: {
+        enabled: false,
+        "googleCalendar.accessToken": "",
+        "googleCalendar.expiresAt": null,
+        lastTestOk: false,
+        updatedAt: new Date(),
+      },
+    }
+  ).catch(() => {});
+}
+
+function isInvalidGrantError(err) {
+  const haystack = [
+    err?.response?.data?.error,
+    err?.response?.data?.error_description,
+    err?.message,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return haystack.includes("invalid_grant");
+}
+
+async function refreshAccessToken(userId, cfg) {
   if (!cfg.refreshToken || !cfg.clientId || !cfg.clientSecret) {
     if (cfg.accessToken) return cfg.accessToken;
     throw new Error(
@@ -57,8 +99,17 @@ async function refreshAccessToken(cfg) {
         client_secret: cfg.clientSecret,
       },
     });
-    return res.data.access_token;
+    const accessToken = res.data.access_token;
+    const expiresAt = Date.now() + (res.data.expires_in || 3600) * 1000;
+    await markCalendarHealthy(userId, {
+      accessToken,
+      expiresAt: new Date(expiresAt),
+    });
+    return accessToken;
   } catch (err) {
+    if (isInvalidGrantError(err)) {
+      await markCalendarReconnectRequired(userId);
+    }
     const detail =
       err.response?.data?.error_description ||
       err.response?.data?.error ||

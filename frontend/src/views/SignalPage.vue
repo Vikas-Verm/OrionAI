@@ -172,9 +172,6 @@
               <strong>{{ room.name }}</strong>
               <span class="sg-room-time">{{ formatRoomTime(room.lastMessageAt) }}</span>
             </div>
-            <div class="sg-room-sub">
-              <span>{{ room.isDirect ? 'Direct' : `Group · ${room.memberCount || 0} members` }}</span>
-            </div>
             <p class="sg-room-preview">{{ room.lastMessage || 'No messages yet' }}</p>
           </div>
           <div class="sg-room-meta">
@@ -2002,42 +1999,41 @@ onUnmounted(() => {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 0;
   min-height: 0;
+  padding: 4px 0 0;
+  scrollbar-width: thin;
 }
 
 .sg-room-item {
   display: flex;
-  align-items: stretch;
-  gap: 12px;
-  padding: 12px;
-  border-radius: 20px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  background: rgba(255, 255, 255, 0.03);
+  align-items: center;
+  gap: 11px;
+  padding: 8px 12px;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
   color: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, transform 0.15s;
+  transition: background 0.15s ease;
 }
 
 .sg-room-item:hover {
   background: rgba(255, 255, 255, 0.055);
-  border-color: rgba(255, 255, 255, 0.12);
-  transform: translateY(-1px);
 }
 
 .sg-room-item.active {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.12), rgba(14, 165, 233, 0.08));
-  border-color: rgba(59, 130, 246, 0.22);
-  box-shadow: 0 14px 28px rgba(6, 12, 28, 0.18);
+  background: rgba(59, 130, 246, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.18);
 }
 
 .sg-room-avatar,
 .sg-message-avatar,
 .sg-info-avatar {
-  width: 42px;
-  height: 42px;
-  border-radius: 16px;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
   background: linear-gradient(135deg, #3b82f6, #0ea5e9);
   display: flex;
   align-items: center;
@@ -2059,12 +2055,15 @@ onUnmounted(() => {
 .sg-room-avatar--head {
   width: 48px;
   height: 48px;
-  border-radius: 18px;
+  border-radius: 50%;
 }
 
 .sg-room-body {
   min-width: 0;
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .sg-room-top,
@@ -2079,7 +2078,7 @@ onUnmounted(() => {
 }
 
 .sg-room-top strong {
-  font-size: 13px;
+  font-size: 13.5px;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -2088,19 +2087,18 @@ onUnmounted(() => {
 
 .sg-room-time,
 .sg-room-sub {
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--text-muted);
 }
 
 .sg-room-preview {
-  margin: 6px 0 0;
-  font-size: 12px;
+  margin: 0;
+  font-size: 12.5px;
   line-height: 1.45;
   color: var(--text-secondary);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .sg-room-chip {
@@ -2132,7 +2130,8 @@ onUnmounted(() => {
 
 .sg-room-meta {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  padding-top: 2px;
 }
 
 .sg-room-badge {

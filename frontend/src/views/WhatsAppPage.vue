@@ -69,9 +69,6 @@
             <div class="wa-chat-info">
               <div class="wa-chat-name-row">
                 <div class="wa-chat-name">{{ chat.name }}</div>
-                <span v-if="whatsappActionState(chat.id)" class="wa-action-chip" :class="`state-${whatsappActionState(chat.id).actionState}`">
-                  {{ whatsappActionState(chat.id).actionStateLabel }}
-                </span>
               </div>
               <div class="wa-chat-preview">{{ chat.lastMessage || '...' }}</div>
             </div>
@@ -195,7 +192,6 @@
     groups: whatsappActionGroups,
     loading: whatsappActionsLoading,
     summaryText: whatsappActionSummary,
-    stateByConversationId: whatsappActionMap,
     refresh: refreshWhatsAppActions,
     recordAction: recordWhatsAppAction,
   } = useCommunicationActions('whatsapp')
@@ -234,10 +230,6 @@
     } finally {
       loading.value = false
     }
-  }
-
-  function whatsappActionState(conversationId) {
-    return whatsappActionMap.value[String(conversationId)] || null
   }
 
   async function applyModuleContext() {
@@ -599,7 +591,7 @@
     display: flex;
     align-items: flex-end;
     gap: 8px;
-    padding: 10px 14px;
+    padding: 10px 18px 18px;
     border-top: 1px solid var(--border-subtle);
     background: rgba(8, 13, 28, 0.52);
     backdrop-filter: blur(18px);
@@ -607,32 +599,36 @@
   .wa-reply-input {
     flex: 1;
     background: rgba(255,255,255,.045);
-    border: 1px solid var(--border-default);
-    border-radius: 999px;
-    padding: 10px 15px;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 16px;
+    padding: 12px 14px;
     color: var(--text-primary);
     font-size: 13px;
     outline: none;
     resize: none;
-    max-height: 120px;
-    line-height: 1.4;
+    min-height: 46px;
+    max-height: 160px;
+    line-height: 1.45;
+    box-sizing: border-box;
+    scrollbar-width: none;
     backdrop-filter: blur(14px);
+    transition: border-color 0.15s, box-shadow 0.15s;
   }
-  .wa-reply-input:focus { border-color: var(--border-strong); box-shadow: 0 0 0 4px rgba(82,212,255,.08); }
+  .wa-reply-input:focus { border-color: rgba(59, 130, 246, 0.26); box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.08); }
   .wa-reply-input::placeholder { color: var(--text-muted); }
   .wa-send-btn {
-    width: 38px; height: 38px;
-    border-radius: 50%;
-    background: linear-gradient(135deg, rgba(82,212,255,.94), rgba(139,125,255,.84));
-    border: 1px solid rgba(255,255,255,.12);
+    width: 44px; height: 44px;
+    border-radius: 16px;
+    background: linear-gradient(135deg, #3b82f6, #0ea5e9);
+    border: 1px solid rgba(125, 211, 252, 0.22);
     color: white;
     cursor: pointer;
     display: flex; align-items: center; justify-content: center;
     flex-shrink: 0;
-    transition: background 0.15s;
+    transition: transform 0.15s, box-shadow 0.15s, opacity 0.15s;
   }
-  .wa-send-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--shadow-accent); }
-  .wa-send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .wa-send-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 16px 32px rgba(14, 165, 233, 0.22); }
+  .wa-send-btn:disabled { opacity: 0.55; cursor: not-allowed; }
   
   /* ── Loading / states ────────────────────────────────────────────────────── */
   .wa-loading {

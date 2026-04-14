@@ -582,13 +582,6 @@
               <div class="tg-dlg-top">
                 <span class="tg-dlg-name">{{ d.name }}</span>
                 <div class="tg-dlg-meta">
-                  <span
-                    v-if="telegramActionState(d.id)"
-                    class="tg-action-chip"
-                    :class="`state-${telegramActionState(d.id).actionState}`"
-                  >
-                    {{ telegramActionState(d.id).actionStateLabel }}
-                  </span>
                   <span class="tg-dlg-date">{{ fmtDate(d.lastDate) }}</span>
                 </div>
               </div>
@@ -1014,7 +1007,9 @@ function savePendingTelegramAuth(payload) {
       return
     }
     sessionStorage.setItem(TELEGRAM_PENDING_AUTH_KEY, JSON.stringify(payload))
-  } catch {}
+  } catch (err) {
+    console.debug('Failed to persist Telegram auth state:', err?.message || err)
+  }
 }
 
 function resetTelegramAuthFlow() {
@@ -1045,14 +1040,9 @@ const {
   groups: telegramActionGroups,
   loading: telegramActionsLoading,
   summaryText: telegramActionSummary,
-  stateByConversationId: telegramActionMap,
   refresh: refreshTelegramActions,
   recordAction: recordTelegramAction,
 } = useCommunicationActions('telegram')
-
-function telegramActionState(dialogId) {
-  return telegramActionMap.value[String(dialogId)] || null
-}
 
 // ── Modal & Drawer state ──────────────────────────────────────────────
 const showDrawer = ref(false)
@@ -1396,7 +1386,9 @@ async function submitPassword() {
 }
 async function logout() {
   closeModal(); showDrawer.value = false; showMore.value = false
-  try { await api.delete('/api/telegram/session') } catch {}
+  try { await api.delete('/api/telegram/session') } catch (err) {
+    console.debug('Telegram logout request failed:', err?.message || err)
+  }
   notifyIntegrationsUpdated()
   resetTelegramAuthFlow()
   me.value = null; dialogs.value = []; msgs.value = []; selDlg.value = null
@@ -1517,7 +1509,12 @@ async function batchPhotos(list) {
 async function loadPhoto(id) {
   if (!id || photoCache.value[id] !== undefined) return
   photoCache.value[id] = null
-  try { const r = await api.get(`/api/telegram/photo/${encodeURIComponent(id)}`); if (r.data.photo) photoCache.value[id] = r.data.photo } catch {}
+  try {
+    const r = await api.get(`/api/telegram/photo/${encodeURIComponent(id)}`)
+    if (r.data.photo) photoCache.value[id] = r.data.photo
+  } catch (err) {
+    console.debug('Telegram photo preload skipped:', err?.message || err)
+  }
 }
 const filteredDlgs = computed(() => {
   let list = dialogs.value
@@ -1632,7 +1629,9 @@ async function loadMore() {
     const r = await api.get(`/api/telegram/dialogs/${encodeURIComponent(selDlg.value.id)}/messages?limit=50&offsetId=${msgs.value[0]?.id || 0}`)
     msgs.value = [...r.data.messages, ...msgs.value]; canMore.value = r.data.messages.length >= 50
     await nextTick(); if (msgsEl.value) msgsEl.value.scrollTop = 220
-  } catch {} finally { loadingMore.value = false }
+  } catch (err) {
+    console.debug('Failed to load older Telegram messages:', err?.message || err)
+  } finally { loadingMore.value = false }
 }
 async function sendMsg() {
   const text = draft.value.trim(); if (!text || !selDlg.value || sending.value) return
@@ -2125,10 +2124,6 @@ function storyPrev() {
   }
 }
 
-function storyViewerTap(e) {
-  // Tap right half → next, left half → prev  (handled by tap zones)
-}
-
 async function sendStoryReply() {
   const text = storyReplyDraft.value.trim()
   if (!text || !storyViewer.value.name) return
@@ -2531,16 +2526,75 @@ function fIconCol(n = '') { return EX[(n.split('.').pop() || '').toLowerCase()] 
 .tg-web-url { font-size: 11px; color: var(--tg-accent); opacity: .7; text-decoration: none; }
 .tg-m-generic { display: flex; align-items: center; gap: 5px; font-size: 13px; padding: 3px 0; color: var(--text-secondary); }
 /* Input */
-.tg-input-bar { padding: 7px 10px 9px; border-top: 1px solid var(--border-subtle); background: var(--bg-surface); flex-shrink: 0; position: relative; }
-.tg-input-wrap { display: flex; align-items: flex-end; gap: 4px; background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: 24px; padding: 5px; transition: border-color .2s; }
-.tg-input-wrap:focus-within { border-color: var(--tg-accent); }
-.tg-emoji-btn, .tg-attach-btn { width: 34px; height: 34px; border-radius: 50%; border: none; background: transparent; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; }
-.tg-emoji-btn:hover, .tg-attach-btn:hover { color: var(--tg-accent); }
-.tg-input { flex: 1; background: transparent; border: none; outline: none; color: var(--text-primary); font-size: 14px; font-family: inherit; line-height: 1.5; resize: none; min-height: 22px; max-height: 140px; padding: 5px 4px; scrollbar-width: none; }
+.tg-input-bar { padding: 10px 18px 18px; border-top: 1px solid var(--border-subtle); background: rgba(8, 13, 28, 0.52); flex-shrink: 0; position: relative; backdrop-filter: blur(18px); }
+.tg-input-wrap { display: flex; align-items: flex-end; gap: 8px; background: transparent; border: none; padding: 0; transition: none; }
+.tg-input-wrap:focus-within { border-color: transparent; }
+.tg-emoji-btn,
+.tg-attach-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: border-color .15s, background .15s, color .15s, transform .15s;
+}
+.tg-emoji-btn:hover,
+.tg-attach-btn:hover,
+.tg-emoji-btn.on {
+  color: var(--text-primary);
+  border-color: rgba(82, 212, 255, 0.24);
+  background: rgba(82, 212, 255, 0.08);
+}
+.tg-input {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 16px;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.45;
+  resize: none;
+  min-height: 46px;
+  max-height: 160px;
+  padding: 12px 14px;
+  box-sizing: border-box;
+  scrollbar-width: none;
+  transition: border-color .15s, box-shadow .15s;
+}
 .tg-input::placeholder { color: var(--text-muted); }
-.tg-send-btn { width: 36px; height: 36px; border-radius: 50%; border: none; background: var(--bg-elevated); color: var(--text-muted); cursor: pointer; flex-shrink: 0; display: flex; align-items: center; justify-content: center; transition: all .2s; }
-.tg-send-btn.active { background: var(--tg-accent); color: #fff; box-shadow: 0 2px 10px rgba(34,158,217,.3); }
-.tg-send-btn:disabled { opacity: .4; cursor: not-allowed; }
+.tg-input:focus {
+  border-color: rgba(59, 130, 246, 0.26);
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.08);
+}
+.tg-send-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform .15s, border-color .15s, background .15s, color .15s;
+}
+.tg-send-btn.active {
+  background: linear-gradient(135deg, #3b82f6, #0ea5e9);
+  border-color: rgba(125, 211, 252, 0.22);
+  color: #fff;
+  box-shadow: 0 16px 32px rgba(14, 165, 233, 0.22);
+}
+.tg-send-btn:disabled { opacity: .55; cursor: not-allowed; transform: none; }
 .tg-ch-footer { display: flex; align-items: center; justify-content: center; gap: 7px; padding: 12px; border-top: 1px solid var(--border-subtle); background: var(--bg-surface); color: var(--text-muted); font-size: 13px; flex-shrink: 0; }
 /* Spinners */
 .tg-spinner { width: 28px; height: 28px; border: 2.5px solid rgba(34,158,217,.2); border-top-color: var(--tg-accent); border-radius: 50%; animation: spin .7s linear infinite; display: inline-block; }
@@ -2721,17 +2775,23 @@ function fIconCol(n = '') { return EX[(n.split('.').pop() || '').toLowerCase()] 
 
 /* ── MIC / RECORDING ── */
 .tg-mic-btn {
-  width: 40px; height: 40px; border-radius: 50%; border: none;
-  background: var(--bg-elevated); color: var(--text-secondary);
+  width: 44px; height: 44px; border-radius: 16px; border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.045); color: var(--text-secondary);
   display: flex; align-items: center; justify-content: center;
-  cursor: pointer; flex-shrink: 0; transition: background .15s, color .15s;
+  cursor: pointer; flex-shrink: 0; transition: border-color .15s, background .15s, color .15s, transform .15s;
 }
-.tg-mic-btn:hover { background: var(--tg-accent); color: #fff; }
-.tg-input-wrap.recording { border-color: #ef4444; }
-.tg-send-btn.recording { background: #ef4444 !important; }
+.tg-mic-btn:hover { border-color: rgba(82, 212, 255, 0.24); background: rgba(82, 212, 255, 0.08); color: var(--text-primary); }
+.tg-input-wrap.recording .tg-mic-btn,
+.tg-send-btn.recording { border-color: rgba(248, 113, 113, 0.24); background: rgba(127, 29, 29, 0.24) !important; color: #fca5a5; }
+.tg-send-btn.recording { box-shadow: none; }
 .tg-recording-ui {
-  flex: 1; display: flex; align-items: center; gap: 8px;
-  padding: 0 4px; min-width: 0;
+  flex: 1; display: flex; align-items: center; gap: 10px;
+  min-width: 0;
+  min-height: 46px;
+  padding: 0 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(248, 113, 113, 0.2);
+  background: rgba(127, 29, 29, 0.14);
 }
 .tg-rec-cancel {
   width: 30px; height: 30px; border-radius: 50%; border: none;

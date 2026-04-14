@@ -11,6 +11,22 @@ import { reactive, computed } from "vue";
 import api from "../services/api";
 
 const NOTIFICATION_HISTORY_LIMIT = 50;
+const MAX_SEEN_ITEM_IDS = 100;
+const PRIORITY_REFRESH_REASONS = new Set([
+  "communication_read",
+  "communication_replied",
+  "communication_action_recorded",
+  "gmail_read",
+  "gmail_replied",
+]);
+const ITEM_BASED_APPS = new Set([
+  "gmail",
+  "slack",
+  "telegram",
+  "signal",
+  "whatsapp",
+  "google_calendar",
+]);
 
 // ── Singleton state ───────────────────────────────────────────────────────
 const state = reactive({
@@ -29,12 +45,32 @@ function normalizedAppKey(appKey = "") {
   return value;
 }
 
+function dedupeFingerprints(values = [], limit = MAX_SEEN_ITEM_IDS) {
+  const seen = new Set();
+  const result = [];
+  for (const rawValue of values || []) {
+    const value = String(rawValue || "").trim();
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    result.push(value);
+  }
+  if (result.length <= limit) return result;
+  return result.slice(result.length - limit);
+}
+
 function computeDisplayCount(entry = {}) {
   const rawCount = Number(entry.rawCount ?? entry.count ?? 0) || 0;
   const seenCount = Number(entry.seenCount || 0) || 0;
+  if (supportsItemBasedDisplayCount(entry)) {
+    const currentFingerprints = getItemFingerprints(entry?.items || []);
+    if (currentFingerprints.length) {
+      return computeUnseenItemCount(entry);
+    }
+    if (rawCount <= 0) return 0;
+  }
   const unseenItemCount = computeUnseenItemCount(entry);
   if (rawCount <= 0) return unseenItemCount;
-  return Math.max(rawCount - seenCount, unseenItemCount, 0);
+  return Math.max(rawCount - seenCount, 0);
 }
 
 function buildUnreadItemFingerprint(item = {}) {
@@ -50,48 +86,77 @@ function buildUnreadItemFingerprint(item = {}) {
   ).trim();
 }
 
+function getItemFingerprints(items = []) {
+  return dedupeFingerprints(
+    (items || []).map((item) => buildUnreadItemFingerprint(item)).filter(Boolean)
+  );
+}
+
 function supportsItemBasedDisplayCount(entry = {}) {
-  return normalizedAppKey(entry?.app || "") === "gmail";
+  return ITEM_BASED_APPS.has(normalizedAppKey(entry?.app || ""));
 }
 
 function computeUnseenItemCount(entry = {}) {
   if (!supportsItemBasedDisplayCount(entry)) return 0;
 
-  const seenItemIds = Array.isArray(entry?.seenItemIds) ? entry.seenItemIds : [];
   const seenSet = new Set(
-    seenItemIds
-      .map((value) => String(value || "").trim())
-      .filter(Boolean)
+    dedupeFingerprints(Array.isArray(entry?.seenItemIds) ? entry.seenItemIds : [])
   );
-  if (!seenSet.size) return 0;
-
-  const currentFingerprints = Array.isArray(entry?.items)
-    ? entry.items
-        .map((item) => buildUnreadItemFingerprint(item))
-        .filter(Boolean)
-    : [];
+  const currentFingerprints = getItemFingerprints(entry?.items || []);
 
   if (!currentFingerprints.length) return 0;
+  if (!seenSet.size) return currentFingerprints.length;
   return currentFingerprints.filter((fingerprint) => !seenSet.has(fingerprint)).length;
 }
 
-function countNewItemFingerprints(previousItems = [], nextItems = []) {
-  const previousSet = new Set(
-    (previousItems || [])
-      .map((item) => buildUnreadItemFingerprint(item))
-      .filter(Boolean)
-  );
+function countNewItemFingerprints(previousItems = [], nextItems = [], seenItemIds = []) {
+  const previousSet = new Set(getItemFingerprints(previousItems));
+  const seenSet = new Set(dedupeFingerprints(seenItemIds));
 
-  return (nextItems || [])
-    .map((item) => buildUnreadItemFingerprint(item))
-    .filter(Boolean)
-    .filter((fingerprint, index, list) => list.indexOf(fingerprint) === index)
-    .filter((fingerprint) => !previousSet.has(fingerprint))
-    .length;
+  return getItemFingerprints(nextItems).filter(
+    (fingerprint) => !previousSet.has(fingerprint) && !seenSet.has(fingerprint)
+  ).length;
 }
 
 function normalizeNotificationIdentity(value = "") {
   return String(value || "").trim().toLowerCase();
+}
+
+function buildConversationIdentifierSet(detail = {}) {
+  return new Set(
+    [
+      detail?.conversationId,
+      detail?.threadId,
+      detail?.chatId,
+      detail?.roomId,
+      detail?.dialogId,
+      detail?.channelId,
+      detail?.emailId,
+      detail?.itemId,
+      detail?.latestMessageId,
+    ]
+      .map((value) => normalizeNotificationIdentity(value))
+      .filter(Boolean)
+  );
+}
+
+function itemMatchesConversation(item = {}, identifiers = new Set()) {
+  if (!identifiers.size) return false;
+  return [
+    item?.id,
+    item?.conversationId,
+    item?.threadId,
+    item?.chatId,
+    item?.roomId,
+    item?.dialogId,
+    item?.channelId,
+    item?.emailId,
+    item?.latestMessageId,
+    item?.messageId,
+  ]
+    .map((value) => normalizeNotificationIdentity(value))
+    .filter(Boolean)
+    .some((value) => identifiers.has(value));
 }
 
 function buildNotificationEventId(app, items = []) {
@@ -157,6 +222,7 @@ let reconnectTimer = null;
 let pingInterval = null;
 let isStarted = false;
 let activeUserKey = null;
+let refreshListenerAttached = false;
 const pendingCbs = new Map();
 
 function getPersistedStateKey(userKey) {
@@ -199,7 +265,7 @@ function persistState() {
     for (const [appKey, entry] of Object.entries(state.unreadByApp)) {
       seenByApp[appKey] = Number(entry?.seenCount || 0) || 0;
       if (Array.isArray(entry?.seenItemIds) && entry.seenItemIds.length) {
-        seenItemIdsByApp[appKey] = entry.seenItemIds.slice(0, 20);
+        seenItemIdsByApp[appKey] = dedupeFingerprints(entry.seenItemIds);
       }
     }
 
@@ -335,64 +401,77 @@ export function useWebSocket() {
   function processUpdates(updates) {
     for (const update of updates) {
       const { app, count, items, summary, ai, isNew, newCount, isFirst } = update;
+      const normalizedApp = normalizedAppKey(app);
+      const currentEntry = state.unreadByApp[normalizedApp] || {};
       const previousRawCount = Number(
-        state.unreadByApp[app]?.rawCount ?? state.unreadByApp[app]?.count ?? 0
+        currentEntry.rawCount ?? currentEntry.count ?? 0
       ) || 0;
-      const previousItems = Array.isArray(state.unreadByApp[app]?.items)
-        ? state.unreadByApp[app].items
+      const previousItems = Array.isArray(currentEntry.items)
+        ? currentEntry.items
         : [];
-      const gmailDetectedNewCount =
-        app === "gmail" &&
+      const previousSeenItemIds = Array.isArray(currentEntry.seenItemIds)
+        ? currentEntry.seenItemIds
+        : [];
+      const itemBasedApp = supportsItemBasedDisplayCount({ app: normalizedApp });
+      const detectedNewCount =
+        itemBasedApp &&
         !isFirst &&
         (previousItems.length > 0 || previousRawCount <= 0)
-          ? countNewItemFingerprints(previousItems, items || [])
+          ? countNewItemFingerprints(previousItems, items || [], previousSeenItemIds)
           : 0;
-      const effectiveIsNew = Boolean(isNew || gmailDetectedNewCount > 0);
+      const effectiveIsNew = itemBasedApp
+        ? detectedNewCount > 0
+        : Boolean(isNew || detectedNewCount > 0);
       const effectiveNewCount = effectiveIsNew
-        ? Math.max(Number(newCount || 0) || 0, gmailDetectedNewCount)
+        ? Math.max(Number(newCount || 0) || 0, detectedNewCount)
         : 0;
 
       // Always update the live backend count (used for connected app state)
-      if (!state.unreadByApp[app]) state.unreadByApp[app] = {};
-      state.unreadByApp[app].app = app;
-      state.unreadByApp[app].rawCount = count;
-      if (!Number.isFinite(Number(state.unreadByApp[app].seenCount))) {
-        state.unreadByApp[app].seenCount = 0;
+      if (!state.unreadByApp[normalizedApp]) state.unreadByApp[normalizedApp] = {};
+      state.unreadByApp[normalizedApp].app = normalizedApp;
+      state.unreadByApp[normalizedApp].rawCount = count;
+      if (!Number.isFinite(Number(state.unreadByApp[normalizedApp].seenCount))) {
+        state.unreadByApp[normalizedApp].seenCount = 0;
+      }
+      if (!Array.isArray(state.unreadByApp[normalizedApp].seenItemIds)) {
+        state.unreadByApp[normalizedApp].seenItemIds = [];
       }
       if ((Number(count) || 0) <= 0) {
-        state.unreadByApp[app].seenCount = 0;
-        state.unreadByApp[app].seenItemIds = [];
+        state.unreadByApp[normalizedApp].seenCount = 0;
       }
-      state.unreadByApp[app].count = count;
-      state.unreadByApp[app].items = items;
-      state.unreadByApp[app].displayCount = computeDisplayCount(
-        state.unreadByApp[app]
+      state.unreadByApp[normalizedApp].count = count;
+      state.unreadByApp[normalizedApp].items = Array.isArray(items) ? items : [];
+      state.unreadByApp[normalizedApp].seenItemIds = dedupeFingerprints(
+        state.unreadByApp[normalizedApp].seenItemIds
       );
-      state.unreadByApp[app].summary =
-        state.unreadByApp[app].displayCount > 0
-          ? summary || ai?.summary || state.unreadByApp[app].summary || null
+      state.unreadByApp[normalizedApp].displayCount = computeDisplayCount(
+        state.unreadByApp[normalizedApp]
+      );
+      state.unreadByApp[normalizedApp].summary =
+        state.unreadByApp[normalizedApp].displayCount > 0
+          ? summary || ai?.summary || state.unreadByApp[normalizedApp].summary || null
           : null;
-      state.unreadByApp[app].ai = ai || null;
+      state.unreadByApp[normalizedApp].ai = ai || null;
 
       if (isFirst) continue; // no toast/history on first load
 
       // New messages arrived AFTER first load — add to inbox and notify
       if (effectiveIsNew && effectiveNewCount > 0 && !isFirst) {
-        const meta = APP_META[app];
+        const meta = APP_META[normalizedApp];
         if (!meta) continue;
         const shouldTriggerBriefingRefresh =
           Number(update.highSignalCount || 0) > 0 ||
-          (app === "gmail" && (ai?.priority || "normal") !== "info") ||
-          ["slack", "telegram", "signal", "google_calendar"].includes(app);
+          (normalizedApp === "gmail" && (ai?.priority || "normal") !== "info") ||
+          ["slack", "telegram", "signal", "whatsapp", "google_calendar"].includes(normalizedApp);
 
         const color = ai?.priority ? PRIORITY_COLOR[ai.priority] : meta.color;
-        const eventId = buildNotificationEventId(app, items);
-        const groupKey = buildNotificationGroupKey(app, items);
-        const senderName = buildNotificationSenderName(app, items);
+        const eventId = buildNotificationEventId(normalizedApp, items);
+        const groupKey = buildNotificationGroupKey(normalizedApp, items);
+        const senderName = buildNotificationSenderName(normalizedApp, items);
         const fallbackSummary =
           ai?.summary || `${effectiveNewCount} new in ${meta.label}`;
         const existingIndex =
-          app === "telegram" && groupKey
+          normalizedApp === "telegram" && groupKey
             ? state.notifications.findIndex((entry) => entry.groupKey === groupKey)
             : state.notifications.findIndex((entry) => entry.id === eventId);
         const existingEntry = existingIndex !== -1 ? state.notifications[existingIndex] : null;
@@ -402,12 +481,13 @@ export function useWebSocket() {
         }
 
         const mergedCount =
-          app === "telegram" && existingEntry
+          normalizedApp === "telegram" && existingEntry
             ? Number(existingEntry.count || 0) + effectiveNewCount
             : effectiveNewCount;
-        const notificationId = app === "telegram" && groupKey ? groupKey : eventId;
+        const notificationId =
+          normalizedApp === "telegram" && groupKey ? groupKey : eventId;
         const notificationSummary = buildHistorySummary({
-          app,
+          app: normalizedApp,
           items,
           count: mergedCount,
           fallbackSummary,
@@ -419,7 +499,7 @@ export function useWebSocket() {
           ...(existingEntry || {}),
           id: notificationId,
           groupKey: groupKey || null,
-          app,
+          app: normalizedApp,
           icon: meta.icon,
           color,
           label: meta.label,
@@ -440,7 +520,7 @@ export function useWebSocket() {
         // ── TOAST — add to array and auto-dismiss ────────────────────────
         const toastItem = {
           id: eventId,
-          app,
+          app: normalizedApp,
           icon: meta.icon,
           color,
           label: meta.label,
@@ -460,14 +540,14 @@ export function useWebSocket() {
         setTimeout(() => dismissToast(eventId), duration);
 
         // Browser notification
-        showBrowserNotif(app, ai, effectiveNewCount, meta);
+        showBrowserNotif(normalizedApp, ai, effectiveNewCount, meta);
 
         if (shouldTriggerBriefingRefresh) {
           document.dispatchEvent(
             new CustomEvent("orion:priority-refresh-needed", {
               detail: {
                 reason: "incoming_high_signal",
-                sourceApp: app,
+                sourceApp: normalizedApp,
                 count: Number(update.highSignalCount || effectiveNewCount || 1),
                 summary:
                   ai?.summary ||
@@ -481,6 +561,66 @@ export function useWebSocket() {
     }
 
     persistState();
+  }
+
+  function acknowledgeConversation(appKey, detail = {}) {
+    const normalized = normalizedAppKey(appKey);
+    if (!normalized) return;
+
+    const entry = state.unreadByApp[normalized];
+    const identifiers = buildConversationIdentifierSet(detail);
+    if (!entry || !identifiers.size) return;
+
+    const currentItems = Array.isArray(entry.items) ? entry.items : [];
+    const matchedItems = currentItems.filter((item) =>
+      itemMatchesConversation(item, identifiers)
+    );
+    if (!matchedItems.length) return;
+
+    const matchedFingerprints = dedupeFingerprints(
+      matchedItems.map((item) => buildUnreadItemFingerprint(item)).filter(Boolean)
+    );
+    if (!matchedFingerprints.length) return;
+
+    entry.seenCount = Math.min(
+      Number(entry.rawCount ?? entry.count ?? 0) || 0,
+      (Number(entry.seenCount || 0) || 0) + matchedFingerprints.length
+    );
+    entry.seenItemIds = dedupeFingerprints([
+      ...(Array.isArray(entry.seenItemIds) ? entry.seenItemIds : []),
+      ...matchedFingerprints,
+    ]);
+    entry.items = currentItems.filter(
+      (item) => !matchedFingerprints.includes(buildUnreadItemFingerprint(item))
+    );
+    entry.displayCount = computeDisplayCount(entry);
+    if (entry.displayCount <= 0) {
+      entry.summary = null;
+    }
+
+    for (const notification of state.notifications) {
+      if (notification.app !== normalized && notification.route !== normalized) continue;
+      if (
+        Array.isArray(notification.items) &&
+        notification.items.some((item) => itemMatchesConversation(item, identifiers))
+      ) {
+        notification.read = true;
+      }
+    }
+
+    persistState();
+  }
+
+  function handlePriorityRefreshEvent(event) {
+    const detail = event?.detail || {};
+    const reason = String(detail.reason || "").trim();
+    if (!PRIORITY_REFRESH_REASONS.has(reason)) return;
+
+    const appKey =
+      detail.sourceApp ||
+      (reason.startsWith("gmail_") ? "gmail" : "");
+    if (!appKey) return;
+    acknowledgeConversation(appKey, detail);
   }
 
   function showBrowserNotif(app, ai, count, meta) {
@@ -544,10 +684,11 @@ export function useWebSocket() {
     if (entry) {
       entry.seenCount = Number(entry.rawCount ?? entry.count ?? 0) || 0;
       entry.seenItemIds = Array.isArray(entry.items)
-        ? entry.items
-            .map((item) => buildUnreadItemFingerprint(item))
-            .filter(Boolean)
-            .slice(0, 20)
+        ? dedupeFingerprints(
+            entry.items
+              .map((item) => buildUnreadItemFingerprint(item))
+              .filter(Boolean)
+          )
         : [];
       entry.displayCount = 0;
       entry.summary = null;
@@ -616,10 +757,7 @@ export function useWebSocket() {
       for (const [appKey, seenItemIds] of Object.entries(restored.seenItemIdsByApp)) {
         if (!state.unreadByApp[appKey]) state.unreadByApp[appKey] = {};
         state.unreadByApp[appKey].seenItemIds = Array.isArray(seenItemIds)
-          ? seenItemIds
-              .map((value) => String(value || "").trim())
-              .filter(Boolean)
-              .slice(0, 20)
+          ? dedupeFingerprints(seenItemIds)
           : [];
       }
     }
@@ -658,6 +796,14 @@ export function useWebSocket() {
       console.error("Failed to fetch initial unread counts");
     }
 
+    if (!refreshListenerAttached) {
+      document.addEventListener(
+        "orion:priority-refresh-needed",
+        handlePriorityRefreshEvent
+      );
+      refreshListenerAttached = true;
+    }
+
     connect();
   }
 
@@ -669,6 +815,13 @@ export function useWebSocket() {
     ws?.close();
     ws = null;
     pendingCbs.clear();
+    if (refreshListenerAttached) {
+      document.removeEventListener(
+        "orion:priority-refresh-needed",
+        handlePriorityRefreshEvent
+      );
+      refreshListenerAttached = false;
+    }
     resetState();
   }
 
@@ -694,6 +847,7 @@ export function useWebSocket() {
     sendTelegram,
     sendSlack,
     markSeen,
+    acknowledgeConversation,
     dismissToast,
     markRead,
     dismissNotification,

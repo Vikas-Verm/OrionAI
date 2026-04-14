@@ -214,13 +214,6 @@
             <div class="gm-row-line1">
               <span class="gm-row-from">{{ senderName(displayFrom(email)) }}</span>
               <div class="gm-row-line1-meta">
-                <span
-                  v-if="gmailActionState(email.threadId)"
-                  class="gm-action-chip"
-                  :class="`state-${gmailActionState(email.threadId).actionState}`"
-                >
-                  {{ gmailActionState(email.threadId).actionStateLabel }}
-                </span>
                 <span class="gm-row-date">{{ email.date }}</span>
               </div>
             </div>
@@ -593,7 +586,6 @@ const {
   groups: gmailActionGroups,
   loading: gmailActionsLoading,
   summaryText: gmailActionSummary,
-  stateByConversationId: gmailActionMap,
   refresh: refreshGmailActions,
   recordAction: recordGmailAction,
 } = useCommunicationActions('gmail')
@@ -633,10 +625,6 @@ function notifyPriorityStateChange(reason, extras = {}) {
       ...extras,
     },
   }))
-}
-
-function gmailActionState(threadId) {
-  return gmailActionMap.value[String(threadId)] || null
 }
 
 // Close profile menu on any click outside the profile wrap
@@ -1111,7 +1099,9 @@ async function sendReply() {
           subject: selectedEmail.value.subject,
           sync: 'post_reply_refresh',
         })
-      } catch {}
+      } catch (err) {
+        console.debug('Post-reply Gmail sync refresh skipped:', err?.message || err)
+      }
     }, 1500) // small delay — Gmail needs a moment to index the sent message
 
   } catch (e) { console.error(e.message) }

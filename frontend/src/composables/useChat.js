@@ -1,6 +1,7 @@
 import { ref } from "vue";
 import { store, resetCanvas } from "../stores/app";
 import { ragAPI, dbAPI, streamChat, sessionsAPI } from "../services/api";
+import { buildSessionTitle, upsertVisibleSession } from "../utils/sessionTitles";
 import { marked } from "marked";
 import hljs from "highlight.js";
 
@@ -24,6 +25,25 @@ async function refreshSessions() {
 
 export function useChat() {
   const isTyping = ref(false);
+
+  function revealCurrentSession(userMessage, priorUserMessageCount) {
+    if (!store.currentSessionId || priorUserMessageCount > 0) return;
+
+    const title = buildSessionTitle(userMessage);
+    if (title === "New Chat") return;
+
+    const currentSession = store.sessions.find(
+      (session) => session.sessionId === store.currentSessionId
+    );
+    const currentTitle = String(currentSession?.title || "").trim();
+    if (currentSession && currentTitle && currentTitle !== "New Chat") return;
+
+    store.sessions = upsertVisibleSession(store.sessions, {
+      sessionId: store.currentSessionId,
+      title,
+      mode: currentSession?.mode || store.mode || "chat",
+    });
+  }
 
   function renderMarkdown(content) {
     if (!content) return "";
@@ -86,6 +106,10 @@ export function useChat() {
     if (store.mode === "rag" && !store.documentIngested) return null;
 
     const userMessage = userInput.trim();
+    const priorUserMessageCount = store.messages.filter(
+      (message) => message.role === "user"
+    ).length;
+    revealCurrentSession(userMessage, priorUserMessageCount);
     if (!skipUserMessage) store.messages.push({ role: "user", content: userMessage });
     isTyping.value = true;
     let aiMessageIndex = -1;

@@ -123,10 +123,21 @@ defineEmits(['refresh', 'open', 'draft', 'done', 'snooze', 'dismiss'])
 const isOpen = ref(false)
 const activeFilter = ref('all')
 
-const replyCount = computed(() => Number(props.counts?.replyRequiredCount || 0))
-const approvalCount = computed(() => Number(props.counts?.approvalCount || 0))
-const followUpCount = computed(() => Number(props.counts?.followUpCount || 0))
-const actionableCount = computed(() => Number(props.counts?.actionableCount || 0))
+const actionStateCounts = computed(() =>
+  (Array.isArray(props.items) ? props.items : []).reduce((acc, item) => {
+    const key = String(item?.actionState || '').trim()
+    if (!key) return acc
+    acc[key] = (acc[key] || 0) + 1
+    return acc
+  }, {})
+)
+
+const replyCount = computed(() => Number(actionStateCounts.value.waiting_on_your_reply || 0))
+const approvalCount = computed(() => Number(actionStateCounts.value.needs_approval || 0))
+const followUpCount = computed(() => Number(actionStateCounts.value.needs_follow_up || 0))
+const actionableCount = computed(() =>
+  Array.isArray(props.items) ? props.items.length : Number(props.counts?.actionableCount || 0)
+)
 
 const visualMode = computed(() => {
   if (props.loading) return 'loading'

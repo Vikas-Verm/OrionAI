@@ -20,6 +20,8 @@ const {
     applyWorkspaceDecisions,
     buildPriorityClassificationPrompt,
     applyPriorityLabels,
+    buildLatestInboundBurst,
+    stripInternalStateFields,
   },
 } = require("../services/communicationActionService");
 
@@ -56,6 +58,68 @@ test("surface filters keep waiting-on-others in briefing but not in insight or p
   assert.deepEqual(
     filterPriorityFeedStates(states).map((state) => state.id),
     ["reply", "approval"]
+  );
+});
+
+test("priority feed removes live chat threads once they no longer have unread messages", () => {
+  const filtered = filterPriorityFeedStates([
+    {
+      id: "signal-read",
+      sourceType: "signal",
+      actionState: ACTION_STATES.WAITING_ON_YOUR_REPLY,
+      eligibleForPriorityFeed: true,
+      sourceMetadata: { unreadCount: 0 },
+    },
+    {
+      id: "signal-unread",
+      sourceType: "signal",
+      actionState: ACTION_STATES.WAITING_ON_YOUR_REPLY,
+      eligibleForPriorityFeed: true,
+      sourceMetadata: { unreadCount: 2 },
+    },
+    {
+      id: "gmail-thread",
+      sourceType: "gmail",
+      actionState: ACTION_STATES.WAITING_ON_YOUR_REPLY,
+      eligibleForPriorityFeed: true,
+      sourceMetadata: { unreadCount: 0 },
+    },
+  ]);
+
+  assert.deepEqual(
+    filtered.map((state) => state.id),
+    ["signal-unread", "gmail-thread"]
+  );
+});
+
+test("insights surface removes live chat threads once they no longer have unread messages", () => {
+  const filtered = filterSurfaceStates([
+    {
+      id: "signal-read",
+      sourceType: "signal",
+      actionState: ACTION_STATES.WAITING_ON_YOUR_REPLY,
+      eligibleForInsights: true,
+      sourceMetadata: { unreadCount: 0 },
+    },
+    {
+      id: "signal-unread",
+      sourceType: "signal",
+      actionState: ACTION_STATES.WAITING_ON_YOUR_REPLY,
+      eligibleForInsights: true,
+      sourceMetadata: { unreadCount: 2 },
+    },
+    {
+      id: "gmail-thread",
+      sourceType: "gmail",
+      actionState: ACTION_STATES.WAITING_ON_YOUR_REPLY,
+      eligibleForInsights: true,
+      sourceMetadata: { unreadCount: 0 },
+    },
+  ]);
+
+  assert.deepEqual(
+    filtered.map((state) => state.id),
+    ["signal-unread", "gmail-thread"]
   );
 });
 
@@ -200,6 +264,163 @@ test("workspace decision prompt includes recent message bodies instead of only t
   assert.match(prompt, /recent message bodies/i);
   assert.match(prompt, /Hii Vikas can you look this Invoice on Priority and approve\./);
   assert.match(prompt, /Sure, I'll review the invoice right away and prioritize its approval\./);
+});
+
+test("latest inbound burst keeps only the newest unread chat run for feed previews", () => {
+  const burst = buildLatestInboundBurst(
+    [
+      {
+        direction: "outbound",
+        timestamp: "2026-03-30T06:10:00.000Z",
+        text: "Checking now.",
+      },
+      {
+        direction: "inbound",
+        timestamp: "2026-03-30T06:11:00.000Z",
+        text: "Can you share the status?",
+      },
+      {
+        direction: "inbound",
+        timestamp: "2026-03-30T06:12:00.000Z",
+        text: "Need it before standup.",
+      },
+    ],
+    2
+  );
+
+  assert.equal(burst.length, 2);
+  assert.equal(burst[0].text, "Can you share the status?");
+  assert.equal(burst[1].text, "Need it before standup.");
+});
+
+test("latest inbound burst is empty once a chat thread has no unread messages", () => {
+  const burst = buildLatestInboundBurst(
+    [
+      {
+        direction: "inbound",
+        timestamp: "2026-03-30T06:11:00.000Z",
+        text: "Need a quick answer",
+      },
+      {
+        direction: "outbound",
+        timestamp: "2026-03-30T06:12:00.000Z",
+        text: "Sure",
+      },
+    ],
+    0
+  );
+
+  assert.deepEqual(burst, []);
+});
+
+test("latest inbound burst does not pull older read messages into the unread preview", () => {
+  const burst = buildLatestInboundBurst(
+    [
+      {
+        direction: "inbound",
+        timestamp: "2026-03-30T06:09:00.000Z",
+        text: "Older read message",
+      },
+      {
+        direction: "inbound",
+        timestamp: "2026-03-30T06:11:00.000Z",
+        text: "Unread update one",
+      },
+      {
+        direction: "inbound",
+        timestamp: "2026-03-30T06:12:00.000Z",
+        text: "Unread update two",
+      },
+    ],
+    2
+  );
+
+  assert.deepEqual(
+    burst.map((message) => message.text),
+    ["Unread update one", "Unread update two"]
+  );
+});
+
+test("communication draft prompt prefers the latest unread inbound message over your own outgoing preview", () => {
+  const item = mapActionStateToPriorityItem({
+    id: "comm:signal:room-1",
+    sourceType: "signal",
+    sourceLabel: "Signal",
+    conversationId: "room-1",
+    conversationTitle: "Ardhangini",
+    participantLabel: "Ardhangini",
+    previewText: "sure",
+    actionState: ACTION_STATES.WAITING_ON_YOUR_REPLY,
+    actionStateLabel: "Waiting on your reply",
+    actionReason: "This conversation is waiting on your reply.",
+    confidence: 0.91,
+    confidenceBand: "high",
+    priorityBoost: 18,
+    latestMessageTimestamp: "2026-03-30T06:12:00.000Z",
+    latestInboundTimestamp: "2026-03-30T06:11:00.000Z",
+    latestOutboundTimestamp: "2026-03-30T06:12:00.000Z",
+    sourceMetadata: { unreadCount: 1 },
+    openContext: { roomId: "room-1" },
+    workspaceDecisionContext: {
+      recentMessages: [
+        {
+          direction: "inbound",
+          timestamp: "2026-03-30T06:11:00.000Z",
+          text: "Can you call me now?",
+        },
+        {
+          direction: "outbound",
+          timestamp: "2026-03-30T06:12:00.000Z",
+          text: "sure",
+        },
+      ],
+    },
+  });
+
+  assert.match(item.action.prompt, /Latest message: "Can you call me now\?"/);
+  assert.doesNotMatch(item.action.prompt, /Latest message: "sure"/i);
+});
+
+test("stripInternalStateFields exposes public chat preview messages for priority feed cards", () => {
+  const state = stripInternalStateFields({
+    id: "comm:signal:room-1",
+    sourceType: "signal",
+    previewText: "Need your approval",
+    sourceMetadata: {
+      unreadCount: 2,
+    },
+    workspaceDecisionContext: {
+      recentMessages: [
+        {
+          direction: "inbound",
+          timestamp: "2026-03-30T06:09:00.000Z",
+          text: "Older read message",
+        },
+        {
+          direction: "outbound",
+          timestamp: "2026-03-30T06:10:00.000Z",
+          text: "What do you need?",
+        },
+        {
+          direction: "inbound",
+          timestamp: "2026-03-30T06:12:00.000Z",
+          text: "Need your approval",
+        },
+        {
+          direction: "inbound",
+          timestamp: "2026-03-30T06:13:00.000Z",
+          text: "Also please review the attachment.",
+        },
+      ],
+    },
+  });
+
+  assert.equal(state.recentMessages.length, 4);
+  assert.equal(state.latestInboundBurstCount, 2);
+  assert.deepEqual(
+    state.latestInboundBurst.map((message) => message.text),
+    ["Need your approval", "Also please review the attachment."]
+  );
 });
 
 test("applyPriorityLabels respects an LLM override for casual chat priority", async () => {
@@ -426,6 +647,49 @@ test("notification signal uses actionable communication states for Gmail counts 
   assert.equal(signal.previews[0].latestMessageId, "msg-1");
   assert.equal(signal.previews[0].subject, "WFH Approval");
   assert.equal(signal.previews[0].from, "Aarav");
+});
+
+test("notification signal preview prefers the latest unread inbound burst and preserves unread count", () => {
+  const signal = buildNotificationSignalFromStates(
+    {
+      counts: {
+        actionableCount: 1,
+      },
+      surfaceStates: {
+        insights: [
+          {
+            id: "comm:signal:room-1",
+            conversationId: "room-1",
+            conversationTitle: "Ardhangini",
+            participantLabel: "Ardhangini",
+            previewText: "sure",
+            latestMeaningfulMessageId: "msg-3",
+            latestMessageTimestamp: "2026-03-30T07:07:00.000Z",
+            confidenceBand: "high",
+            priority: "High",
+            actionState: ACTION_STATES.WAITING_ON_YOUR_REPLY,
+            sourceMetadata: {
+              unreadCount: 3,
+            },
+            latestInboundBurst: [
+              {
+                text: "Can you call me now?",
+              },
+            ],
+            openContext: {
+              roomId: "room-1",
+            },
+          },
+        ],
+      },
+    },
+    "signal"
+  );
+
+  assert.equal(signal.count, 1);
+  assert.equal(signal.previews[0].preview, "Can you call me now?");
+  assert.equal(signal.previews[0].unread, 3);
+  assert.equal(signal.previews[0].roomId, "room-1");
 });
 
 test("getNormalizedGmailMessageText keeps only the fresh reply above quoted history", () => {

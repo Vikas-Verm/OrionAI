@@ -116,9 +116,6 @@
               @click="openChannel(ch)">
               <span class="sl-ch-sigil">{{ ch.type === 'private' ? '🔒' : '#' }}</span>
               <span class="sl-ch-label" :class="{bold: ch.unread > 0}">{{ ch.name.replace(/^#/, '') }}</span>
-              <span v-if="slackActionState(ch.id)" class="sl-action-chip" :class="`state-${slackActionState(ch.id).actionState}`">
-                {{ slackActionState(ch.id).actionStateLabel }}
-              </span>
               <span v-if="ch.unread > 0" class="sl-badge-red">{{ ch.unread }}</span>
             </div>
             <div class="sl-ch-item sl-ch-add" @click="openModal('browseChannels')">
@@ -147,9 +144,6 @@
               @click="openChannel(ch)">
               <div class="sl-dm-ava" :style="{background: avatarColor(ch.name)}">{{ ch.name.slice(0,1).toUpperCase() }}</div>
               <span class="sl-ch-label" :class="{bold: ch.unread > 0}">{{ ch.name }}</span>
-              <span v-if="slackActionState(ch.id)" class="sl-action-chip" :class="`state-${slackActionState(ch.id).actionState}`">
-                {{ slackActionState(ch.id).actionStateLabel }}
-              </span>
               <span v-if="ch.unread > 0" class="sl-badge-red">{{ ch.unread }}</span>
             </div>
             <div class="sl-ch-item sl-ch-add" @click="openModal('newDM')">
@@ -729,7 +723,6 @@ const {
   groups: slackActionGroups,
   loading: slackActionsLoading,
   summaryText: slackActionSummary,
-  stateByConversationId: slackActionMap,
   refresh: refreshSlackActions,
   recordAction: recordSlackAction,
 } = useCommunicationActions('slack')
@@ -955,11 +948,6 @@ async function applyModuleContext() {
 
   setModuleContext(null)
 }
-
-function slackActionState(conversationId) {
-  return slackActionMap.value[String(conversationId)] || null
-}
-
 
 // ── Open channel ────────────────────────────────────────────
 async function openChannel(ch) {
@@ -1555,26 +1543,26 @@ onUnmounted(() => {
 .sl-tb-btn:hover { background:rgba(255,255,255,0.08); color:var(--text-primary); }
 
 /* Send bar */
-.sl-sendbar { flex-shrink:0; background:rgba(8, 13, 28, 0.52); border-top:1px solid var(--border-subtle); padding:8px 13px 12px; position:relative; backdrop-filter:blur(18px); }
+.sl-sendbar { flex-shrink:0; background:rgba(8, 13, 28, 0.52); border-top:1px solid var(--border-subtle); padding:10px 18px 18px; position:relative; backdrop-filter:blur(18px); }
 .sl-reply-banner { display:flex; align-items:center; gap:7px; padding:5px 10px; background:var(--accent-dim); border:1px solid rgba(99,102,241,0.2); border-radius:7px; margin-bottom:6px; font-size:12px; color:var(--text-secondary); }
 .sl-reply-cancel { background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:14px; margin-left:auto; padding:0 2px; }
 .sl-reply-cancel:hover { color:var(--text-primary); }
-.sl-fmt-toolbar { display:flex; align-items:center; gap:2px; margin-bottom:5px; flex-wrap:wrap; }
+.sl-fmt-toolbar { display:flex; align-items:center; gap:4px; margin-bottom:8px; flex-wrap:wrap; }
 .sl-fmt-btn { width:26px; height:24px; background:none; border:none; cursor:pointer; border-radius:4px; color:var(--text-muted); display:flex; align-items:center; justify-content:center; font-size:12px; transition:background 0.1s; font-family:inherit; }
 .sl-fmt-btn:hover,.sl-fmt-btn.active { background:rgba(255,255,255,0.08); color:var(--text-primary); }
 .sl-fmt-sep { width:1px; height:14px; background:var(--border-subtle); margin:0 3px; }
-.sl-send-box { background:rgba(255,255,255,.04); border:1px solid var(--border-default); border-radius:20px; overflow:hidden; transition:border-color 0.15s, box-shadow 0.15s; backdrop-filter:blur(16px); }
-.sl-send-box.focused { border-color:rgba(82,212,255,0.24); box-shadow:0 0 0 4px rgba(82,212,255,0.08); }
-.sl-att-chips { display:flex; flex-wrap:wrap; gap:5px; padding:7px 12px 0; }
+.sl-send-box { background:rgba(255,255,255,.045); border:1px solid rgba(255, 255, 255, 0.09); border-radius:18px; overflow:hidden; transition:border-color 0.15s, box-shadow 0.15s; backdrop-filter:blur(16px); }
+.sl-send-box.focused { border-color:rgba(59, 130, 246, 0.26); box-shadow:0 0 0 4px rgba(59, 130, 246, 0.08); }
+.sl-att-chips { display:flex; flex-wrap:wrap; gap:5px; padding:10px 12px 0; }
 .sl-att-chip { display:flex; align-items:center; gap:5px; background:var(--bg-overlay); border:1px solid var(--border-default); border-radius:18px; padding:3px 9px; font-size:12px; color:var(--text-secondary); }
 .sl-att-chip button { background:none; border:none; cursor:pointer; color:var(--text-muted); font-size:12px; margin-left:2px; }
-.sl-send-ta { width:100%; padding:9px 13px 4px; background:transparent; border:none; outline:none; color:var(--text-primary); font-size:13.5px; resize:none; line-height:1.5; min-height:34px; max-height:140px; box-sizing:border-box; font-family:inherit; }
+.sl-send-ta { width:100%; padding:12px 14px 8px; background:transparent; border:none; outline:none; color:var(--text-primary); font-size:13px; resize:none; line-height:1.45; min-height:46px; max-height:160px; box-sizing:border-box; font-family:inherit; }
 .sl-send-ta::placeholder { color:var(--text-muted); }
-.sl-send-foot { display:flex; align-items:center; justify-content:space-between; padding:3px 8px 8px 13px; }
+.sl-send-foot { display:flex; align-items:center; justify-content:space-between; padding:0 8px 10px 14px; }
 .sl-send-hint { font-size:10px; color:var(--text-muted); }
-.sl-send-btn { width:34px; height:34px; background:linear-gradient(135deg, rgba(82,212,255,.94), rgba(139,125,255,.84)); border:1px solid rgba(255,255,255,.12); border-radius:999px; color:white; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:opacity 0.15s, transform 0.1s; }
-.sl-send-btn:hover:not(:disabled) { opacity:0.92; transform:translateY(-1px) scale(1.02); }
-.sl-send-btn:disabled { opacity:0.3; cursor:not-allowed; transform:none; }
+.sl-send-btn { width:44px; height:44px; background:linear-gradient(135deg, #3b82f6, #0ea5e9); border:1px solid rgba(125, 211, 252, 0.22); border-radius:16px; color:white; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:opacity 0.15s, transform 0.15s, box-shadow 0.15s; }
+.sl-send-btn:hover:not(:disabled) { opacity:0.92; transform:translateY(-1px); box-shadow:0 16px 32px rgba(14, 165, 233, 0.22); }
+.sl-send-btn:disabled { opacity:0.55; cursor:not-allowed; transform:none; }
 .sl-file-input { display:none; }
 
 /* Context menu */

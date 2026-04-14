@@ -35,10 +35,10 @@ async function getCredentials(userId) {
   const doc = await Integration.findOne({
     userId,
     type: "gmail",
-    enabled: true,
   });
   if (!doc?.gmail) throw new Error("Gmail not connected.");
   return {
+    integrationId: doc._id,
     accessToken: doc.gmail.accessToken || null,
     refreshToken: doc.gmail.refreshToken || null,
     clientId: doc.gmail.clientId || process.env.GOOGLE_CLIENT_ID,
@@ -76,6 +76,22 @@ async function markGmailReconnectRequired(userId) {
   ).catch(() => {});
 }
 
+async function markGmailHealthy(userId, patch = {}) {
+  await Integration.findOneAndUpdate(
+    { userId, type: "gmail" },
+    {
+      $set: {
+        enabled: true,
+        lastTestOk: true,
+        updatedAt: new Date(),
+        ...Object.fromEntries(
+          Object.entries(patch || {}).map(([key, value]) => [`gmail.${key}`, value])
+        ),
+      },
+    }
+  ).catch(() => {});
+}
+
 function createGmailReconnectError() {
   const error = new Error("Gmail reconnect needed.");
   error.code = "GMAIL_RECONNECT_REQUIRED";
@@ -102,6 +118,7 @@ async function getAccessToken(userId) {
     ? new Date(creds.expiresAt).getTime()
     : 0;
   if (creds.accessToken && storedExpiresAt > Date.now() + 60_000) {
+    await markGmailHealthy(userId)
     tokenCache.set(userId, {
       accessToken: creds.accessToken,
       expiresAt: storedExpiresAt,
@@ -126,11 +143,16 @@ async function getAccessToken(userId) {
       },
     });
     const token = r.data.access_token;
+    const expiresAt = Date.now() + (r.data.expires_in || 3600) * 1000;
     tokenCache.set(userId, {
       accessToken: token,
-      expiresAt: Date.now() + (r.data.expires_in || 3600) * 1000,
+      expiresAt,
       refreshToken: creds.refreshToken,
       userEmail: creds.userEmail,
+    });
+    await markGmailHealthy(userId, {
+      accessToken: token,
+      expiresAt: new Date(expiresAt),
     });
     return token;
   } catch (err) {

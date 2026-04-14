@@ -42,6 +42,12 @@ const WORKSPACE_ACTIONABLE_STATES = new Set([
   ACTION_STATES.NEEDS_FOLLOW_UP,
   ACTION_STATES.WAITING_ON_OTHERS,
 ]);
+const PRIORITY_FEED_LIVE_CHAT_SOURCES = new Set([
+  "slack",
+  "telegram",
+  "signal",
+  "whatsapp",
+]);
 const WORKSPACE_DECISION_CACHE = new Map();
 const WORKSPACE_DECISION_CACHE_TTL_MS = 5 * 60 * 1000;
 const WORKSPACE_DECISION_CACHE_LIMIT = 400;
@@ -99,8 +105,27 @@ async function slackApiGet(token, method, params = {}) {
   return res.data;
 }
 
+function getStateUnreadCount(state = {}) {
+  return Math.max(
+    Number(
+      state?.sourceMetadata?.unreadCount || state?.platformMetadata?.unreadCount || 0
+    ) || 0,
+    0
+  );
+}
+
+function shouldKeepUnreadTrackedState(state = {}) {
+  const sourceType = String(state?.sourceType || "").toLowerCase();
+  if (!PRIORITY_FEED_LIVE_CHAT_SOURCES.has(sourceType)) {
+    return true;
+  }
+  return getStateUnreadCount(state) > 0;
+}
+
 function filterSurfaceStates(states = []) {
-  return selectStatesForSurface(states, "insights");
+  return selectStatesForSurface(states, "insights").filter(
+    shouldKeepUnreadTrackedState
+  );
 }
 
 function filterBriefingStates(states = []) {
@@ -108,7 +133,9 @@ function filterBriefingStates(states = []) {
 }
 
 function filterPriorityFeedStates(states = []) {
-  return selectStatesForSurface(states, "priorityFeed");
+  return selectStatesForSurface(states, "priorityFeed").filter(
+    shouldKeepUnreadTrackedState
+  );
 }
 
 function hasPriorityLLMConfig() {
@@ -1129,13 +1156,77 @@ function dedupeStates(states = []) {
   });
 }
 
+function toPublicRecentMessages(messages = []) {
+  return messages
+    .map((message) => ({
+      direction: message?.direction || "unknown",
+      timestamp: message?.timestamp
+        ? new Date(message.timestamp).toISOString()
+        : null,
+      text: summarizeDecisionText(message?.text || message?.previewText || "", 220),
+    }))
+    .filter((message) => message.text)
+    .slice(-4);
+}
+
+function buildLatestInboundBurst(messages = [], unreadCount = 0) {
+  const normalizedUnreadCount = Math.max(Number(unreadCount || 0) || 0, 0);
+  if (normalizedUnreadCount <= 0) return [];
+  const burst = [];
+  let remainingUnread = normalizedUnreadCount;
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.direction !== "inbound") {
+      if (burst.length) break;
+      continue;
+    }
+
+    if (normalizedUnreadCount > 0 && remainingUnread <= 0) {
+      break;
+    }
+
+    burst.unshift(message);
+    if (normalizedUnreadCount > 0) {
+      remainingUnread -= 1;
+    }
+    if (burst.length >= 4) break;
+  }
+
+  return burst;
+}
+
+function resolveLatestInboundReplyText(state = {}) {
+  const latestInboundBurst = Array.isArray(state?.latestInboundBurst)
+    ? state.latestInboundBurst
+    : buildLatestInboundBurst(
+        toPublicRecentMessages(state?.workspaceDecisionContext?.recentMessages || []),
+        getStateUnreadCount(state)
+      );
+  const latestInboundMessage = latestInboundBurst[latestInboundBurst.length - 1];
+  return normalizeText(latestInboundMessage?.text || state.previewText || "");
+}
+
 function stripInternalStateFields(state) {
   if (!state) return state;
   const {
     workspaceDecisionContext,
     ...rest
   } = state;
-  return rest;
+  const recentMessages = toPublicRecentMessages(
+    workspaceDecisionContext?.recentMessages || []
+  );
+  const latestInboundBurst = buildLatestInboundBurst(
+    recentMessages,
+    state?.sourceMetadata?.unreadCount || state?.platformMetadata?.unreadCount || 0
+  );
+
+  return {
+    ...rest,
+    recentMessages,
+    latestInboundBurst,
+    latestInboundBurstCount: latestInboundBurst.length,
+  };
 }
 
 async function getCommunicationActionStates(userId, options = {}) {
@@ -1169,7 +1260,18 @@ async function getCommunicationActionStates(userId, options = {}) {
   const insightsStates = sortStates(filterSurfaceStates(publicStates));
   const briefingStates = sortStates(filterBriefingStates(publicStates));
   const priorityFeedStates = sortStates(filterPriorityFeedStates(publicStates));
-  const summary = summarizeActionStates(publicStates);
+  const summary = {
+    ...summarizeActionStates(insightsStates),
+    surfaceCounts: {
+      insights: insightsStates.length,
+      briefing: briefingStates.length,
+      priorityFeed: priorityFeedStates.length,
+    },
+    actionableCount: insightsStates.length,
+    insightsCount: insightsStates.length,
+    briefingCount: briefingStates.length,
+    priorityFeedCount: priorityFeedStates.length,
+  };
   maybeLogStateDebug(visibleStates, options);
 
   return {
@@ -1250,7 +1352,7 @@ function buildCommunicationPrompt(state) {
   const sourceLabel = getAppMeta(state.sourceType).label;
   const conversationTitle = normalizeText(state.conversationTitle || "conversation");
   const participantLabel = normalizeText(state.participantLabel || "");
-  const latestMessage = normalizeText(state.previewText || "");
+  const latestMessage = resolveLatestInboundReplyText(state);
   const reason = normalizeText(state.actionReason || "Tell me what needs action.");
   const contextLines = [
     `You are drafting a reply for me to send in a ${sourceLabel} conversation.`,
@@ -1344,6 +1446,7 @@ function mapActionStateToPriorityItem(state) {
       state.actionState === ACTION_STATES.WAITING_ON_YOUR_REPLY ||
       state.actionState === ACTION_STATES.NEEDS_APPROVAL,
     meta: {
+      latestMessageId: state.latestMeaningfulMessageId || null,
       latestMessageAt: state.latestMessageTimestamp
         ? new Date(state.latestMessageTimestamp).toISOString()
         : null,
@@ -1357,6 +1460,15 @@ function mapActionStateToPriorityItem(state) {
       currentActor: state.currentActor,
       participantLabel: state.participantLabel || "",
       previewText: state.previewText || "",
+      platformMetadata: state.platformMetadata || {},
+      sourceMetadata: state.sourceMetadata || {},
+      recentMessages: Array.isArray(state.recentMessages)
+        ? state.recentMessages
+        : [],
+      latestInboundBurst: Array.isArray(state.latestInboundBurst)
+        ? state.latestInboundBurst
+        : [],
+      latestInboundBurstCount: Number(state.latestInboundBurstCount || 0),
       actionState: state.actionState,
       state: state.state,
       openContext: state.openContext || {},
@@ -1375,8 +1487,7 @@ function buildCommunicationPriorityItems(states = []) {
         state.actionState !== ACTION_STATES.NO_ACTION_NEEDED &&
         state.actionState !== ACTION_STATES.RESOLVED
     )
-    .map(mapActionStateToPriorityItem)
-    .slice(0, 12);
+    .map(mapActionStateToPriorityItem);
 }
 
 function buildNotificationSignalFromStates(result = null, sourceType = "gmail") {
@@ -1387,6 +1498,12 @@ function buildNotificationSignalFromStates(result = null, sourceType = "gmail") 
       : [];
   const items = states.slice(0, 3).map((state) => ({
     id: state.conversationId || state.id,
+    conversationId: state.conversationId || null,
+    threadId: state.threadId || state.openContext?.threadId || null,
+    chatId: state.openContext?.chatId || null,
+    roomId: state.openContext?.roomId || null,
+    dialogId: state.openContext?.dialogId || null,
+    channelId: state.openContext?.channelId || null,
     latestMessageId:
       state.latestMeaningfulMessageId ||
       state.latestMessageId ||
@@ -1395,16 +1512,17 @@ function buildNotificationSignalFromStates(result = null, sourceType = "gmail") 
     latestMessageAt: state.latestMessageTimestamp
       ? new Date(state.latestMessageTimestamp).toISOString()
       : null,
+    name: state.participantLabel || state.conversationTitle || "Conversation",
     subject: state.conversationTitle || state.participantLabel || "Conversation",
     from: state.participantLabel || state.conversationTitle || "Conversation",
-    unread: 1,
-    preview: state.previewText || "",
+    unread: Math.max(getStateUnreadCount(state), 1),
+    preview: resolveLatestInboundReplyText(state) || state.previewText || "",
     highConfidence:
       state.confidenceBand === "high" || String(state.priority || "") === "High",
     actionState: state.actionState,
   }));
 
-  const count = Number(result?.counts?.actionableCount || states.length || 0);
+  const count = Number(result?.counts?.actionableCount ?? states.length) || 0;
 
   return {
     app: sourceType,
@@ -1454,5 +1572,7 @@ module.exports = {
     applyWorkspaceDecisions,
     buildPriorityClassificationPrompt,
     applyPriorityLabels,
+    buildLatestInboundBurst,
+    stripInternalStateFields,
   },
 };
