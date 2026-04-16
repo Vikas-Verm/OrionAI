@@ -15,6 +15,8 @@ const integrationSchema = new mongoose.Schema({
       "notion",
       "jira",
       "gmail",
+      "google_docs",
+      "google_sheets",
       "google_calendar",
       "webhook",
       "telegram",
@@ -39,7 +41,7 @@ const integrationSchema = new mongoose.Schema({
     accessToken: { type: String, default: "" },
     deviceId: { type: String, default: "" },
     managementRoomId: { type: String, default: "" },
-    bridgeBotMxid: { type: String, default: "@signalbot:orion.local" },
+    bridgeBotMxid: { type: String, default: "" },
     loginState: {
       type: String,
       enum: [
@@ -96,6 +98,28 @@ const integrationSchema = new mongoose.Schema({
     clientSecret: { type: String, default: "" },
   },
 
+  // ── Google Docs OAuth ─────────────────────────────────────────────────────
+  googleDocs: {
+    accessToken: { type: String, default: "" },
+    refreshToken: { type: String, default: "" },
+    expiresAt: { type: Date },
+    userEmail: { type: String, default: "" },
+    userName: { type: String, default: "" },
+    clientId: { type: String, default: "" },
+    clientSecret: { type: String, default: "" },
+  },
+
+  // ── Google Sheets OAuth ───────────────────────────────────────────────────
+  googleSheets: {
+    accessToken: { type: String, default: "" },
+    refreshToken: { type: String, default: "" },
+    expiresAt: { type: Date },
+    userEmail: { type: String, default: "" },
+    userName: { type: String, default: "" },
+    clientId: { type: String, default: "" },
+    clientSecret: { type: String, default: "" },
+  },
+
   // ── Google Calendar OAuth ──────────────────────────────────────────────────
   googleCalendar: {
     accessToken: { type: String, default: "" },
@@ -133,10 +157,13 @@ const integrationSchema = new mongoose.Schema({
     connectedAt: { type: Date },
   },
 
-  // ── WhatsApp (Baileys) ─────────────────────────────────────────────────────
+  // ── WhatsApp via mautrix / Matrix ─────────────────────────────────────────
   whatsapp: {
     connected: { type: Boolean, default: false },
     phone: { type: String, default: "" },
+    profileName: { type: String, default: "" },
+    avatarUrl: { type: String, default: "" },
+    connectedAt: { type: Date, default: null },
   },
 
   // ── Custom Webhook ─────────────────────────────────────────────────────────
@@ -185,7 +212,11 @@ function decryptDoc(doc) {
     );
     Object.assign(doc[type], decrypted);
   }
-  if (type === "signal" && doc.matrix && typeof doc.matrix === "object") {
+  if (
+    ["signal", "whatsapp"].includes(type) &&
+    doc.matrix &&
+    typeof doc.matrix === "object"
+  ) {
     const decryptedMatrix = decryptIntegration(
       "matrix",
       doc.matrix.toObject ? doc.matrix.toObject() : doc.matrix
@@ -204,7 +235,11 @@ integrationSchema.pre("save", function (next) {
     );
     Object.assign(this[type], encrypted);
   }
-  if (type === "signal" && this.matrix && typeof this.matrix === "object") {
+  if (
+    ["signal", "whatsapp"].includes(type) &&
+    this.matrix &&
+    typeof this.matrix === "object"
+  ) {
     const encryptedMatrix = encryptIntegration(
       "matrix",
       this.matrix.toObject ? this.matrix.toObject() : this.matrix

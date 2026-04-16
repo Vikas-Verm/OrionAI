@@ -60,12 +60,26 @@
         <JiraPage v-else-if="activeModule === 'jira'" @close="closeModule" />
         <CalendarPage v-else-if="activeModule === 'calendar' || activeModule === 'google_calendar'"
           @close="closeModule" />
+        <GoogleDocsPage
+          v-else-if="activeModule === 'google_docs'"
+          @close="closeModule"
+          @open-integrations="onOpenIntegrations"
+        />
+        <GoogleSheetsPage
+          v-else-if="activeModule === 'google_sheets'"
+          @close="closeModule"
+          @open-integrations="onOpenIntegrations"
+        />
         <SignalPage
           v-else-if="activeModule === 'signal'"
           @close="closeModule"
           @open-integrations="onOpenIntegrations"
         />
-        <WhatsAppPage v-else-if="activeModule === 'whatsapp'" @close="closeModule" />
+        <WhatsAppPage
+          v-else-if="activeModule === 'whatsapp'"
+          @close="closeModule"
+          @open-integrations="onOpenIntegrations"
+        />
         <DatabasePage
           v-else-if="activeModule === 'database'"
           @close="closeModule"
@@ -134,6 +148,8 @@ import GmailPage from './views/GmailPage.vue'
 import SlackPage from './views/SlackPage.vue'
 import JiraPage from './views/JiraPage.vue'
 import CalendarPage from './views/CalendarPage.vue'
+import GoogleDocsPage from './views/GoogleDocsPage.vue'
+import GoogleSheetsPage from './views/GoogleSheetsPage.vue'
 import SignalPage from './views/SignalPage.vue'
 import WhatsAppPage from './views/WhatsAppPage.vue'
 import DatabasePage from './views/DatabasePage.vue'

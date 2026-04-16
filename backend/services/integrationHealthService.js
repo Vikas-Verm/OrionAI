@@ -28,11 +28,15 @@ function isTokenExpired(expiresAt, bufferMs = 5 * 60 * 1000) {
 // Maps integration type → actual field name in the Integration document.
 // "google_calendar" is stored as "googleCalendar" (camelCase), not "google_calendar".
 function resolveField(type) {
-  return type === "google_calendar" ? "googleCalendar" : type;
+  if (type === "google_calendar") return "googleCalendar";
+  if (type === "google_sheets") return "googleSheets";
+  return type;
 }
 
 function canAttemptGoogleAutoRecovery(integration, type) {
-  if (type !== "gmail" && type !== "google_calendar") return false;
+  if (type !== "gmail" && type !== "google_calendar" && type !== "google_sheets") {
+    return false;
+  }
   const field = resolveField(type);
   return Boolean(integration?.[field]?.refreshToken);
 }
@@ -124,7 +128,8 @@ async function checkIntegration(integration) {
   try {
     switch (type) {
       case "gmail":
-      case "google_calendar": {
+      case "google_calendar":
+      case "google_sheets": {
         // "google_calendar" tokens live under integration.calendar in the DB
         const field = resolveField(type);
         const data = integration[field];
@@ -155,9 +160,18 @@ async function checkIntegration(integration) {
             userId: "me",
             fields: "emailAddress",
           });
-        } else {
+        } else if (type === "google_calendar") {
           const cal = google.calendar({ version: "v3", auth: oauth2 });
           await cal.calendarList.list({ maxResults: 1 });
+        } else {
+          const drive = google.drive({ version: "v3", auth: oauth2 });
+          await drive.files.list({
+            q: "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false",
+            pageSize: 1,
+            fields: "files(id)",
+            supportsAllDrives: true,
+            includeItemsFromAllDrives: true,
+          });
         }
         if (integration.enabled === false || integration.lastTestOk !== true) {
           await markGoogleHealthy(integration, type);
@@ -233,7 +247,9 @@ async function checkIntegration(integration) {
   } catch (err) {
     // If 401 on Google, try to refresh
     if (
-      (type === "gmail" || type === "google_calendar") &&
+      (type === "gmail" ||
+        type === "google_calendar" ||
+        type === "google_sheets") &&
       (err.code === 401 ||
         err?.response?.status === 401 ||
         isInvalidGrantError(err))

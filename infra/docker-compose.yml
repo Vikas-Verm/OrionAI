@@ -16,3 +16,12 @@ services:
       - synapse
     volumes:
       - ./mautrix-signal:/data
+
+  mautrix-whatsapp:
+    image: dock.mau.dev/mautrix/whatsapp:latest
+    container_name: mautrix-whatsapp
+    restart: unless-stopped
+    depends_on:
+      - synapse
+    volumes:
+      - ./mautrix-whatsapp:/data

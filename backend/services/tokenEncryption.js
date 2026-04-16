@@ -129,6 +129,8 @@ function decryptIntegration(type, data) {
 // ── Which fields to encrypt per integration type ──────────────────────────
 const SENSITIVE_FIELDS = {
   gmail: ["accessToken", "refreshToken", "clientSecret"],
+  google_docs: ["accessToken", "refreshToken", "clientSecret"],
+  google_sheets: ["accessToken", "refreshToken", "clientSecret"],
   google_calendar: ["accessToken", "refreshToken", "clientSecret"],
   slack: ["userToken", "botToken", "accessToken", "clientSecret"],
   telegram: ["sessionString", "pendingSessionString", "apiHash"],

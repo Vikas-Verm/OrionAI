@@ -451,6 +451,98 @@
                             </div>
                         </template>
 
+                        <!-- GOOGLE DOCS -->
+                        <template v-else-if="card.type === 'google_docs'">
+                            <div v-if="oauthEmails.google_docs" class="int-oauth-connected">
+                                <div class="int-oauth-connected-row">
+                                    <span class="int-oauth-connected-icon">✅</span>
+                                    <div class="int-oauth-connected-info">
+                                        <div class="int-oauth-connected-title">Connected as</div>
+                                        <div class="int-oauth-connected-email">{{ oauthEmails.google_docs }}</div>
+                                    </div>
+                                    <button class="int-oauth-reconnect-btn"
+                                        @click.stop="startGoogleDocsOAuth">Reconnect</button>
+                                </div>
+                            </div>
+                            <div v-else class="int-oauth-block">
+                                <img src="https://ssl.gstatic.com/docs/doclist/images/mediatype/icon_1_document_x16.png"
+                                    class="int-oauth-icon-img" alt="Google Docs" />
+                                <div class="int-oauth-text">
+                                    <div class="int-oauth-title">Connect Google Docs</div>
+                                    <div class="int-oauth-desc">Open, write, and improve documents from OrionAI without leaving the workspace.</div>
+                                </div>
+                                <button class="int-oauth-btn-google" @click.stop="startGoogleDocsOAuth"
+                                    :disabled="googleDocsConnecting">
+                                    <span v-if="googleDocsConnecting" class="int-oauth-spinner"></span>
+                                    <span v-else style="display:flex;align-items:center;gap:8px">
+                                        <svg width="16" height="16" viewBox="0 0 24 24">
+                                            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                                            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                                            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+                                            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+                                        </svg>
+                                        Sign in with Google
+                                    </span>
+                                </button>
+                            </div>
+                            <div v-if="getStatus('google_docs') === 'connected'" class="int-actions" style="margin-top:8px">
+                                <button class="int-btn int-btn-test" @click.stop="emit('openModule', 'google_docs')">
+                                    Open Google Docs ↗
+                                </button>
+                                <button class="int-btn int-btn-remove" :disabled="removing === 'google_docs'"
+                                    @click.stop="removeIntegration('google_docs')">
+                                    <span v-if="removing === 'google_docs'" class="int-spinner int-spinner-danger"></span>
+                                    <span v-else>Disconnect</span>
+                                </button>
+                            </div>
+                        </template>
+
+                        <!-- GOOGLE SHEETS -->
+                        <template v-else-if="card.type === 'google_sheets'">
+                            <div v-if="oauthEmails.google_sheets" class="int-oauth-connected">
+                                <div class="int-oauth-connected-row">
+                                    <span class="int-oauth-connected-icon">✅</span>
+                                    <div class="int-oauth-connected-info">
+                                        <div class="int-oauth-connected-title">Connected as</div>
+                                        <div class="int-oauth-connected-email">{{ oauthEmails.google_sheets }}</div>
+                                    </div>
+                                    <button class="int-oauth-reconnect-btn"
+                                        @click.stop="startGoogleSheetsOAuth">Reconnect</button>
+                                </div>
+                            </div>
+                            <div v-else class="int-oauth-block">
+                                <img src="/google-sheets-logo.svg"
+                                    class="int-oauth-icon-img" alt="Google Sheets" />
+                                <div class="int-oauth-text">
+                                    <div class="int-oauth-title">Connect Google Sheets</div>
+                                    <div class="int-oauth-desc">Open, edit, format, chart and analyze spreadsheets from OrionAI in a native sheet workspace.</div>
+                                </div>
+                                <button class="int-oauth-btn-google" @click.stop="startGoogleSheetsOAuth"
+                                    :disabled="googleSheetsConnecting">
+                                    <span v-if="googleSheetsConnecting" class="int-oauth-spinner"></span>
+                                    <span v-else style="display:flex;align-items:center;gap:8px">
+                                        <svg width="16" height="16" viewBox="0 0 24 24">
+                                            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                                            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                                            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+                                            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+                                        </svg>
+                                        Sign in with Google
+                                    </span>
+                                </button>
+                            </div>
+                            <div v-if="getStatus('google_sheets') === 'connected'" class="int-actions" style="margin-top:8px">
+                                <button class="int-btn int-btn-test" @click.stop="emit('openModule', 'google_sheets')">
+                                    Open Google Sheets ↗
+                                </button>
+                                <button class="int-btn int-btn-remove" :disabled="removing === 'google_sheets'"
+                                    @click.stop="removeIntegration('google_sheets')">
+                                    <span v-if="removing === 'google_sheets'" class="int-spinner int-spinner-danger"></span>
+                                    <span v-else>Disconnect</span>
+                                </button>
+                            </div>
+                        </template>
+
                         <!-- GOOGLE CALENDAR -->
                         <template v-else-if="card.type === 'google_calendar'">
                             <div v-if="oauthEmails.google_calendar" class="int-oauth-connected">
@@ -628,69 +720,106 @@
                                 </button>
                             </div>
                         </template>
-                        <!-- WHATSAPP — QR code connect -->
-                        <template v-if="card.type === 'whatsapp'">
-                            <div v-if="getStatus('whatsapp') === 'connected'" class="int-oauth-connected">
+                        <!-- WHATSAPP -->
+                        <template v-else-if="card.type === 'whatsapp'">
+                            <div v-if="whatsappCardState === 'connected'" class="int-oauth-connected">
                                 <div class="int-oauth-connected-row">
                                     <span class="int-oauth-connected-icon">✅</span>
                                     <div class="int-oauth-connected-info">
                                         <div class="int-oauth-connected-title">WhatsApp connected</div>
                                         <div class="int-oauth-connected-email">
-                                            +{{ connected.whatsapp?.whatsapp?.phone || 'Connected' }}
+                                            {{ whatsappStatus?.profile?.displayName || 'Linked successfully' }}
+                                            <span v-if="whatsappStatus?.roomCount" style="color:var(--text-muted);font-weight:400">
+                                                · {{ whatsappStatus?.roomCount }} chat{{ whatsappStatus?.roomCount === 1 ? '' : 's' }}
+                                            </span>
                                         </div>
                                     </div>
-                                    <button class="int-oauth-reconnect-btn"
-                                        :disabled="removing === 'whatsapp'"
-                                        @click.stop="removeIntegration('whatsapp')">
+                                    <button class="int-oauth-reconnect-btn" :disabled="whatsappConnecting" @click.stop="startWhatsAppConnect({ reconnect: true })">
+                                        <span v-if="whatsappConnecting" class="int-oauth-spinner"></span>
+                                        <span v-else>Reconnect</span>
+                                    </button>
+                                </div>
+                                <div class="int-actions" style="margin-top:10px">
+                                    <button class="int-btn int-btn-test" @click.stop="emit('openModule', 'whatsapp')">
+                                        Open chats ↗
+                                    </button>
+                                    <button class="int-btn int-btn-test" @click.stop="refreshWhatsAppStatus">
+                                        Refresh status
+                                    </button>
+                                    <button class="int-btn int-btn-remove" :disabled="removing === 'whatsapp'" @click.stop="removeIntegration('whatsapp')">
                                         <span v-if="removing === 'whatsapp'" class="int-spinner int-spinner-danger"></span>
                                         <span v-else>Disconnect</span>
                                     </button>
                                 </div>
-                                <button class="int-oauth-btn-google" style="margin-top:10px"
-                                    @click.stop="emit('openModule', 'whatsapp')">
-                                    <span style="font-size:15px">💬</span>
-                                    Open WhatsApp
-                                </button>
                             </div>
- 
-                            <!-- QR connect flow -->
-                            <div v-else class="int-oauth-block" style="flex-direction:column;align-items:center;gap:14px">
- 
-                                <!-- Step 1: Show connect button -->
-                                <div v-if="!whatsappQR && !whatsappConnecting" style="display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center">
-                                    <span style="font-size:36px">💬</span>
+                            <div v-else-if="whatsappCardState === 'pending'" class="int-signal-panel">
+                                <div class="int-signal-panel-head">
                                     <div class="int-oauth-text">
                                         <div class="int-oauth-title">Connect WhatsApp</div>
-                                        <div class="int-oauth-desc">Scan a QR code — works like WhatsApp Web. No Meta approval needed.</div>
+                                        <div class="int-oauth-desc">OrionAI is preparing your hidden WhatsApp session. Scan the QR code here to finish linking your phone.</div>
                                     </div>
-                                    <button class="int-oauth-btn-google" @click.stop="startWhatsAppConnect">
-                                        <span style="font-size:15px">💬</span>
-                                        Connect WhatsApp
+                                    <span class="badge-pending">Waiting for scan</span>
+                                </div>
+                                <div class="int-signal-qr-preview">
+                                    <img
+  v-if="whatsappQrStableSrc"
+  :src="whatsappQrStableSrc"
+  alt="WhatsApp QR code"
+  class="int-signal-qr-image"
+/>
+                                    <div v-else class="int-signal-qr-placeholder">
+                                        <span class="int-spinner"></span>
+                                        <span>Preparing QR code...</span>
+                                    </div>
+                                    <ol class="int-steps-list int-steps-list--compact">
+                                        <li>Open WhatsApp on your phone</li>
+                                        <li>Go to Linked Devices</li>
+                                        <li>Scan this QR code</li>
+                                    </ol>
+                                </div>
+                                <div class="int-actions">
+                                    <button class="int-btn int-btn-save" @click.stop="openWhatsAppQrModal">Open QR</button>
+                                    <button class="int-btn int-btn-test" @click.stop="refreshWhatsAppStatus">Check status</button>
+                                    <button class="int-btn int-btn-remove" :disabled="removing === 'whatsapp'" @click.stop="removeIntegration('whatsapp')">
+                                        <span v-if="removing === 'whatsapp'" class="int-spinner int-spinner-danger"></span>
+                                        <span v-else>Cancel</span>
                                     </button>
                                 </div>
- 
-                                <!-- Step 2: Initializing -->
-                                <div v-else-if="whatsappConnecting && !whatsappQR"
-                                    style="display:flex;flex-direction:column;align-items:center;gap:10px;padding:16px 0">
-                                    <span class="int-spinner" style="width:28px;height:28px;border-width:3px"></span>
-                                    <div style="font-size:13px;color:var(--text-secondary)">Starting WhatsApp...</div>
-                                </div>
- 
-                                <!-- Step 3: Show QR -->
-                                <div v-else-if="whatsappQR" style="display:flex;flex-direction:column;align-items:center;gap:12px">
-                                    <img :src="whatsappQR" alt="WhatsApp QR Code"
-                                        style="width:200px;height:200px;border-radius:12px;border:3px solid #25D366" />
-                                    <div style="font-size:12px;color:var(--text-secondary);text-align:center;max-width:220px">
-                                        Open <strong>WhatsApp</strong> on your phone →<br>
-                                        Settings → Linked Devices → Link a Device
+                            </div>
+                            <div v-else-if="whatsappCardState === 'error'" class="int-signal-panel int-signal-panel--error">
+                                <div class="int-oauth-text">
+                                    <div class="int-oauth-title">WhatsApp needs attention</div>
+                                    <div class="int-oauth-desc">
+                                        {{ whatsappStatus?.lastError || whatsappStatus?.error || 'We could not finish linking WhatsApp. Try again to generate a fresh QR code.' }}
                                     </div>
-                                    <div style="font-size:11px;color:var(--text-muted)">QR code refreshes every 60s</div>
                                 </div>
+                                <div class="int-actions">
+                                    <button class="int-btn int-btn-save" :disabled="whatsappConnecting" @click.stop="startWhatsAppConnect({ reconnect: true })">
+                                        <span v-if="whatsappConnecting" class="int-spinner"></span>
+                                        <span v-else>Retry</span>
+                                    </button>
+                                    <button class="int-btn int-btn-test" @click.stop="refreshWhatsAppStatus">Check status</button>
+                                    <button class="int-btn int-btn-remove" :disabled="removing === 'whatsapp'" @click.stop="removeIntegration('whatsapp')">
+                                        <span v-if="removing === 'whatsapp'" class="int-spinner int-spinner-danger"></span>
+                                        <span v-else>Disconnect</span>
+                                    </button>
+                                </div>
+                            </div>
+                            <div v-else class="int-oauth-block">
+                                <span style="font-size:36px;flex-shrink:0">💬</span>
+                                <div class="int-oauth-text">
+                                    <div class="int-oauth-title">Connect WhatsApp</div>
+                                    <div class="int-oauth-desc">Connect WhatsApp securely in OrionAI, scan the QR here, and open live chats without exposing any Matrix setup.</div>
+                                </div>
+                                <button class="int-oauth-btn-google" :disabled="whatsappConnecting" @click.stop="startWhatsAppConnect()">
+                                    <span v-if="whatsappConnecting" class="int-oauth-spinner"></span>
+                                    <span v-else>Connect WhatsApp</span>
+                                </button>
                             </div>
                         </template>
 
                         <!-- Action buttons: only for manual-token integrations -->
-                        <div v-if="!['gmail', 'google_calendar', 'telegram', 'signal', 'slack', 'whatsapp'].includes(card.type)" class="int-actions">
+                        <div v-if="!['gmail', 'google_docs', 'google_sheets', 'google_calendar', 'telegram', 'signal', 'slack', 'whatsapp'].includes(card.type)" class="int-actions">
                             <button class="int-btn int-btn-test" :disabled="testing === card.type"
                                 @click.stop="testConnection(card.type)">
                                 <span v-if="testing === card.type" class="int-spinner"></span>
@@ -778,6 +907,57 @@
                 </div>
             </div>
         </transition>
+
+        <transition name="fade">
+            <div v-if="showWhatsAppQrModal" class="int-modal-backdrop" @click.self="closeWhatsAppQrModal">
+                <div class="int-modal">
+                    <div class="int-modal-head">
+                        <div>
+                            <h3>Connect WhatsApp</h3>
+                            <p>Scan this QR code from Linked Devices in WhatsApp to finish linking OrionAI.</p>
+                        </div>
+                        <button class="int-modal-close" type="button" @click="closeWhatsAppQrModal">✕</button>
+                    </div>
+
+                    <div class="int-modal-body">
+                        <div v-if="whatsappStatus?.qrImageUrl" class="int-signal-qr-modal">
+                            <img :src="whatsappQrStableSrc" alt="WhatsApp QR code" class="int-signal-qr-image int-signal-qr-image--modal" />
+                        </div>
+                        <div v-else class="int-signal-qr-placeholder int-signal-qr-placeholder--modal">
+                            <span class="int-spinner"></span>
+                            <span>Preparing QR code...</span>
+                        </div>
+
+                        <ol class="int-steps-list int-steps-list--compact">
+                            <li>Open WhatsApp on your phone</li>
+                            <li>Open Linked Devices</li>
+                            <li>Scan this QR code</li>
+                        </ol>
+
+                        <div v-if="whatsappStatus?.lastError || whatsappStatus?.error" class="int-test-result fail">
+                            {{ whatsappStatus?.lastError || whatsappStatus?.error }}
+                        </div>
+                    </div>
+
+                    <div class="int-actions">
+                        <button class="int-btn int-btn-test" @click.stop="refreshWhatsAppStatus">Check status</button>
+                        <button
+                            v-if="whatsappCardState === 'error'"
+                            class="int-btn int-btn-save"
+                            :disabled="whatsappConnecting"
+                            @click.stop="startWhatsAppConnect({ reconnect: true })"
+                        >
+                            <span v-if="whatsappConnecting" class="int-spinner"></span>
+                            <span v-else>Retry</span>
+                        </button>
+                        <button class="int-btn int-btn-remove" :disabled="removing === 'whatsapp'" @click.stop="removeIntegration('whatsapp')">
+                            <span v-if="removing === 'whatsapp'" class="int-spinner int-spinner-danger"></span>
+                            <span v-else>{{ whatsappCardState === 'connected' ? 'Disconnect' : 'Cancel' }}</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </transition>
     </div>
 </template>
 
@@ -796,11 +976,16 @@ const removing     = ref(null)
 const testResults  = reactive({})
 const connected    = reactive({})
 
-const oauthEmails = reactive({ gmail: null, google_calendar: null })
+const oauthEmails = reactive({ gmail: null, google_docs: null, google_sheets: null, google_calendar: null })
 const secretVisibility = reactive({})
 const signalStatus = ref(null)
 const signalQrModalOpen = ref(false)
+const whatsappStatus = ref(null)
+const whatsappQrModalOpen = ref(false)
+const whatsappQrResolvedSrc = ref('')
+const whatsappQrStableSrc = ref('')
 let signalPollTimer = null
+let whatsappPollTimer = null
 
 const cards = [
   {
@@ -830,6 +1015,20 @@ const cards = [
     desc:  'Send from your real Gmail account',
     color: '#FFFFFF',
     img: 'https://ssl.gstatic.com/ui/v1/icons/mail/rfr/gmail.ico',
+  },
+  {
+    type:  'google_docs',
+    name:  'Google Docs',
+    desc:  'Edit Google Docs in a native OrionAI workspace',
+    color: '#4285F4',
+    img:   'https://ssl.gstatic.com/docs/doclist/images/mediatype/icon_1_document_x16.png',
+  },
+  {
+    type:  'google_sheets',
+    name:  'Google Sheets',
+    desc:  'Use a native OrionAI spreadsheet workspace for Google Sheets',
+    color: '#34A853',
+    img:   '/google-sheets-logo.svg',
   },
   {
     type:  'database',
@@ -876,9 +1075,9 @@ const cards = [
   {
     type:  'whatsapp',
     name:  'WhatsApp',
-    desc:  'Read and send messages via WhatsApp Web',
+    desc:  'Connect WhatsApp securely in OrionAI',
     color: '#25D366',
-    img:   'https://upload.wikimedia.org/wikipedia/commons/thumb/6/6b/WhatsApp.svg/2044px-WhatsApp.svg.png',
+    emoji: '💬',
   },
 ]
 
@@ -906,10 +1105,15 @@ const filteredCards  = computed(() =>
         : cards
 )
 const SIGNAL_PENDING_STATES = new Set(['creating_account', 'logging_in', 'pending_qr'])
+const WHATSAPP_PENDING_STATES = new Set(['creating_account', 'logging_in', 'pending_qr'])
 const connectedCount = computed(() => cards.filter(card => getStatus(card.type) === 'connected').length)
 const signalCardState = computed(() => getStatus('signal'))
+const whatsappCardState = computed(() => getStatus('whatsapp'))
 const showSignalQrModal = computed(() =>
     signalQrModalOpen.value && ['pending', 'error'].includes(signalCardState.value)
+)
+const showWhatsAppQrModal = computed(() =>
+    whatsappQrModalOpen.value && ['pending', 'error'].includes(whatsappCardState.value)
 )
 
 function getStatus(type) {
@@ -918,6 +1122,14 @@ function getStatus(type) {
         const loginState = String(signalStatus.value?.loginState || connected.signal?.matrix?.loginState || '').trim()
         if (loginState === 'connected') return 'connected'
         if (SIGNAL_PENDING_STATES.has(loginState)) return 'pending'
+        if (loginState === 'error') return 'error'
+        return 'disconnected'
+    }
+    if (type === 'whatsapp') {
+        if (whatsappStatus.value?.connected) return 'connected'
+        const loginState = String(whatsappStatus.value?.loginState || connected.whatsapp?.matrix?.loginState || '').trim()
+        if (loginState === 'connected') return 'connected'
+        if (WHATSAPP_PENDING_STATES.has(loginState)) return 'pending'
         if (loginState === 'error') return 'error'
         return 'disconnected'
     }
@@ -950,10 +1162,49 @@ function applySignalIntegrationState(statusData = signalStatus.value) {
     }
 }
 
+function applyWhatsAppIntegrationState(statusData = whatsappStatus.value) {
+    const loginState = String(
+        statusData?.connected
+            ? 'connected'
+            : statusData?.loginState || connected.whatsapp?.matrix?.loginState || 'disconnected'
+    ).trim()
+    if (!statusData && !connected.whatsapp) return
+
+    if (statusData?.connected || connected.whatsapp || WHATSAPP_PENDING_STATES.has(loginState) || loginState === 'error') {
+        connected.whatsapp = {
+            ...(connected.whatsapp || {}),
+            type: 'whatsapp',
+            name: 'WhatsApp',
+            enabled: true,
+            transport: 'mautrix',
+            connected: Boolean(statusData?.connected),
+            matrix: {
+                ...(connected.whatsapp?.matrix || {}),
+                loginState,
+                lastError: statusData?.lastError || statusData?.error || '',
+                connectedAt: statusData?.connectedAt || connected.whatsapp?.matrix?.connectedAt || null,
+            },
+            whatsapp: {
+                ...(connected.whatsapp?.whatsapp || {}),
+                connected: Boolean(statusData?.connected),
+                profileName: statusData?.profile?.displayName || connected.whatsapp?.whatsapp?.profileName || '',
+                avatarUrl: statusData?.profile?.avatarUrl || connected.whatsapp?.whatsapp?.avatarUrl || '',
+            },
+        }
+    }
+}
+
 function stopSignalPolling() {
     if (signalPollTimer) {
         clearInterval(signalPollTimer)
         signalPollTimer = null
+    }
+}
+
+function stopWhatsAppPolling() {
+    if (whatsappPollTimer) {
+        clearInterval(whatsappPollTimer)
+        whatsappPollTimer = null
     }
 }
 
@@ -973,12 +1224,42 @@ function syncSignalPolling() {
     }, 2500)
 }
 
+function syncWhatsAppPolling() {
+    const loginState = String(whatsappStatus.value?.loginState || '').trim()
+    if (!WHATSAPP_PENDING_STATES.has(loginState)) {
+        stopWhatsAppPolling()
+        return
+    }
+    if (whatsappPollTimer) return
+    whatsappPollTimer = setInterval(async () => {
+        try {
+            await refreshWhatsAppStatus()
+        } catch (err) {
+            console.debug('Failed to refresh WhatsApp status:', err?.message || err)
+        }
+    }, 2500)
+}
+
+function syncStableQrSrc(currentValueRef, nextUrl) {
+    const normalizedNext = String(nextUrl || '').trim()
+    if (!normalizedNext) return
+    if (currentValueRef.value === normalizedNext) return
+    currentValueRef.value = normalizedNext
+}
 function openSignalQrModal() {
     signalQrModalOpen.value = true
 }
 
 function closeSignalQrModal() {
     signalQrModalOpen.value = false
+}
+
+function openWhatsAppQrModal() {
+    whatsappQrModalOpen.value = true
+}
+
+function closeWhatsAppQrModal() {
+    whatsappQrModalOpen.value = false
 }
 
 function secretKey(section, field) {
@@ -1013,6 +1294,8 @@ async function toggleExpand(type) {
 function extractEmail(int) {
     if (!int) return null
     if (int.type === 'gmail')            return int.gmail?.userEmail || null
+    if (int.type === 'google_docs')      return int.googleDocs?.userEmail || null
+    if (int.type === 'google_sheets')    return int.googleSheets?.userEmail || null
     if (int.type === 'google_calendar')  return int.googleCalendar?.userEmail || null
     return null
 }
@@ -1063,8 +1346,11 @@ async function loadIntegrations() {
     const res = await api.get('/api/integrations')
     Object.keys(connected).forEach((key) => delete connected[key])
     oauthEmails.gmail = null
+    oauthEmails.google_docs = null
+    oauthEmails.google_sheets = null
     oauthEmails.google_calendar = null
     signalStatus.value = null
+    whatsappStatus.value = null
     for (const int of res.data) {
         connected[int.type] = int
         const email = extractEmail(int)
@@ -1083,11 +1369,29 @@ async function loadIntegrations() {
                 qrImageUrl: null,
             }
         }
+        if (int.type === 'whatsapp' && !whatsappStatus.value) {
+            whatsappStatus.value = {
+                connected: Boolean(int.connected || int.matrix?.loginState === 'connected'),
+                loginState: int.matrix?.loginState || 'disconnected',
+                lastError: int.matrix?.lastError || '',
+                error: int.matrix?.lastError || '',
+                connectedAt: int.matrix?.connectedAt || null,
+                roomCount: 0,
+                unreadCount: 0,
+                profile: null,
+                qrImageUrl: null,
+            }
+        }
     }
     try {
         await refreshSignalStatus()
     } catch (err) {
         console.debug('Failed to refresh Signal status during integrations load:', err?.message || err)
+    }
+    try {
+        await refreshWhatsAppStatus()
+    } catch (err) {
+        console.debug('Failed to refresh WhatsApp status during integrations load:', err?.message || err)
     }
     await nextTick()
     applyAutofillGuards()
@@ -1124,8 +1428,9 @@ async function saveIntegration(type) {
 }
 
 onUnmounted(() => {
-    clearInterval(whatsappPollTimer)
+    stopWhatsAppPolling()
     stopSignalPolling()
+    revokeObjectUrlIfNeeded(whatsappQrResolvedSrc.value)
 })
 
 async function testConnection(type) {
@@ -1168,6 +1473,8 @@ function openOAuthPopup(url, windowName, successType) {
 
 // ── Gmail OAuth ───────────────────────────────────────────
 const gmailConnecting = ref(false)
+const googleDocsConnecting = ref(false)
+const googleSheetsConnecting = ref(false)
 const signalConnecting = ref(false)
 
 async function refreshSignalStatus() {
@@ -1213,6 +1520,96 @@ async function refreshSignalStatus() {
     }
 }
 
+async function loadProtectedImage(url) {
+    const normalizedUrl = String(url || '').trim()
+    if (!normalizedUrl) return ''
+
+    if (normalizedUrl.startsWith('data:')) {
+        return normalizedUrl
+    }
+
+    try {
+        const { data } = await api.get(normalizedUrl, {
+            responseType: 'blob',
+        })
+        return URL.createObjectURL(data)
+    } catch (err) {
+        console.error('Failed to load protected image:', normalizedUrl, err?.message || err)
+        return ''
+    }
+}
+
+function revokeObjectUrlIfNeeded(url) {
+    if (typeof url === 'string' && url.startsWith('blob:')) {
+        URL.revokeObjectURL(url)
+    }
+}
+
+async function syncWhatsAppQrImage() {
+    const nextUrl = String(whatsappStatus.value?.qrImageUrl || '').trim()
+
+    revokeObjectUrlIfNeeded(whatsappQrResolvedSrc.value)
+    whatsappQrResolvedSrc.value = ''
+
+    if (!nextUrl) return
+
+    whatsappQrResolvedSrc.value = await loadProtectedImage(nextUrl)
+}
+
+
+async function refreshWhatsAppStatus() {
+    const previousConnected = Boolean(whatsappStatus.value?.connected)
+    const previousState = String(whatsappStatus.value?.loginState || '').trim()
+
+    try {
+        const { data } = await api.get('/api/whatsapp/status')
+        whatsappStatus.value = data
+        syncStableQrSrc(whatsappQrStableSrc, data?.qrImageUrl)
+    } catch (err) {
+        whatsappStatus.value = {
+            connected: false,
+            loginState: 'error',
+            lastError: err.response?.data?.error || err.message || 'WhatsApp status unavailable',
+            error: err.response?.data?.error || err.message || 'WhatsApp status unavailable',
+            roomCount: 0,
+            unreadCount: 0,
+            profile: null,
+            qrImageUrl: null,
+        }
+    }
+
+    await syncWhatsAppQrImage()
+
+    applyWhatsAppIntegrationState(whatsappStatus.value)
+
+    if (
+        whatsappCardState.value === 'pending' &&
+        (!WHATSAPP_PENDING_STATES.has(previousState) || whatsappConnecting.value)
+    ) {
+        whatsappQrModalOpen.value = true
+    }
+
+    if (whatsappCardState.value === 'connected') {
+        whatsappQrModalOpen.value = false
+    }
+
+    syncWhatsAppPolling()
+
+    if (
+        previousConnected !== Boolean(whatsappStatus.value?.connected) ||
+        previousState !== String(whatsappStatus.value?.loginState || '').trim()
+    ) {
+        notifyIntegrationsUpdated()
+    }
+
+    if (
+        whatsappStatus.value?.connected &&
+        (!previousConnected || previousState !== 'connected')
+    ) {
+        testResults.whatsapp = { ok: true, message: 'WhatsApp connected successfully!' }
+    }
+}
+
 async function startSignalConnect(options = {}) {
     const reconnect = Boolean(options?.reconnect)
     signalConnecting.value = true
@@ -1255,6 +1652,24 @@ async function startGmailOAuth() {
     finally { gmailConnecting.value = false }
 }
 
+async function startGoogleDocsOAuth() {
+    googleDocsConnecting.value = true
+    try {
+        const res = await api.get('/api/integrations/google-docs/oauth/start')
+        await openOAuthPopup(res.data.url, 'gdocs-oauth', 'gdocs-oauth-success')
+    } catch (err) { console.error('Google Docs OAuth failed:', err) }
+    finally { googleDocsConnecting.value = false }
+}
+
+async function startGoogleSheetsOAuth() {
+    googleSheetsConnecting.value = true
+    try {
+        const res = await api.get('/api/integrations/google-sheets/oauth/start')
+        await openOAuthPopup(res.data.url, 'gsheets-oauth', 'gsheets-oauth-success')
+    } catch (err) { console.error('Google Sheets OAuth failed:', err) }
+    finally { googleSheetsConnecting.value = false }
+}
+
 // ── Google Calendar OAuth ─────────────────────────────────
 const calendarConnecting = ref(false)
 async function startCalendarOAuth() {
@@ -1282,43 +1697,45 @@ async function startSlackOAuth() {
 }
 
 const whatsappConnecting = ref(false)
-const whatsappQR         = ref(null)
-let   whatsappPollTimer  = null
- 
-async function startWhatsAppConnect() {
+
+async function startWhatsAppConnect(options = {}) {
+    const reconnect = Boolean(options?.reconnect)
     whatsappConnecting.value = true
-    whatsappQR.value         = null
- 
+    testResults.whatsapp = null
+    whatsappQrModalOpen.value = true
+    
+
     try {
-        // Tell backend to initialize WhatsApp client
-        await api.post('/api/whatsapp/connect')
- 
-        // Poll for QR code every 3 seconds
-        whatsappPollTimer = setInterval(async () => {
-            try {
-                const { data } = await api.get('/api/whatsapp/status')
- 
-                if (data.status === 'connected') {
-                    // Connected! Clear poll and reload
-                    clearInterval(whatsappPollTimer)
-                    whatsappConnecting.value = false
-                    whatsappQR.value         = null
-                    await loadIntegrations()
-                    notifyIntegrationsUpdated()
-                } else if (data.qrImage) {
-                    whatsappQR.value = data.qrImage
-                }
-            } catch {console.error('Failed to poll WhatsApp status') }
-        }, 3000)
- 
-        // Timeout after 2 minutes
-        setTimeout(() => {
-            clearInterval(whatsappPollTimer)
-            whatsappConnecting.value = false
-        }, 120_000)
- 
+        const { data } = await api.post('/api/whatsapp/connect', { reconnect })
+
+        if (data.integration) connected.whatsapp = data.integration
+        whatsappStatus.value = data.status || null
+        syncStableQrSrc(whatsappQrStableSrc, data?.status?.qrImageUrl)
+        await syncWhatsAppQrImage()
+
+        applyWhatsAppIntegrationState(whatsappStatus.value)
+        syncWhatsAppPolling()
+
+        if (whatsappCardState.value === 'connected') {
+            whatsappQrModalOpen.value = false
+            testResults.whatsapp = { ok: true, message: 'WhatsApp connected successfully!' }
+        } else if (whatsappCardState.value === 'pending') {
+            testResults.whatsapp = { ok: true, message: 'Scan the QR code to finish linking WhatsApp.' }
+        } else if (whatsappCardState.value === 'error') {
+            testResults.whatsapp = {
+                ok: false,
+                error: whatsappStatus.value?.lastError || whatsappStatus.value?.error || 'WhatsApp connect failed',
+            }
+        }
+
+        notifyIntegrationsUpdated()
     } catch (err) {
-        console.error('WhatsApp connect failed:', err)
+        testResults.whatsapp = {
+            ok: false,
+            error: err.response?.data?.error || 'WhatsApp connect failed',
+        }
+        await refreshWhatsAppStatus()
+    } finally {
         whatsappConnecting.value = false
     }
 }
@@ -1333,6 +1750,20 @@ async function removeIntegration(type) {
             stopSignalPolling()
             signalQrModalOpen.value = false
             signalStatus.value = {
+                connected: false,
+                loginState: 'disconnected',
+                lastError: '',
+                error: '',
+                roomCount: 0,
+                unreadCount: 0,
+                profile: null,
+                qrImageUrl: null,
+            }
+        } else if (type === 'whatsapp') {
+            await api.post('/api/whatsapp/disconnect')
+            stopWhatsAppPolling()
+            whatsappQrModalOpen.value = false
+            whatsappStatus.value = {
                 connected: false,
                 loginState: 'disconnected',
                 lastError: '',
@@ -1398,8 +1829,8 @@ async function removeIntegration(type) {
 .int-subtitle { font-size: 14px; color: var(--text-secondary); margin: 0; }
 .int-header-badge {
     display: flex; align-items: center; gap: 7px;
-    font-size: 12px; color: var(--text-secondary);
-    background: rgba(255, 255, 255, 0.045); border: 1px solid var(--border-default);
+    font-size: 12px; color: var(--success);
+    background: rgba(3, 248, 117, 0.045); border: 1px solid var(--border-default);
     padding: 9px 14px; border-radius: 999px;
     backdrop-filter: blur(16px);
 }
@@ -1438,12 +1869,17 @@ async function removeIntegration(type) {
     background: linear-gradient(180deg, #ffffff, #f7f8fc) !important;
     border-color: rgba(15,23,42,0.08);
 }
+.int-card-icon--google_docs {
+    background: linear-gradient(180deg, #eef4ff, #dbeafe) !important;
+    border-color: rgba(66,133,244,0.18);
+}
 .int-card-icon--razorpay {
     background: linear-gradient(180deg, #1f4fd1, #12307f) !important;
     border-color: rgba(31,79,209,0.28);
 }
 .int-logo { width: 26px; height: 26px; object-fit: contain; border-radius: 4px; }
 .int-card-icon--gmail .int-logo { width: 29px; height: 29px; }
+.int-card-icon--google_docs .int-logo { width: 28px; height: 28px; }
 .int-brand-icon {
     display: block;
     color: #fff;
@@ -1481,7 +1917,7 @@ async function removeIntegration(type) {
 }
 .badge-disconnected { font-size: 11px; color: var(--text-muted); }
 .badge-soon { font-size: 10px; font-weight: 700; background: rgba(242, 198, 109, 0.12); color: var(--accent-warm); padding: 4px 9px; border-radius: 999px; border: 1px solid rgba(242, 198, 109, 0.18); }
-.badge-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); display: inline-block; }
+.badge-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); display: inline-block; }
 .badge-dot.green { background: #10b981; }
 
 .int-card-form { padding: 0 22px 22px; border-top: 1px solid var(--border-subtle); }

@@ -1,394 +1,194 @@
-/**
- * toolWhatsApp.js
- * 📁 backend/services/tools/toolWhatsApp.js
- *
- * WhatsApp integration using whatsapp-web.js (no Meta approval needed)
- * Works by scanning a QR code once — stays logged in via session.
- *
- * Install: npm install whatsapp-web.js qrcode
- */
-
 "use strict";
 
-const path = require("path");
 const Integration = require("../../models/Integration");
-const { filterWhatsAppChats } = require("../agentMessageFilterService");
 const {
-  findBestCommunicationMatch,
-  normalizeDigits,
-} = require("../communicationContactMatcher");
+  connectWhatsAppIntegration,
+  getWhatsAppStatus,
+  listWhatsAppChats,
+  getWhatsAppRoomTimeline,
+  sendWhatsAppMessage,
+  getWhatsAppUnreadSignal,
+  invalidateWhatsAppCache,
+} = require("../whatsappMatrixService");
 
-// ── Per-user WhatsApp client instances ───────────────────────────────────────
-// Map: userId → { client, status, qr }
-const clients = new Map();
-
-function buildWhatsAppChatCandidates(chats = []) {
-  return chats.map((chat) => ({
-    record: chat,
-    fields: [chat.name, chat.id?._serialized, chat.id?.user],
-  }));
+function summarizeMessage(message = {}) {
+  if (message.deleted) return "Message deleted";
+  if (message.text) return message.text;
+  if (message.isVoice) return "Voice message";
+  const attachment = Array.isArray(message.attachments) ? message.attachments[0] : null;
+  if (!attachment) return "";
+  if (attachment.type === "image") return "Image";
+  if (attachment.type === "video") return "Video";
+  if (attachment.type === "audio") return "Audio";
+  return attachment.fileName || "Attachment";
 }
 
-function resolveWhatsAppChat(chats = [], target = "", options = {}) {
-  const includeGroups = Boolean(options.includeGroups);
-  const includeBroadcasts = Boolean(options.includeBroadcasts);
-  const allowedChats = filterWhatsAppChats(chats, {
-    includeGroups,
-    includeBroadcasts,
-  });
-
-  const match = findBestCommunicationMatch(
-    target,
-    buildWhatsAppChatCandidates(allowedChats)
-  );
-  if (match?.item?.record) return match.item.record;
-
-  return includeGroups || includeBroadcasts
-    ? null
-    : findBestCommunicationMatch(target, buildWhatsAppChatCandidates(chats))
-        ?.item?.record || null;
+function formatChatForTool(chat = {}) {
+  return {
+    id: chat.roomId || chat.id,
+    roomId: chat.roomId || chat.id,
+    name: chat.title || chat.name || "WhatsApp",
+    title: chat.title || chat.name || "WhatsApp",
+    isGroup: Boolean(chat.isGroup),
+    unread: Number(chat.unreadCount || 0),
+    unreadCount: Number(chat.unreadCount || 0),
+    lastMessage: chat.lastMessagePreview || "",
+    lastMessagePreview: chat.lastMessagePreview || "",
+    lastMessageAt: chat.lastMessageAt || null,
+    pinned: Boolean(chat.isPinned),
+    muted: Boolean(chat.isMuted),
+    avatarUrl: chat.avatarUrl || "",
+  };
 }
 
-// ── Initialize WhatsApp client for a user ────────────────────────────────────
-async function getOrCreateClient(userId) {
-  if (clients.has(userId)) return clients.get(userId);
-
-  const { Client, LocalAuth } = require("whatsapp-web.js");
-
-  const client = new Client({
-    authStrategy: new LocalAuth({
-      clientId: `orionai_${userId}`,
-      dataPath: path.join(process.cwd(), ".wwebjs_auth"),
-    }),
-    puppeteer: {
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    },
-  });
-
-  const entry = { client, status: "initializing", qr: null };
-  clients.set(userId, entry);
-
-  client.on("qr", (qr) => {
-    entry.status = "qr_ready";
-    entry.qr = qr;
-    console.log(`📱 WhatsApp QR ready for ${userId}`);
-    // Push QR to frontend via WebSocket
-    try {
-      const { pushToUser } = require("../websocketServer");
-      pushToUser(userId, { type: "whatsapp_qr", qr });
-    } catch {}
-  });
-
-  client.on("ready", async () => {
-    entry.status = "connected";
-    entry.qr = null;
-    console.log(`✅ WhatsApp connected for ${userId}`);
-
-    // Save connected status to Integration
-    await Integration.findOneAndUpdate(
-      { userId, type: "whatsapp" },
-      {
-        $set: {
-          userId,
-          type: "whatsapp",
-          name: "WhatsApp",
-          enabled: true,
-          whatsapp: {
-            status: "connected",
-            phone: client.info?.wid?.user || "",
-            connectedAt: new Date(),
-          },
-          updatedAt: new Date(),
-        },
-      },
-      { upsert: true }
-    );
-
-    try {
-      const { pushToUser } = require("../websocketServer");
-      pushToUser(userId, {
-        type: "whatsapp_connected",
-        phone: client.info?.wid?.user || "",
-      });
-    } catch {}
-  });
-
-  client.on("disconnected", async (reason) => {
-    entry.status = "disconnected";
-    console.log(`WhatsApp disconnected for ${userId}:`, reason);
-    clients.delete(userId);
-
-    await Integration.findOneAndUpdate(
-      { userId, type: "whatsapp" },
-      { $set: { "whatsapp.status": "disconnected", updatedAt: new Date() } }
-    );
-
-    try {
-      const { pushToUser } = require("../websocketServer");
-      pushToUser(userId, { type: "whatsapp_disconnected", reason });
-    } catch {}
-  });
-
-  // New message received — push to frontend via WS
-  client.on("message", async (msg) => {
-    if (msg.fromMe) return; // ignore sent messages
-
-    const contact = await msg.getContact();
-    const chat = await msg.getChat();
-
-    try {
-      const { pushToUser } = require("../websocketServer");
-      pushToUser(userId, {
-        type: "whatsapp_message",
-        from: contact.pushname || contact.number,
-        phone: contact.number,
-        message: msg.body,
-        chatId: chat.id._serialized,
-        chatName: chat.name,
-        isGroup: chat.isGroup,
-        timestamp: msg.timestamp,
-        msgId: msg.id._serialized,
-      });
-    } catch {}
-  });
-
-  await client.initialize();
-  return entry;
+function formatMessageForTool(message = {}) {
+  return {
+    id: message.id,
+    from: message.direction === "outbound" ? "You" : message.senderName || "WhatsApp",
+    senderName: message.senderName || "WhatsApp",
+    senderId: message.senderId || "",
+    message: summarizeMessage(message),
+    text: message.text || "",
+    timestamp:
+      message.timeLabel ||
+      (message.timestamp
+        ? new Date(message.timestamp).toLocaleString("en-IN")
+        : ""),
+    isoTimestamp: message.timestamp || null,
+    fromMe: message.direction === "outbound" || Boolean(message.fromMe),
+    type: message.isVoice
+      ? "audio"
+      : Array.isArray(message.attachments) && message.attachments[0]?.type
+        ? message.attachments[0].type
+        : "chat",
+    attachments: Array.isArray(message.attachments) ? message.attachments : [],
+    reactions: Array.isArray(message.reactions) ? message.reactions : [],
+  };
 }
 
-// ── START / CONNECT ───────────────────────────────────────────────────────────
 async function whatsappConnect(params, ctx) {
   const { userId } = ctx;
-  try {
-    const entry = await getOrCreateClient(userId);
-    return {
-      ok: true,
-      status: entry.status,
-      message:
-        entry.status === "connected"
-          ? "WhatsApp already connected"
-          : "WhatsApp initializing — scan the QR code",
-    };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
+  const result = await connectWhatsAppIntegration(userId, params || {});
+  const status = result?.status || null;
+
+  return {
+    ok: true,
+    status: status?.connected ? "connected" : status?.loginState || "disconnected",
+    connected: Boolean(status?.connected),
+    qrImage: status?.qrImageUrl || null,
+    integration: result?.clientIntegration || result?.integration || null,
+    message: status?.connected
+      ? "WhatsApp already connected"
+      : "WhatsApp is preparing a QR code inside OrionAI.",
+  };
 }
 
-// ── DISCONNECT ────────────────────────────────────────────────────────────────
 async function whatsappDisconnect(params, ctx) {
   const { userId } = ctx;
-  const entry = clients.get(userId);
-  if (entry?.client) {
-    await entry.client.destroy();
-    clients.delete(userId);
-  }
   await Integration.findOneAndDelete({ userId, type: "whatsapp" });
+  invalidateWhatsAppCache(userId);
   return { ok: true };
 }
 
-// ── SEND MESSAGE ──────────────────────────────────────────────────────────────
 async function whatsappSend(params, ctx) {
   const { userId } = ctx;
-  const { to, contact, message, isGroup } = params;
+  const target = String(params?.to || params?.contact || "").trim();
+  const message = String(params?.message || params?.text || "").trim();
 
-  if ((!to && !contact) || !message)
+  if (!target || !message) {
     throw new Error("to/contact and message are required");
-
-  const entry = clients.get(userId);
-  if (!entry || entry.status !== "connected") {
-    throw new Error("WhatsApp not connected. Please connect first.");
   }
 
-  const target = String(to || contact || "").trim();
-  const digits = normalizeDigits(target);
-  let chatId = target;
-  let targetLabel = target;
-
-  if (!target.includes("@")) {
-    if (digits.length >= 6 && !/[a-z]/i.test(target)) {
-      chatId = isGroup ? target : `${digits}@c.us`;
-      targetLabel = target;
-    } else {
-      const chats = await entry.client.getChats();
-      const resolvedChat = resolveWhatsAppChat(chats, target, {
-        includeGroups: Boolean(isGroup),
-      });
-
-      if (!resolvedChat) {
-        throw new Error(`No WhatsApp chat found for: ${target}`);
-      }
-
-      chatId = resolvedChat.id._serialized;
-      targetLabel = resolvedChat.name || target;
+  const sendResult = await sendWhatsAppMessage(
+    userId,
+    target,
+    message,
+    {
+      replyToEventId: params?.replyToEventId || null,
     }
-  }
+  );
 
-  const sentMsg = await entry.client.sendMessage(chatId, message);
+  const chats = await listWhatsAppChats(userId, { limit: 200 }).catch(() => []);
+  const chat =
+    chats.find(
+      (entry) => String(entry.roomId || entry.id) === String(sendResult.roomId || "")
+    ) || null;
+
   return {
     ok: true,
-    to: targetLabel,
-    chatId,
+    to: chat?.title || chat?.name || target,
+    chatId: sendResult.roomId || target,
+    roomId: sendResult.roomId || target,
     message,
-    msgId: sentMsg.id._serialized,
-    summary: `WhatsApp sent to ${targetLabel}`,
+    msgId: sendResult.eventId || null,
+    summary: `WhatsApp sent to ${chat?.title || chat?.name || target}`,
   };
 }
 
-// ── GET MESSAGES from a chat ──────────────────────────────────────────────────
 async function whatsappGetMessages(params, ctx) {
   const { userId } = ctx;
-  const { contact, limit = 20 } = params;
-  const includeGroups = Boolean(params.includeGroups);
-  const includeBroadcasts = Boolean(params.includeBroadcasts);
+  const target = String(params?.contact || params?.chatId || params?.roomId || "").trim();
+  const limit = Number(params?.limit || 20) || 20;
 
-  const entry = clients.get(userId);
-  if (!entry || entry.status !== "connected") {
-    throw new Error("WhatsApp not connected");
-  }
-
-  const chats = await entry.client.getChats();
-  const target = String(contact || "").trim();
-  const chat = target
-    ? resolveWhatsAppChat(chats, target, {
-        includeGroups,
-        includeBroadcasts,
-      })
-    : filterWhatsAppChats(chats, {
-        includeGroups,
-        includeBroadcasts,
-      })[0] || null;
-
-  if (!chat) {
-    if (target) {
-      throw new Error(`No WhatsApp chat found for: ${contact}`);
-    }
-
-    return {
-      ok: false,
-      contact: null,
-      chatName: null,
-      count: 0,
-      messages: [],
-      summary:
-        includeGroups || includeBroadcasts
-          ? "No WhatsApp chats available"
-          : "No relevant direct WhatsApp chats available",
-    };
-  }
-
-  const messages = await chat.fetchMessages({ limit });
-  if (typeof chat.sendSeen === "function") {
-    await chat.sendSeen().catch(() => {});
-  }
-  const { refreshUsersSignals } = require("../liveSignalRefresh");
-  refreshUsersSignals([userId]).catch(() => {});
-  const formatted = messages.map((m) => ({
-    id: m.id._serialized,
-    from: m.fromMe ? "You" : m._data?.notifyName || m.from,
-    message: m.body,
-    timestamp: new Date(m.timestamp * 1000).toLocaleString("en-IN"),
-    fromMe: m.fromMe,
-    type: m.type,
-  }));
+  const timeline = await getWhatsAppRoomTimeline(userId, target, { limit });
+  const messages = (timeline.messages || []).map(formatMessageForTool);
 
   return {
     ok: true,
-    chatName: chat.name,
-    count: formatted.length,
-    messages: formatted,
-    summary: `${formatted.length} messages from ${chat.name}`,
+    chatId: timeline.room?.roomId || target,
+    roomId: timeline.room?.roomId || target,
+    chatName: timeline.room?.title || timeline.room?.name || target,
+    count: messages.length,
+    messages,
+    summary: `${messages.length} messages from ${timeline.room?.title || timeline.room?.name || "WhatsApp"}`,
   };
 }
 
-// ── GET UNREAD ────────────────────────────────────────────────────────────────
 async function whatsappGetUnread(params, ctx) {
   const { userId } = ctx;
-  const { limit = 20 } = params;
-  const includeGroups = Boolean(params.includeGroups);
-  const includeBroadcasts = Boolean(params.includeBroadcasts);
-
-  const entry = clients.get(userId);
-  if (!entry || entry.status !== "connected") return null;
-
-  const chats = await entry.client.getChats();
-  const unreadChats = filterWhatsAppChats(chats, {
-    includeGroups,
-    includeBroadcasts,
-    requireUnread: true,
-  })
-    .slice(0, limit)
-    .map((c) => ({
-      chatId: c.id._serialized,
-      chatName: c.name,
-      unreadCount: c.unreadCount,
-      isGroup: c.isGroup,
-      lastMessage: c.lastMessage?.body?.slice(0, 80) || "",
-      latestMessageId: c.lastMessage?.id?._serialized || null,
-      latestMessageAt: c.lastMessage?.timestamp
-        ? new Date(c.lastMessage.timestamp * 1000).toISOString()
-        : null,
-    }));
-
-  const totalUnread = unreadChats.reduce((s, c) => s + c.unreadCount, 0);
+  const result = await getWhatsAppUnreadSignal(userId);
+  if (!result) return null;
 
   return {
     ok: true,
-    totalUnread,
-    chatCount: unreadChats.length,
-    chats: unreadChats,
-    summary:
-      totalUnread > 0
-        ? `${totalUnread} unread across ${unreadChats.length} chats`
-        : "No unread WhatsApp messages",
+    totalUnread: Number(result.count || 0),
+    chatCount: Array.isArray(result.chats) ? result.chats.length : 0,
+    chats: Array.isArray(result.chats) ? result.chats : [],
+    summary: result.summary || null,
   };
 }
 
-// ── LIST CHATS ────────────────────────────────────────────────────────────────
 async function whatsappListChats(params, ctx) {
   const { userId } = ctx;
-  const { limit = 30 } = params;
-  const includeGroups = Boolean(params.includeGroups);
-  const includeBroadcasts = Boolean(params.includeBroadcasts);
+  const chats = await listWhatsAppChats(userId, {
+    limit: Number(params?.limit || 30) || 30,
+    search: String(params?.search || "").trim(),
+  });
 
-  const entry = clients.get(userId);
-  if (!entry || entry.status !== "connected") {
-    throw new Error("WhatsApp not connected");
-  }
-
-  const chats = filterWhatsAppChats(await entry.client.getChats(), {
-    includeGroups,
-    includeBroadcasts,
-  }).slice(0, limit);
   return {
     ok: true,
     total: chats.length,
-    chats: chats.map((c) => ({
-      id: c.id._serialized,
-      name: c.name,
-      isGroup: c.isGroup,
-      unread: c.unreadCount,
-      lastMessage: c.lastMessage?.body?.slice(0, 60) || "",
-      pinned: c.pinned,
-    })),
+    chats: chats.map(formatChatForTool),
     summary: `${chats.length} WhatsApp chats`,
   };
 }
 
-// ── GET STATUS ────────────────────────────────────────────────────────────────
-function whatsappStatus(params, ctx) {
+async function whatsappStatus(params, ctx) {
   const { userId } = ctx;
-  const entry = clients.get(userId);
+  const status = await getWhatsAppStatus(userId);
   return {
     ok: true,
-    status: entry?.status || "not_initialized",
-    qr: entry?.qr || null,
+    connected: Boolean(status?.connected),
+    status: status?.connected ? "connected" : status?.loginState || "disconnected",
+    loginState: status?.loginState || "disconnected",
+    qrImage: status?.qrImageUrl || null,
+    ...status,
   };
 }
 
-// ── MAIN TOOL DISPATCHER ──────────────────────────────────────────────────────
 async function toolWhatsApp(params, ctx) {
-  const { action } = params;
+  const action = String(params?.action || "").trim();
+
   switch (action) {
     case "connect":
       return whatsappConnect(params, ctx);
@@ -409,4 +209,12 @@ async function toolWhatsApp(params, ctx) {
   }
 }
 
-module.exports = { toolWhatsApp, whatsappGetUnread, getOrCreateClient };
+async function getOrCreateClient() {
+  return null;
+}
+
+module.exports = {
+  toolWhatsApp,
+  whatsappGetUnread,
+  getOrCreateClient,
+};

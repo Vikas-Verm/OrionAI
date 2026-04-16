@@ -86,6 +86,42 @@ export const communicationAPI = {
     api.get("/api/communications/action-states", { params: { source } }),
 };
 
+export const googleDocsAPI = {
+  list: (limit = 12) => api.get("/api/google-docs", { params: { limit } }),
+  create: (payload) => api.post("/api/google-docs", payload),
+  get: (documentId) => api.get(`/api/google-docs/${documentId}`),
+  update: (documentId, payload) => api.patch(`/api/google-docs/${documentId}`, payload),
+  delete: (documentId) => api.delete(`/api/google-docs/${documentId}`),
+  ai: (documentId, payload) => api.post(`/api/google-docs/${documentId}/ai`, payload),
+  share: (documentId, payload) => api.post(`/api/google-docs/${documentId}/share`, payload),
+  export: (documentId, payload) =>
+    api.post(`/api/google-docs/${documentId}/export`, payload, { responseType: "blob" }),
+};
+
+export const googleSheetsAPI = {
+  list: (limit = 12) => api.get("/api/google-sheets", { params: { limit } }),
+  create: (payload) => api.post("/api/google-sheets", payload),
+  get: (spreadsheetId, sheetId) =>
+    api.get(`/api/google-sheets/${spreadsheetId}`, {
+      params: sheetId ? { sheetId } : {},
+    }),
+  update: (spreadsheetId, payload) =>
+    api.patch(`/api/google-sheets/${spreadsheetId}`, payload),
+  duplicate: (spreadsheetId, payload) =>
+    api.post(`/api/google-sheets/${spreadsheetId}/duplicate`, payload),
+  mutate: (spreadsheetId, payload) =>
+    api.post(`/api/google-sheets/${spreadsheetId}/mutations`, payload),
+  delete: (spreadsheetId) => api.delete(`/api/google-sheets/${spreadsheetId}`),
+  ai: (spreadsheetId, payload) =>
+    api.post(`/api/google-sheets/${spreadsheetId}/ai`, payload),
+  share: (spreadsheetId, payload) =>
+    api.post(`/api/google-sheets/${spreadsheetId}/share`, payload),
+  export: (spreadsheetId, payload) =>
+    api.post(`/api/google-sheets/${spreadsheetId}/export`, payload, {
+      responseType: "blob",
+    }),
+};
+
 export function streamAgentRun(steps, sessionId, userMessage) {
   const token = localStorage.getItem("token");
   return fetch(`${API_BASE}/api/agent/run`, {
