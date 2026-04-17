@@ -7,7 +7,7 @@ const {
   listWhatsAppChats,
   getWhatsAppRoomTimeline,
   sendWhatsAppMessage,
-  getWhatsAppUnreadSignal,
+  getWhatsAppUnreadSummary,
   invalidateWhatsAppCache,
 } = require("../whatsappMatrixService");
 
@@ -146,7 +146,7 @@ async function whatsappGetMessages(params, ctx) {
 
 async function whatsappGetUnread(params, ctx) {
   const { userId } = ctx;
-  const result = await getWhatsAppUnreadSignal(userId);
+  const result = await getWhatsAppUnreadSummary(userId);
   if (!result) return null;
 
   return {

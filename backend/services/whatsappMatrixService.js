@@ -1,7 +1,10 @@
 "use strict";
 
 const axios = require("axios");
+const fs = require("fs");
+const path = require("path");
 const QRCode = require("qrcode");
+const Database = require("better-sqlite3");
 const Integration = require("../models/Integration");
 const {
   findBestCommunicationMatch,
@@ -26,6 +29,9 @@ const WHATSAPP_SYNC_CACHE = new Map();
 const WHATSAPP_SYNC_CACHE_TTL_MS = 10 * 1000;
 const WHATSAPP_QR_CACHE = new Map();
 const WHATSAPP_QR_CACHE_TTL_MS = 60 * 1000;
+const WHATSAPP_BRIDGE_JOIN_BATCH_SIZE = 80;
+const WHATSAPP_PORTAL_REQUEST_BACKOFF_MS = 15 * 1000;
+const WHATSAPP_CONTACT_ROOM_PREFIX = "wa-contact:";
 const WHATSAPP_GHOST_RE = /^@whatsapp_[^:]+:/i;
 const WHATSAPP_LOGIN_STATE_VALUES = new Set([
   "disconnected",
@@ -41,6 +47,9 @@ const BRIDGE_QR_RE =
   /\b(qr code|scan .*qr|linked devices|link a device|scan this code)\b/i;
 const BRIDGE_ERROR_RE =
   /\b(error|failed|failure|timed out|timeout|unable to|could not|invalid|logged out|disconnected)\b/i;
+const WHATSAPP_PORTAL_REQUESTS = new Map();
+let whatsappBridgeDb = null;
+let whatsappBridgeDbPath = "";
 
 function defaultBridgeBotMxid() {
   return process.env.MATRIX_WHATSAPP_BOT_MXID || "@whatsappbot:orion.local";
@@ -97,6 +106,110 @@ function buildWhatsAppMediaUrl(mxc = "") {
   return `/api/whatsapp/media?mxc=${encodeURIComponent(normalized)}`;
 }
 
+function normalizeWhatsAppContactIdentifier(value = "") {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+  if (normalized.includes("@")) return normalized;
+  const digits = normalizeDigits(normalized);
+  if (!digits) return normalized;
+  return `${digits}@s.whatsapp.net`;
+}
+
+function defaultMatrixDomain() {
+  return String(process.env.MATRIX_SERVER_DOMAIN || "orion.local").trim();
+}
+
+function buildWhatsAppGhostMxid(ghostId = "") {
+  const normalizedGhostId = String(ghostId || "").trim();
+  if (!normalizedGhostId) return "";
+  return `@whatsapp_${normalizedGhostId}:${defaultMatrixDomain()}`;
+}
+
+function buildWhatsAppContactRoomId(contactJid = "") {
+  const normalizedContactJid = String(contactJid || "").trim();
+  return normalizedContactJid
+    ? `${WHATSAPP_CONTACT_ROOM_PREFIX}${normalizedContactJid}`
+    : "";
+}
+
+function isWhatsAppContactRoomId(roomId = "") {
+  return String(roomId || "")
+    .trim()
+    .startsWith(WHATSAPP_CONTACT_ROOM_PREFIX);
+}
+
+function parseWhatsAppContactRoomId(roomId = "") {
+  if (!isWhatsAppContactRoomId(roomId)) return "";
+  return String(roomId || "")
+    .trim()
+    .slice(WHATSAPP_CONTACT_ROOM_PREFIX.length)
+    .trim();
+}
+
+function extractWhatsAppIdentifier(value = "") {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+  const withoutResource = normalized.split(":")[0];
+  return withoutResource.includes("@")
+    ? withoutResource.slice(0, withoutResource.indexOf("@"))
+    : withoutResource;
+}
+
+function formatWhatsAppPhone(value = "") {
+  const digits = normalizeDigits(value || "");
+  if (digits.length < 6) return String(value || "").trim();
+  return digits.startsWith("+") ? digits : `+${digits}`;
+}
+
+function sanitizeWhatsAppDisplayLabel(value = "") {
+  return String(value || "")
+    .trim()
+    .replace(/^~+\s*/, "")
+    .replace(/\s+\(wa\)$/i, "")
+    .trim();
+}
+
+function buildWhatsAppContactDisplayName(contact = {}) {
+  const displayName = [
+    contact.fullName,
+    contact.businessName,
+    contact.pushName,
+    contact.ghostName,
+    contact.phoneNumber,
+    contact.contactId,
+  ]
+    .map((value) => String(value || "").trim())
+    .find(Boolean);
+
+  return sanitizeWhatsAppDisplayLabel(displayName) || "WhatsApp contact";
+}
+
+function lidToPnJid(value = "") {
+  const digits = normalizeDigits(value || "");
+  return digits ? `${digits}@s.whatsapp.net` : "";
+}
+
+function getWhatsAppPortalRequestKey(userId = "", identifier = "") {
+  return `${String(userId || "").trim()}:${normalizeWhatsAppContactIdentifier(
+    identifier
+  )}`;
+}
+
+function shouldRequestWhatsAppPortal(userId = "", identifier = "") {
+  const key = getWhatsAppPortalRequestKey(userId, identifier);
+  if (!key || key.endsWith(":")) return false;
+  const now = nowTs();
+  const lastRequestedAt = Number(WHATSAPP_PORTAL_REQUESTS.get(key) || 0) || 0;
+  if (
+    lastRequestedAt &&
+    now - lastRequestedAt < WHATSAPP_PORTAL_REQUEST_BACKOFF_MS
+  ) {
+    return false;
+  }
+  WHATSAPP_PORTAL_REQUESTS.set(key, now);
+  return true;
+}
+
 function getCachedQrImage(key = "") {
   const normalizedKey = String(key || "").trim();
   if (!normalizedKey) return null;
@@ -113,8 +226,21 @@ async function assertWhatsAppRoom(userId, roomId) {
     timelineLimit: 20,
   });
 
-  if (!descriptor || !descriptor.isWhatsAppRoom || descriptor.isManagement) {
+  if (!descriptor || descriptor.isManagement) {
     throw new Error("Invalid WhatsApp room.");
+  }
+
+  if (!descriptor.isWhatsAppRoom) {
+    const integration = await ensureWhatsAppIntegration(userId).catch(
+      () => null
+    );
+    const config = integration ? buildConfigFromIntegration(integration) : null;
+    const bridgeSnapshot = config
+      ? readWhatsAppBridgeSnapshot(config.mxid)
+      : null;
+    if (!findWhatsAppPortalByRoomId(bridgeSnapshot, roomId)) {
+      throw new Error("Invalid WhatsApp room.");
+    }
   }
 
   return descriptor.room;
@@ -145,6 +271,708 @@ function safeJsonParse(value, fallback = null) {
   }
 }
 
+function resolveWhatsAppBridgeDbPath() {
+  const explicitPath = String(
+    process.env.MAUTRIX_WHATSAPP_DB_PATH ||
+      process.env.MATRIX_WHATSAPP_BRIDGE_DB_PATH ||
+      ""
+  ).trim();
+  if (explicitPath) return path.resolve(explicitPath);
+  return path.resolve(
+    __dirname,
+    "../../infra/mautrix-whatsapp/mautrix-whatsapp.db"
+  );
+}
+
+function getWhatsAppBridgeDb() {
+  const nextPath = resolveWhatsAppBridgeDbPath();
+  if (!nextPath || !fs.existsSync(nextPath)) return null;
+
+  if (whatsappBridgeDb && whatsappBridgeDbPath === nextPath) {
+    return whatsappBridgeDb;
+  }
+
+  if (whatsappBridgeDb) {
+    try {
+      whatsappBridgeDb.close();
+    } catch {}
+    whatsappBridgeDb = null;
+    whatsappBridgeDbPath = "";
+  }
+
+  try {
+    const db = new Database(nextPath, {
+      readonly: true,
+      fileMustExist: true,
+      timeout: 2_000,
+    });
+    db.pragma("busy_timeout = 2000");
+    whatsappBridgeDb = db;
+    whatsappBridgeDbPath = nextPath;
+    return whatsappBridgeDb;
+  } catch {
+    return null;
+  }
+}
+
+function buildWhatsAppBridgeSnapshot(loginRow = null, portalRows = []) {
+  if (!loginRow) return null;
+
+  const remoteProfile = safeJsonParse(loginRow.remote_profile, {}) || {};
+  const metadata = safeJsonParse(loginRow.metadata, {}) || {};
+  const loggedInAtSeconds = Number(metadata.logged_in_at || 0);
+  const loggedInAtTs =
+    Number.isFinite(loggedInAtSeconds) && loggedInAtSeconds > 0
+      ? Math.round(loggedInAtSeconds * 1000)
+      : 0;
+
+  const portalRooms = (Array.isArray(portalRows) ? portalRows : [])
+    .map((row) => ({
+      roomId: String(row?.room_id || "").trim(),
+      portalId: String(row?.portal_id || "").trim(),
+      receiver: String(row?.portal_receiver || "").trim(),
+      title: String(row?.name || "").trim(),
+      avatarMxc: String(row?.avatar_mxc || "").trim(),
+      roomType: String(row?.room_type || "").trim(),
+      inSpace: Boolean(row?.in_space),
+      preferred: Boolean(row?.preferred),
+    }))
+    .filter((room) => room.roomId);
+
+  return {
+    loginId: String(loginRow.id || "").trim(),
+    matrixMxid: String(loginRow.user_mxid || "").trim(),
+    phone: String(
+      remoteProfile.phone || metadata.phone || loginRow.remote_name || ""
+    ).trim(),
+    profileName: String(
+      remoteProfile.name || metadata.name || loginRow.remote_name || ""
+    ).trim(),
+    spaceRoomId: String(loginRow.space_room || "").trim(),
+    connected: Boolean(
+      loggedInAtTs || remoteProfile.phone || remoteProfile.name
+    ),
+    loggedInAtTs,
+    loggedInAt: loggedInAtTs ? new Date(loggedInAtTs).toISOString() : null,
+    needsPortalSync: Boolean(metadata.history_sync_portals_need_creating),
+    portalRooms,
+  };
+}
+
+function readWhatsAppBridgeSnapshot(matrixMxid = "") {
+  const normalizedMxid = normalizeMxid(matrixMxid);
+  if (!normalizedMxid) return null;
+
+  const db = getWhatsAppBridgeDb();
+  if (!db) return null;
+
+  try {
+    const loginRow = db
+      .prepare(
+        `
+          SELECT user_mxid, id, remote_name, remote_profile, space_room, metadata
+          FROM user_login
+          WHERE user_mxid = ?
+          ORDER BY rowid DESC
+          LIMIT 1
+        `
+      )
+      .get(normalizedMxid);
+
+    if (!loginRow) return null;
+
+    const portalRows = db
+      .prepare(
+        `
+          SELECT
+            up.portal_id,
+            up.portal_receiver,
+            up.in_space,
+            up.preferred,
+            p.mxid AS room_id,
+            p.name,
+            p.avatar_mxc,
+            p.room_type
+          FROM user_portal up
+          JOIN portal p
+            ON ifnull(p.bridge_id, '') = ifnull(up.bridge_id, '')
+           AND p.id = up.portal_id
+           AND p.receiver = up.portal_receiver
+          WHERE up.user_mxid = ?
+            AND up.login_id = ?
+          ORDER BY ifnull(up.preferred, 0) DESC, ifnull(p.name, ''), p.id
+        `
+      )
+      .all(normalizedMxid, String(loginRow.id || "").trim());
+
+    return buildWhatsAppBridgeSnapshot(loginRow, portalRows);
+  } catch {
+    return null;
+  }
+}
+
+function buildWhatsAppBridgePortalMap(bridgeSnapshot = null) {
+  const portalMap = new Map();
+  const portalRooms = Array.isArray(bridgeSnapshot?.portalRooms)
+    ? bridgeSnapshot.portalRooms
+    : [];
+
+  for (const portal of portalRooms) {
+    const roomId = String(portal?.roomId || "").trim();
+    const portalId = normalizeWhatsAppContactIdentifier(portal?.portalId);
+    if (roomId) {
+      portalMap.set(roomId, portal);
+    }
+    if (portalId) {
+      portalMap.set(portalId, portal);
+    }
+  }
+
+  return portalMap;
+}
+
+function findWhatsAppPortalByRoomId(bridgeSnapshot = null, roomId = "") {
+  const targetRoomId = String(roomId || "").trim();
+  if (!targetRoomId) return null;
+
+  return (
+    (Array.isArray(bridgeSnapshot?.portalRooms)
+      ? bridgeSnapshot.portalRooms
+      : []
+    ).find((portal) => String(portal?.roomId || "").trim() === targetRoomId) ||
+    null
+  );
+}
+
+function buildWhatsAppBridgeContactMap(bridgeContacts = []) {
+  const contactMap = new Map();
+
+  for (const contact of Array.isArray(bridgeContacts) ? bridgeContacts : []) {
+    const contactJid = String(contact?.contactJid || "").trim();
+    const canonicalContactJid = String(
+      contact?.canonicalContactJid || contactJid
+    ).trim();
+    const roomId = String(contact?.roomId || "").trim();
+
+    if (contactJid) {
+      contactMap.set(contactJid, contact);
+    }
+    if (canonicalContactJid) {
+      contactMap.set(canonicalContactJid, contact);
+    }
+    if (roomId) {
+      contactMap.set(roomId, contact);
+    }
+  }
+
+  return contactMap;
+}
+
+function readWhatsAppLidMap() {
+  const db = getWhatsAppBridgeDb();
+  if (!db) return new Map();
+
+  try {
+    return new Map(
+      db
+        .prepare(
+          `
+            SELECT lid, pn
+            FROM whatsmeow_lid_map
+          `
+        )
+        .all()
+        .map((row) => [
+          String(row?.lid || "").trim(),
+          String(row?.pn || "").trim(),
+        ])
+        .filter(([lid, pn]) => lid && pn)
+    );
+  } catch {
+    return new Map();
+  }
+}
+
+function canonicalizeWhatsAppContactJid(contactJid = "", lidMap = null) {
+  const normalized = normalizeWhatsAppContactIdentifier(contactJid);
+  if (!normalized.endsWith("@lid")) return normalized;
+
+  const lid = extractWhatsAppIdentifier(normalized);
+  const mappedPhone = String(
+    lidMap instanceof Map ? lidMap.get(lid) : ""
+  ).trim();
+  return lidToPnJid(mappedPhone) || normalized;
+}
+
+function buildWhatsAppContactKey(contact = {}, lidMap = null) {
+  const canonicalJid = canonicalizeWhatsAppContactJid(
+    contact.canonicalContactJid || contact.contactJid || contact.roomId || "",
+    lidMap
+  );
+  if (canonicalJid) return canonicalJid;
+
+  const digits = normalizeDigits(contact.phoneNumber || "");
+  if (digits) return digits;
+
+  return String(contact.contactMxid || contact.roomId || "").trim();
+}
+
+function buildWhatsAppChatKey(chat = {}, lidMap = null) {
+  const roomId = String(chat.roomId || chat.id || "").trim();
+  if (chat.isGroup && roomId) {
+    return `room:${roomId}`;
+  }
+
+  const contactKey = buildWhatsAppContactKey(chat, lidMap);
+  if (contactKey) {
+    return `direct:${contactKey}`;
+  }
+
+  return roomId ? `room:${roomId}` : "";
+}
+
+function pickBetterWhatsAppContact(left = null, right = null) {
+  if (!left) return right || null;
+  if (!right) return left || null;
+
+  const score = (contact) => {
+    let value = 0;
+    if (contact.bridgeStatus === "portal") value += 8;
+    if (String(contact.fullName || "").trim()) value += 4;
+    if (String(contact.pushName || "").trim()) value += 3;
+    if (String(contact.businessName || "").trim()) value += 3;
+    if (String(contact.phoneNumber || "").trim()) value += 2;
+    if (String(contact.avatarMxc || contact.avatarUrl || "").trim()) value += 2;
+    if (String(contact.contactJid || "").includes("@s.whatsapp.net"))
+      value += 1;
+    return value;
+  };
+
+  return score(right) > score(left) ? right : left;
+}
+
+function resolveBridgeDeviceJid(loginRow = null, db = null) {
+  const phoneDigits = normalizeDigits(
+    loginRow?.remote_name ||
+      safeJsonParse(loginRow?.remote_profile, {})?.phone ||
+      ""
+  );
+  if (!phoneDigits || !db) return "";
+
+  const exact = db
+    .prepare(
+      `
+        SELECT jid
+        FROM whatsmeow_device
+        WHERE jid LIKE ?
+        ORDER BY rowid DESC
+        LIMIT 1
+      `
+    )
+    .get(`${phoneDigits}:%`);
+
+  return String(exact?.jid || "").trim();
+}
+
+function readWhatsAppBridgeContacts(matrixMxid = "", bridgeSnapshot = null) {
+  const normalizedMxid = normalizeMxid(matrixMxid);
+  if (!normalizedMxid) return [];
+
+  const db = getWhatsAppBridgeDb();
+  if (!db) return [];
+  const lidMap = readWhatsAppLidMap();
+
+  try {
+    const loginRow = db
+      .prepare(
+        `
+          SELECT user_mxid, id, remote_name, remote_profile, space_room, metadata
+          FROM user_login
+          WHERE user_mxid = ?
+          ORDER BY rowid DESC
+          LIMIT 1
+        `
+      )
+      .get(normalizedMxid);
+
+    if (!loginRow) return [];
+
+    const ourJid = resolveBridgeDeviceJid(loginRow, db);
+    if (!ourJid) return [];
+
+    const portalMap = buildWhatsAppBridgePortalMap(
+      bridgeSnapshot || buildWhatsAppBridgeSnapshot(loginRow, [])
+    );
+
+    const rows = db
+      .prepare(
+        `
+          SELECT
+            c.their_jid,
+            c.full_name,
+            c.push_name,
+            c.business_name,
+            c.redacted_phone,
+            g.id AS ghost_id,
+            g.name AS ghost_name,
+            g.avatar_mxc AS ghost_avatar_mxc
+          FROM whatsmeow_contacts c
+          LEFT JOIN ghost g
+            ON g.id = CASE
+              WHEN instr(c.their_jid, '@') > 0
+                THEN substr(c.their_jid, 1, instr(c.their_jid, '@') - 1)
+              ELSE c.their_jid
+            END
+          WHERE c.our_jid = ?
+          ORDER BY lower(coalesce(nullif(c.full_name, ''), nullif(c.business_name, ''), nullif(c.push_name, ''), c.their_jid))
+        `
+      )
+      .all(ourJid);
+
+    const contacts = rows
+      .map((row) => {
+        const rawContactJid = String(row?.their_jid || "").trim();
+        const canonicalContactJid = canonicalizeWhatsAppContactJid(
+          rawContactJid,
+          lidMap
+        );
+        const contactJid = canonicalContactJid || rawContactJid;
+        const contactId = extractWhatsAppIdentifier(contactJid);
+        const phoneNumber = formatWhatsAppPhone(
+          contactId || row?.redacted_phone || ""
+        );
+        const bridgePortal =
+          portalMap.get(contactJid) || portalMap.get(rawContactJid) || null;
+        const avatarMxc = String(
+          row?.ghost_avatar_mxc || bridgePortal?.avatarMxc || ""
+        ).trim();
+
+        const contact = {
+          contactId,
+          contactJid,
+          canonicalContactJid: contactJid,
+          rawContactJid,
+          fullName: String(row?.full_name || "").trim(),
+          pushName: String(row?.push_name || "").trim(),
+          businessName: String(row?.business_name || "").trim(),
+          ghostId: String(row?.ghost_id || contactId).trim(),
+          ghostName: String(row?.ghost_name || "").trim(),
+          phoneNumber,
+          avatarMxc: avatarMxc || null,
+          avatarUrl: buildWhatsAppMediaUrl(avatarMxc || ""),
+          roomId:
+            String(bridgePortal?.roomId || "").trim() ||
+            buildWhatsAppContactRoomId(contactJid),
+          bridgeStatus: bridgePortal?.roomId ? "portal" : "contact",
+          contactMxid: buildWhatsAppGhostMxid(
+            String(row?.ghost_id || contactId || "").trim()
+          ),
+        };
+
+        return {
+          ...contact,
+          title: buildWhatsAppContactDisplayName(contact),
+          name: buildWhatsAppContactDisplayName(contact),
+          isGroup: false,
+          isDirect: true,
+          isPlaceholder: !bridgePortal?.roomId,
+          unreadCount: 0,
+          highlightCount: 0,
+          lastMessage: "",
+          lastMessagePreview: "",
+          lastMessageAt: null,
+          lastMessageTs: 0,
+          lastSender: "",
+          memberCount: 2,
+          source: "whatsapp",
+          isPinned: false,
+          isMuted: false,
+        };
+      })
+      .filter((contact) => contact.contactJid && contact.title);
+
+    const dedupedContacts = contacts.reduce((accumulator, contact) => {
+      const key = buildWhatsAppContactKey(contact, lidMap);
+      if (!key) return accumulator;
+      const existing = accumulator.get(key) || null;
+      accumulator.set(key, pickBetterWhatsAppContact(existing, contact));
+      return accumulator;
+    }, new Map());
+
+    return Array.from(dedupedContacts.values());
+  } catch {
+    return [];
+  }
+}
+
+function mergeRoomWithBridgePortalMetadata(room = {}, bridgePortal = null) {
+  if (!bridgePortal) return room;
+
+  const title =
+    sanitizeWhatsAppDisplayLabel(bridgePortal.title || "") ||
+    sanitizeWhatsAppDisplayLabel(room.title || room.name || room.roomId || "");
+  const roomType = String(bridgePortal.roomType || "")
+    .trim()
+    .toLowerCase();
+  const isDirect = roomType ? roomType === "dm" : Boolean(room.isDirect);
+  const avatarMxc = room.avatarMxc || bridgePortal.avatarMxc || null;
+  const contactJid = String(
+    bridgePortal.portalId || bridgePortal.id || ""
+  ).trim();
+  const phoneNumber = formatWhatsAppPhone(
+    extractWhatsAppIdentifier(contactJid)
+  );
+
+  return {
+    ...room,
+    title,
+    name: title,
+    avatarMxc,
+    avatarUrl:
+      room.avatarUrl || buildWhatsAppMediaUrl(bridgePortal.avatarMxc || ""),
+    isDirect,
+    isGroup: roomType ? roomType !== "dm" : Boolean(room.isGroup),
+    phoneNumber: room.phoneNumber || phoneNumber || "",
+    contactJid: room.contactJid || contactJid || "",
+    canonicalContactJid:
+      room.canonicalContactJid ||
+      normalizeWhatsAppContactIdentifier(contactJid) ||
+      "",
+    contactMxid:
+      room.contactMxid ||
+      buildWhatsAppGhostMxid(extractWhatsAppIdentifier(contactJid)) ||
+      "",
+    bridgeStatus: "portal",
+  };
+}
+
+function mergeRoomWithBridgeContactMetadata(room = {}, bridgeContact = null) {
+  if (!bridgeContact) return room;
+
+  const title =
+    sanitizeWhatsAppDisplayLabel(
+      bridgeContact.title || bridgeContact.name || ""
+    ) ||
+    sanitizeWhatsAppDisplayLabel(room.title || room.name || room.roomId || "");
+  const phoneNumber =
+    String(bridgeContact.phoneNumber || room.phoneNumber || "").trim() || "";
+  const avatarUrl =
+    room.avatarUrl ||
+    buildWhatsAppMediaUrl(bridgeContact.avatarMxc || "") ||
+    bridgeContact.avatarUrl ||
+    "";
+
+  return {
+    ...room,
+    title,
+    name: title,
+    avatarMxc: room.avatarMxc || bridgeContact.avatarMxc || null,
+    avatarUrl,
+    phoneNumber,
+    contactJid: bridgeContact.contactJid || room.contactJid || "",
+    canonicalContactJid:
+      bridgeContact.canonicalContactJid || room.canonicalContactJid || "",
+    contactMxid: bridgeContact.contactMxid || room.contactMxid || "",
+    bridgeStatus: isWhatsAppContactRoomId(room.roomId)
+      ? bridgeContact.bridgeStatus || "contact"
+      : "portal",
+    fullName: bridgeContact.fullName || room.fullName || "",
+    pushName: bridgeContact.pushName || room.pushName || "",
+    businessName: bridgeContact.businessName || room.businessName || "",
+  };
+}
+
+function buildWhatsAppPortalRoom(portal = {}, bridgeContact = null) {
+  const roomId = String(portal?.roomId || "").trim();
+  if (!roomId) return null;
+
+  const roomType = String(portal?.roomType || "")
+    .trim()
+    .toLowerCase();
+  const isDirect = roomType
+    ? roomType === "dm"
+    : !Boolean(bridgeContact?.isGroup);
+  const baseRoom = {
+    roomId,
+    id: roomId,
+    title:
+      sanitizeWhatsAppDisplayLabel(
+        portal?.title || bridgeContact?.title || bridgeContact?.name || ""
+      ) || roomId,
+    name:
+      sanitizeWhatsAppDisplayLabel(
+        portal?.title || bridgeContact?.title || bridgeContact?.name || ""
+      ) || roomId,
+    avatarMxc:
+      String(portal?.avatarMxc || bridgeContact?.avatarMxc || "").trim() ||
+      null,
+    avatarUrl: buildWhatsAppMediaUrl(
+      portal?.avatarMxc || bridgeContact?.avatarMxc || ""
+    ),
+    isDirect,
+    isGroup: roomType ? roomType !== "dm" : Boolean(bridgeContact?.isGroup),
+    memberCount: isDirect ? 2 : Number(bridgeContact?.memberCount || 0) || 0,
+    unreadCount: 0,
+    highlightCount: 0,
+    lastMessage: "",
+    lastSender: "",
+    lastMessageFromMe: false,
+    lastMessageAt: null,
+    lastMessageTs: 0,
+    prevBatch: null,
+    source: "whatsapp",
+    isPinned: false,
+    isMuted: false,
+    lastMessagePreview: "",
+    lastEventId: null,
+    latestMessageId: null,
+    typingUsers: [],
+    bridgeStatus: "portal",
+  };
+
+  return mergeRoomWithBridgeContactMetadata(
+    mergeRoomWithBridgePortalMetadata(baseRoom, portal),
+    bridgeContact
+  );
+}
+
+function mergeResolvedWhatsAppRoomMetadata(
+  room = {},
+  resolvedRoom = {},
+  bridgeContact = null
+) {
+  const syntheticPortal =
+    resolvedRoom?.bridgeStatus === "portal"
+      ? {
+          roomId: resolvedRoom.roomId || resolvedRoom.id || room.roomId || "",
+          title: resolvedRoom.title || resolvedRoom.name || room.title || "",
+          portalId:
+            resolvedRoom.contactJid ||
+            resolvedRoom.canonicalContactJid ||
+            room.contactJid ||
+            "",
+          avatarMxc:
+            resolvedRoom.avatarMxc ||
+            bridgeContact?.avatarMxc ||
+            room.avatarMxc,
+          roomType:
+            resolvedRoom.isGroup === true
+              ? "group"
+              : resolvedRoom.isGroup === false
+              ? "dm"
+              : room.isGroup
+              ? "group"
+              : "dm",
+        }
+      : null;
+
+  return mergeRoomWithBridgeContactMetadata(
+    mergeRoomWithBridgePortalMetadata(
+      {
+        ...room,
+        phoneNumber: room.phoneNumber || resolvedRoom.phoneNumber || "",
+        contactJid:
+          room.contactJid ||
+          resolvedRoom.contactJid ||
+          resolvedRoom.canonicalContactJid ||
+          "",
+        canonicalContactJid:
+          room.canonicalContactJid ||
+          resolvedRoom.canonicalContactJid ||
+          resolvedRoom.contactJid ||
+          "",
+        contactMxid: room.contactMxid || resolvedRoom.contactMxid || "",
+      },
+      syntheticPortal
+    ),
+    bridgeContact || resolvedRoom
+  );
+}
+
+function deriveWhatsAppConnectionState({
+  fallbackConfig = {},
+  bridgeState = {},
+  bridgeSnapshot = null,
+}) {
+  let loginState = normalizeLoginState(
+    bridgeState.loginState,
+    fallbackConfig.loginState
+  );
+  const latestConnectedTs = Math.max(
+    normalizeTimestampMs(bridgeState.latestConnected?.timestamp || 0),
+    normalizeTimestampMs(bridgeSnapshot?.loggedInAtTs || 0)
+  );
+  const latestQrTs = Math.max(
+    normalizeTimestampMs(bridgeState.latestQr?.timestamp || 0),
+    normalizeTimestampMs(bridgeState.latestQrImage?.timestamp || 0),
+    normalizeTimestampMs(bridgeState.latestQrText?.timestamp || 0)
+  );
+  const latestErrorTs = normalizeTimestampMs(
+    bridgeState.latestError?.timestamp || 0
+  );
+  const lastErrorText = String(bridgeState.lastErrorText || "").trim();
+  const bridgeSnapshotConnected = Boolean(
+    bridgeSnapshot?.connected ||
+      bridgeSnapshot?.loggedInAtTs ||
+      bridgeSnapshot?.phone ||
+      bridgeSnapshot?.profileName
+  );
+  const hasRetryableLoginTimeout =
+    /\b(timed out|timeout)\b/i.test(lastErrorText) &&
+    /\b(login failed|entering code|scan|qr)\b/i.test(lastErrorText);
+  const hasFreshError =
+    latestErrorTs > 0 &&
+    latestErrorTs >= latestConnectedTs &&
+    latestErrorTs >= latestQrTs;
+  const hasFreshQr =
+    latestQrTs > 0 &&
+    latestQrTs > latestConnectedTs &&
+    latestQrTs >= latestErrorTs;
+  const hasFreshConnection =
+    latestConnectedTs > 0 &&
+    latestConnectedTs >= latestQrTs &&
+    latestConnectedTs >= latestErrorTs;
+
+  let connectedAt =
+    fallbackConfig.connectedAt ||
+    bridgeState.latestConnectedAt ||
+    bridgeSnapshot?.loggedInAt ||
+    null;
+  let lastError =
+    loginState === "error"
+      ? lastErrorText || fallbackConfig.lastError || ""
+      : "";
+  let connected = false;
+
+  if (hasFreshError && !(bridgeSnapshotConnected && hasRetryableLoginTimeout)) {
+    loginState = "error";
+    lastError = lastErrorText || fallbackConfig.lastError || "";
+    connected = false;
+  } else if (
+    hasFreshConnection ||
+    (bridgeSnapshotConnected && !hasFreshQr) ||
+    (fallbackConfig.connectedAt && !hasFreshQr && loginState !== "error")
+  ) {
+    connected = true;
+    loginState = "connected";
+    connectedAt = connectedAt || new Date(latestConnectedTs || nowTs());
+    lastError = "";
+  } else if (hasFreshQr && loginState !== "logging_in") {
+    loginState = "pending_qr";
+    lastError = "";
+  }
+
+  return {
+    connected,
+    loginState,
+    lastError,
+    connectedAt,
+    latestConnectedTs,
+    latestQrTs,
+    latestErrorTs,
+  };
+}
+
 function stripReplyFallback(body = "", hasReplyRelation = false) {
   const text = String(body || "");
   if (!hasReplyRelation) return text.trim();
@@ -162,6 +990,15 @@ function summarizeEventContent(content = {}) {
   return String(content.body || "").trim();
 }
 
+function isInternalWhatsAppBridgeCommandMessage(message = {}) {
+  if (!message?.fromMe) return false;
+  const text = String(message.text || message.previewText || "")
+    .trim()
+    .toLowerCase();
+  if (!text) return false;
+  return /^login qr$/i.test(text) || /^start-chat\s+\S+$/i.test(text);
+}
+
 function buildMediaDescriptor(content = {}) {
   const msgtype = String(content.msgtype || "");
   const url = content.url || null;
@@ -171,7 +1008,15 @@ function buildMediaDescriptor(content = {}) {
   if (msgtype === "m.image" || content.info?.thumbnail_url) type = "image";
   else if (msgtype === "m.video") type = "video";
   else if (msgtype === "m.audio") type = "audio";
-  else if (msgtype === "m.location") type = "location";
+  else if (
+    msgtype === "m.file" &&
+    String(content.info?.mimetype || "")
+      .trim()
+      .toLowerCase()
+      .startsWith("audio/")
+  ) {
+    type = "audio";
+  } else if (msgtype === "m.location") type = "location";
 
   return {
     type,
@@ -524,6 +1369,136 @@ function parseRoomEvents({
   return messages;
 }
 
+function extractMatrixReadReceipts(roomData = {}) {
+  const latestReceipts = new Map();
+
+  for (const event of roomData.ephemeral?.events || []) {
+    if (event?.type !== "m.receipt" || !event?.content) continue;
+
+    for (const [eventId, receiptTypes] of Object.entries(event.content || {})) {
+      const readReceipts = receiptTypes?.["m.read"] || {};
+      for (const [userId, data] of Object.entries(readReceipts)) {
+        const timestamp = normalizeTimestampMs(data?.ts || 0);
+        const existing = latestReceipts.get(String(userId)) || null;
+        if (!existing || timestamp >= existing.timestamp) {
+          latestReceipts.set(String(userId), {
+            eventId: String(eventId || "").trim(),
+            timestamp,
+          });
+        }
+      }
+    }
+  }
+
+  return latestReceipts;
+}
+
+function applyDeliveryStateToMessages(
+  messages = [],
+  roomData = {},
+  currentUserId = "",
+  bridgeBotMxid = ""
+) {
+  if (!Array.isArray(messages) || !messages.length) return [];
+
+  const latestReceipts = extractMatrixReadReceipts(roomData);
+  if (!latestReceipts.size) {
+    return messages.map((message) =>
+      message?.fromMe
+        ? {
+            ...message,
+            deliveryState: "sent",
+            deliveryLabel: "Sent",
+            readByCount: 0,
+          }
+        : message
+    );
+  }
+
+  const indexByEventId = new Map(
+    messages
+      .filter((message) => message?.id)
+      .map((message, index) => [String(message.id), index])
+  );
+  const receiptIndexes = [...latestReceipts.entries()]
+    .filter(
+      ([userId]) =>
+        userId &&
+        userId !== String(currentUserId || "") &&
+        userId !== String(bridgeBotMxid || "")
+    )
+    .map(([userId, receipt]) => ({
+      userId,
+      index: indexByEventId.get(String(receipt?.eventId || "")),
+    }))
+    .filter((receipt) => Number.isInteger(receipt.index));
+
+  if (!receiptIndexes.length) {
+    return messages.map((message) =>
+      message?.fromMe
+        ? {
+            ...message,
+            deliveryState: "sent",
+            deliveryLabel: "Sent",
+            readByCount: 0,
+          }
+        : message
+    );
+  }
+
+  return messages.map((message, index) => {
+    if (!message?.fromMe) return message;
+    const readByCount = receiptIndexes.filter(
+      (receipt) => receipt.index >= index
+    ).length;
+    return {
+      ...message,
+      deliveryState: readByCount > 0 ? "read" : "sent",
+      deliveryLabel:
+        readByCount > 1
+          ? `Read by ${readByCount}`
+          : readByCount
+          ? "Read"
+          : "Sent",
+      readByCount,
+    };
+  });
+}
+
+function extractTypingUsers(
+  roomData = {},
+  memberMap = new Map(),
+  currentUserId = "",
+  bridgeBotMxid = ""
+) {
+  const typingUsers = new Set();
+
+  for (const event of roomData.ephemeral?.events || []) {
+    if (event?.type !== "m.typing") continue;
+    for (const userId of event?.content?.user_ids || []) {
+      const normalizedUserId = String(userId || "").trim();
+      if (
+        !normalizedUserId ||
+        normalizedUserId === String(currentUserId || "") ||
+        normalizedUserId === String(bridgeBotMxid || "")
+      ) {
+        continue;
+      }
+      typingUsers.add(normalizedUserId);
+    }
+  }
+
+  return [...typingUsers].map((userId) => {
+    const senderMeta = memberMap.get(userId) || null;
+    return {
+      mxid: userId,
+      displayName:
+        String(senderMeta?.displayName || "").trim() ||
+        localpartFromMxid(userId),
+    };
+  });
+}
+
 function buildRoomDescriptor({
   roomId,
   roomData = {},
@@ -550,6 +1525,7 @@ function buildRoomDescriptor({
   const containsSignalGhost = memberIds.some((mxid) => isSignalGhostMxid(mxid));
   const containsWhatsAppBot = memberIds.includes(bridgeBotMxid);
   const containsSignalBot = memberIds.some((mxid) => isSignalBotMxid(mxid));
+  const memberCount = getRoomMemberCount(roomData, memberMap);
 
   const isForeignBridgeRoom =
     containsSignalGhost ||
@@ -557,8 +1533,11 @@ function buildRoomDescriptor({
     roomNameLower.includes("signal bridge bot");
 
   const isManagement =
-    (managementRoomId && roomId === managementRoomId) ||
-    (containsWhatsAppBot && !containsWhatsAppGhost && !containsSignalGhost);
+    !isForeignBridgeRoom &&
+    containsWhatsAppBot &&
+    !containsWhatsAppGhost &&
+    !containsSignalGhost &&
+    (roomNameLower.includes("whatsapp bridge") || memberCount <= 2);
 
   const isWhatsAppPortalRoom = containsWhatsAppGhost;
 
@@ -572,19 +1551,28 @@ function buildRoomDescriptor({
     bridgeBotMxid
   );
 
-  const memberCount = getRoomMemberCount(roomData, memberMap);
-
   const isDirect =
     directMap.get(String(roomId)) === true ||
     (!isManagement && memberCount <= 2 && containsWhatsAppGhost);
 
-  const messages = parseRoomEvents({
-    roomId,
+  const messages = applyDeliveryStateToMessages(
+    parseRoomEvents({
+      roomId,
+      roomData,
+      currentUserId,
+      fallbackRoomName: roomName,
+      bridgeBotMxid,
+    }),
     roomData,
     currentUserId,
-    fallbackRoomName: roomName,
-    bridgeBotMxid,
-  });
+    bridgeBotMxid
+  ).filter((message) => !isInternalWhatsAppBridgeCommandMessage(message));
+  const typingUsers = extractTypingUsers(
+    roomData,
+    memberMap,
+    currentUserId,
+    bridgeBotMxid
+  );
 
   const lastMessage = [...messages]
     .reverse()
@@ -607,7 +1595,6 @@ function buildRoomDescriptor({
         Number(roomData.unread_notifications?.notification_count || 0) || 0,
       highlightCount:
         Number(roomData.unread_notifications?.highlight_count || 0) || 0,
-      lastEventId: lastMessage?.eventId || null,
       lastMessage: lastMessage?.previewText || "",
       lastSender: lastMessage?.senderName || "",
       lastMessageFromMe: Boolean(lastMessage?.fromMe),
@@ -618,6 +1605,9 @@ function buildRoomDescriptor({
       isPinned: false,
       isMuted: false,
       lastMessagePreview: lastMessage?.previewText || "",
+      lastEventId: lastMessage?.eventId || null,
+      latestMessageId: lastMessage?.eventId || null,
+      typingUsers,
     },
     messages,
     memberMap,
@@ -1071,7 +2061,36 @@ async function ensureManagementRoom(userId) {
     force: true,
   });
   if (snapshot.config.managementRoomId) {
-    return String(snapshot.config.managementRoomId);
+    const storedRoomId = String(snapshot.config.managementRoomId).trim();
+    const storedDescriptor = await fetchRoomDescriptorById(
+      userId,
+      storedRoomId,
+      {
+        timelineLimit: 20,
+        snapshot,
+      }
+    ).catch(() => null);
+
+    if (storedDescriptor?.isManagement) {
+      return storedRoomId;
+    }
+
+    await saveWhatsAppIntegration(
+      userId,
+      {
+        managementRoomId: "",
+        loginState: snapshot.config.loginState,
+        lastError: snapshot.config.lastError,
+        connectedAt: snapshot.config.connectedAt || null,
+      },
+      {
+        connected: snapshot.config.connected,
+        phone: snapshot.config.phone,
+        profileName: snapshot.config.profileName,
+        avatarUrl: snapshot.config.avatarUrl,
+      }
+    ).catch(() => null);
+    invalidateWhatsAppCache(userId);
   }
 
   const existing = await findManagementRoom(userId, snapshot);
@@ -1182,6 +2201,7 @@ async function fetchRoomDescriptorById(
       },
       summary: syncRoomData?.summary || {},
       unread_notifications: syncRoomData?.unread_notifications || {},
+      ephemeral: syncRoomData?.ephemeral || { events: [] },
     };
 
     return buildRoomDescriptor({
@@ -1252,6 +2272,29 @@ async function getManagementRoomDescriptor(
         snapshot,
       })
     : null;
+
+  if (descriptor && !descriptor.isManagement) {
+    descriptor = null;
+    roomId = "";
+    if (snapshot.config.managementRoomId) {
+      await saveWhatsAppIntegration(
+        userId,
+        {
+          managementRoomId: "",
+          loginState: snapshot.config.loginState,
+          lastError: snapshot.config.lastError,
+          connectedAt: snapshot.config.connectedAt || null,
+        },
+        {
+          connected: snapshot.config.connected,
+          phone: snapshot.config.phone,
+          profileName: snapshot.config.profileName,
+          avatarUrl: snapshot.config.avatarUrl,
+        }
+      ).catch(() => null);
+      invalidateWhatsAppCache(userId);
+    }
+  }
 
   if (!descriptor) {
     const existing = await findManagementRoom(userId, snapshot).catch(
@@ -1397,28 +2440,51 @@ async function buildQrDataUrl(payload = "") {
 }
 
 async function resolveQrImageUrl(userId, bridgeState = {}) {
-  const directUrl = String(bridgeState?.qrImageUrl || "").trim()
-  if (directUrl) return directUrl
+  const directUrl = String(bridgeState?.qrImageUrl || "").trim();
+  if (directUrl.startsWith("data:")) return directUrl;
 
-  const mxc = String(bridgeState?.qrImageMxc || "").trim()
+  const mxc = String(bridgeState?.qrImageMxc || "").trim();
   if (mxc) {
-    return buildWhatsAppMediaUrl(mxc)
-  }
-
-  const qrPayload = String(bridgeState?.qrPayload || "").trim()
-  if (qrPayload && !/^scan/i.test(qrPayload)) {
-    const payloadCacheKey = `payload:${qrPayload}`
-    const cachedPayload = getCachedQrImage(payloadCacheKey)
-    if (cachedPayload) return cachedPayload
+    const cached = getCachedQrImage(mxc);
+    if (cached) return cached;
 
     try {
-      return cacheQrImage(payloadCacheKey, await buildQrDataUrl(qrPayload))
+      const media = await fetchWhatsAppMedia(userId, mxc);
+      const contentType = String(media?.contentType || "")
+        .trim()
+        .toLowerCase();
+      if (contentType.startsWith("image/")) {
+        const body = Buffer.isBuffer(media?.body)
+          ? media.body
+          : Buffer.from(media?.body || "");
+        if (body.length) {
+          return cacheQrImage(
+            mxc,
+            `data:${media?.contentType || "image/png"};base64,${body.toString(
+              "base64"
+            )}`
+          );
+        }
+      }
+    } catch {}
+
+    return buildWhatsAppMediaUrl(mxc);
+  }
+
+  const qrPayload = String(bridgeState?.qrPayload || "").trim();
+  if (qrPayload && !/^scan/i.test(qrPayload)) {
+    const payloadCacheKey = `payload:${qrPayload}`;
+    const cachedPayload = getCachedQrImage(payloadCacheKey);
+    if (cachedPayload) return cachedPayload;
+
+    try {
+      return cacheQrImage(payloadCacheKey, await buildQrDataUrl(qrPayload));
     } catch {
-      return null
+      return directUrl || null;
     }
   }
 
-  return null
+  return directUrl || null;
 }
 
 async function resolveBridgeState(
@@ -1519,6 +2585,65 @@ async function waitForLoginState(
   return latestStatus;
 }
 
+async function ensureBridgePortalRoomsJoined(
+  userId,
+  {
+    config = {},
+    joinedRoomIds = new Set(),
+    bridgeSnapshot = null,
+    maxRooms = WHATSAPP_BRIDGE_JOIN_BATCH_SIZE,
+  } = {}
+) {
+  const snapshot =
+    bridgeSnapshot || readWhatsAppBridgeSnapshot(config?.mxid || "");
+  if (!snapshot) {
+    return {
+      bridgeSnapshot: null,
+      joinedRoomIds: [],
+      failedRoomIds: [],
+    };
+  }
+
+  const joinedSet = new Set(
+    [...(joinedRoomIds instanceof Set ? joinedRoomIds : joinedRoomIds || [])]
+      .map((roomId) => String(roomId || "").trim())
+      .filter(Boolean)
+  );
+  const targets = [];
+
+  if (snapshot.spaceRoomId) targets.push(String(snapshot.spaceRoomId));
+  for (const portalRoom of snapshot.portalRooms || []) {
+    if (portalRoom?.roomId) targets.push(String(portalRoom.roomId));
+  }
+
+  const pendingRoomIds = [...new Set(targets)]
+    .filter((roomId) => roomId && !joinedSet.has(roomId))
+    .slice(0, Math.max(1, Number(maxRooms || WHATSAPP_BRIDGE_JOIN_BATCH_SIZE)));
+
+  const successful = [];
+  const failed = [];
+
+  for (const roomId of pendingRoomIds) {
+    try {
+      await ensureJoinedRoom(userId, roomId);
+      successful.push(roomId);
+      joinedSet.add(roomId);
+    } catch {
+      failed.push(roomId);
+    }
+  }
+
+  if (successful.length) {
+    invalidateWhatsAppCache(userId);
+  }
+
+  return {
+    bridgeSnapshot: snapshot,
+    joinedRoomIds: successful,
+    failedRoomIds: failed,
+  };
+}
+
 async function connectWhatsAppIntegration(userId, payload = {}) {
   const forceReconnect = Boolean(
     payload?.reconnect || payload?.force || payload?.relogin
@@ -1617,14 +2742,14 @@ async function connectWhatsAppIntegration(userId, payload = {}) {
     if (shouldSendLogin) {
       await sendBridgeTextCommand(userId, "login qr");
     }
-    
 
+    const status = await waitForLoginState(userId);
     const latestIntegration = await ensureWhatsAppIntegration(userId);
 
     return {
       integration: buildWhatsAppClientIntegration(latestIntegration),
       clientIntegration: buildWhatsAppClientIntegration(latestIntegration),
-      status: {
+      status: status || {
         connected: false,
         loginState: hasActiveQr ? "pending_qr" : "logging_in",
         lastError: "",
@@ -1679,30 +2804,66 @@ function disconnectedStatus(overrides = {}) {
 
 async function listMatrixWhatsAppRooms(
   userId,
-  { search = "", limit = 80, force = false } = {}
+  { search = "", limit = 80, force = false, bridgeSnapshot = null } = {}
 ) {
-  const snapshot = await fetchSyncSnapshot(userId, {
+  let snapshot = await fetchSyncSnapshot(userId, {
     timelineLimit: 20,
     force,
   });
+  let bridgeSnapshotData =
+    bridgeSnapshot || readWhatsAppBridgeSnapshot(snapshot.config.mxid);
+  const hydration = await ensureBridgePortalRoomsJoined(userId, {
+    config: snapshot.config,
+    joinedRoomIds: new Set(Object.keys(snapshot.data?.rooms?.join || {})),
+    bridgeSnapshot: bridgeSnapshotData,
+  });
+
+  bridgeSnapshotData = hydration.bridgeSnapshot || bridgeSnapshotData;
+  if (hydration.joinedRoomIds.length) {
+    snapshot = await fetchSyncSnapshot(userId, {
+      timelineLimit: 20,
+      force: true,
+    });
+  }
+
   const directMap = parseDirectMap(snapshot.data);
   const rooms = snapshot.data.rooms?.join || {};
+  const bridgePortalMap = buildWhatsAppBridgePortalMap(bridgeSnapshotData);
 
   const descriptors = Object.entries(rooms)
-    .map(([roomId, roomData]) =>
-      buildRoomDescriptor({
+    .map(([roomId, roomData]) => {
+      const descriptor = buildRoomDescriptor({
         roomId,
         roomData,
         currentUserId: snapshot.config.mxid,
         bridgeBotMxid: snapshot.config.bridgeBotMxid,
         managementRoomId: snapshot.config.managementRoomId,
         directMap,
-      })
-    )
+      });
+      const bridgePortal =
+        bridgePortalMap.get(String(roomId || "").trim()) || null;
+
+      if (!descriptor.isWhatsAppRoom && bridgePortal?.roomId) {
+        descriptor.isWhatsAppRoom = true;
+      }
+
+      return {
+        descriptor,
+        bridgePortal,
+      };
+    })
     .filter(
-      (descriptor) => descriptor.isWhatsAppRoom && !descriptor.isManagement
+      ({ descriptor, bridgePortal }) =>
+        (descriptor.isWhatsAppRoom || bridgePortal?.roomId) &&
+        !descriptor.isManagement
     )
-    .map((descriptor) => descriptor.room)
+    .map(({ descriptor, bridgePortal }) =>
+      mergeRoomWithBridgePortalMetadata(
+        descriptor.room,
+        bridgePortal ||
+          bridgePortalMap.get(String(descriptor.room?.roomId || ""))
+      )
+    )
     .sort((a, b) => {
       const unreadDelta =
         Number(b.unreadCount || 0) - Number(a.unreadCount || 0);
@@ -1725,32 +2886,51 @@ async function listMatrixWhatsAppRooms(
   return filtered.slice(0, Math.max(1, Math.min(200, Number(limit || 80))));
 }
 
-function buildStatusProfile({ matrixProfile = {}, whoami = {}, config = {} }) {
+function buildStatusProfile({
+  matrixProfile = {},
+  whoami = {},
+  config = {},
+  bridgeSnapshot = null,
+}) {
+  const bridgeDisplayName =
+    String(bridgeSnapshot?.profileName || "").trim() ||
+    String(bridgeSnapshot?.phone || "").trim();
+  const avatarMxc = String(matrixProfile.avatar_url || "").trim();
+
   return {
     displayName:
-      matrixProfile.displayname ||
+      sanitizeWhatsAppDisplayLabel(bridgeDisplayName) ||
+      sanitizeWhatsAppDisplayLabel(matrixProfile.displayname || "") ||
       localpartFromMxid(whoami.user_id || config.mxid),
-    avatarUrl: buildWhatsAppMediaUrl(matrixProfile.avatar_url || ""),
+    avatarUrl: buildWhatsAppMediaUrl(avatarMxc || ""),
+    avatarMxc: avatarMxc || null,
+    phone:
+      String(bridgeSnapshot?.phone || "").trim() ||
+      String(config.phone || "").trim(),
+    profileName: String(
+      bridgeSnapshot?.profileName || config.profileName || ""
+    ).trim(),
   };
 }
 
 async function getWhatsAppStatus(userId, { forceRefresh = false } = {}) {
-  const integration = await getWhatsAppIntegration(userId)
+  const integration = await getWhatsAppIntegration(userId);
   if (!integration) {
-    return disconnectedStatus()
+    return disconnectedStatus();
   }
 
-  const fallbackConfig = buildConfigFromIntegration(integration)
+  const fallbackConfig = buildConfigFromIntegration(integration);
 
   try {
     const { config } = await ensureWhatsAppAccess(userId, {
       forceLogin: false,
-    })
+    });
+    const bridgeSnapshot = readWhatsAppBridgeSnapshot(config.mxid);
 
-    let managementRoomId = config.managementRoomId || ""
+    let managementRoomId = config.managementRoomId || "";
 
     if (!managementRoomId) {
-      managementRoomId = await ensureManagementRoom(userId).catch(() => "")
+      managementRoomId = await ensureManagementRoom(userId).catch(() => "");
     }
 
     const bridgeState = await resolveBridgeState(userId, {
@@ -1758,73 +2938,53 @@ async function getWhatsAppStatus(userId, { forceRefresh = false } = {}) {
       bridgeBotMxid: config.bridgeBotMxid,
       force: forceRefresh,
       timelineLimit: 12,
-    })
+    });
+    const connectionState = deriveWhatsAppConnectionState({
+      fallbackConfig,
+      bridgeState,
+      bridgeSnapshot,
+    });
 
-    let loginState = normalizeLoginState(
-      bridgeState.loginState,
-      fallbackConfig.loginState
-    )
+    let { loginState, lastError, connectedAt, connected } = connectionState;
 
-    let lastError =
-      loginState === "error"
-        ? bridgeState.lastErrorText || fallbackConfig.lastError || ""
-        : ""
-
-    let connectedAt = fallbackConfig.connectedAt || null
-    let connected = false
-
-    if (
-      loginState === "connected" ||
-      (fallbackConfig.connectedAt &&
-        !["pending_qr", "error"].includes(String(loginState || "")))
-    ) {
-      connected = true
-      loginState = "connected"
-      connectedAt = connectedAt || bridgeState.latestConnectedAt || new Date()
-    }
-
-    const patch = {}
+    const patch = {};
     if (
       managementRoomId &&
       managementRoomId !== fallbackConfig.managementRoomId
     ) {
-      patch.managementRoomId = managementRoomId
+      patch.managementRoomId = managementRoomId;
     }
     if (loginState !== fallbackConfig.loginState) {
-      patch.loginState = loginState
+      patch.loginState = loginState;
     }
     if (lastError !== fallbackConfig.lastError) {
-      patch.lastError = lastError
+      patch.lastError = lastError;
     }
 
     const nextConnectedAtIso = connectedAt
       ? new Date(connectedAt).toISOString()
-      : null
+      : null;
     const currentConnectedAtIso = fallbackConfig.connectedAt
       ? new Date(fallbackConfig.connectedAt).toISOString()
-      : null
+      : null;
 
     if (nextConnectedAtIso !== currentConnectedAtIso) {
-      patch.connectedAt = connectedAt
+      patch.connectedAt = connectedAt;
     }
 
     if (Object.keys(patch).length || connected !== fallbackConfig.connected) {
-      await saveWhatsAppIntegration(
-        userId,
-        patch,
-        {
-          connected,
-          phone: fallbackConfig.phone,
-          profileName: fallbackConfig.profileName,
-          avatarUrl: fallbackConfig.avatarUrl,
-        }
-      )
+      await saveWhatsAppIntegration(userId, patch, {
+        connected,
+        phone: fallbackConfig.phone,
+        profileName: fallbackConfig.profileName,
+        avatarUrl: fallbackConfig.avatarUrl,
+      });
     }
 
     const qrImageUrl =
       loginState === "pending_qr"
         ? await resolveQrImageUrl(userId, bridgeState)
-        : null
+        : null;
 
     // IMPORTANT: keep pending_qr / logging_in fast
     if (!connected) {
@@ -1838,16 +2998,36 @@ async function getWhatsAppStatus(userId, { forceRefresh = false } = {}) {
         unreadCount: 0,
         profile: null,
         connectedAt: null,
-      }
+      };
     }
 
+    const connectedSnapshot = await fetchSyncSnapshot(userId, {
+      timelineLimit: 20,
+      force: forceRefresh,
+    }).catch(() => null);
+    const joinedRoomIds = new Set(
+      Object.keys(connectedSnapshot?.data?.rooms?.join || {})
+    );
+    const hydration = await ensureBridgePortalRoomsJoined(userId, {
+      config,
+      joinedRoomIds,
+      bridgeSnapshot,
+      maxRooms: forceRefresh
+        ? WHATSAPP_BRIDGE_JOIN_BATCH_SIZE * 2
+        : WHATSAPP_BRIDGE_JOIN_BATCH_SIZE,
+    });
+
     // Only do the heavier work once actually connected
-    const whoami = await getWhoAmI(userId)
+    const whoami = await getWhoAmI(userId);
     const profile = await getProfile(
       userId,
       whoami.user_id || config.mxid
-    ).catch(() => ({}))
-    const rooms = await listWhatsAppChats(userId, { limit: 120 }).catch(() => [])
+    ).catch(() => ({}));
+    const rooms = await listWhatsAppChats(userId, {
+      limit: 120,
+      force: forceRefresh || Boolean(hydration.joinedRoomIds.length),
+      bridgeSnapshot: hydration.bridgeSnapshot || bridgeSnapshot,
+    }).catch(() => []);
 
     return {
       connected: true,
@@ -1864,16 +3044,17 @@ async function getWhatsAppStatus(userId, { forceRefresh = false } = {}) {
         matrixProfile: profile,
         whoami,
         config,
+        bridgeSnapshot: hydration.bridgeSnapshot || bridgeSnapshot,
       }),
       connectedAt: connectedAt ? new Date(connectedAt).toISOString() : null,
-    }
+    };
   } catch (error) {
     const errorText = String(
       error?.message ||
         error?.response?.data?.error ||
         fallbackConfig.lastError ||
         "WhatsApp is unavailable right now."
-    ).trim()
+    ).trim();
 
     await saveWhatsAppIntegration(
       userId,
@@ -1887,7 +3068,7 @@ async function getWhatsAppStatus(userId, { forceRefresh = false } = {}) {
         profileName: fallbackConfig.profileName,
         avatarUrl: fallbackConfig.avatarUrl,
       }
-    ).catch(() => null)
+    ).catch(() => null);
 
     return disconnectedStatus({
       loginState:
@@ -1898,7 +3079,7 @@ async function getWhatsAppStatus(userId, { forceRefresh = false } = {}) {
       connectedAt: fallbackConfig.connectedAt
         ? new Date(fallbackConfig.connectedAt).toISOString()
         : null,
-    })
+    });
   }
 }
 
@@ -1910,6 +3091,10 @@ function buildChatCandidates(chats = []) {
       chat.name,
       chat.roomId,
       chat.phoneNumber,
+      chat.contactJid,
+      chat.fullName,
+      chat.pushName,
+      chat.businessName,
       chat.lastSender,
       chat.lastMessagePreview,
     ],
@@ -1919,6 +3104,10 @@ function buildChatCandidates(chats = []) {
 function resolveChatFromList(chats = [], target = "") {
   const normalizedTarget = String(target || "").trim();
   if (!normalizedTarget) return null;
+  const rankChat = (chat) =>
+    (chat?.bridgeStatus === "portal" ? 100 : 0) +
+    (Number(chat?.lastMessageTs || 0) > 0 ? 10 : 0) +
+    (Number(chat?.unreadCount || 0) || 0);
 
   const exact = chats.find(
     (chat) =>
@@ -1929,10 +3118,14 @@ function resolveChatFromList(chats = [], target = "") {
 
   const digits = normalizeDigits(normalizedTarget);
   if (digits.length >= 6) {
-    const digitMatch = chats.find((chat) => {
-      const chatDigits = normalizeDigits(chat.phoneNumber || chat.title || "");
-      return chatDigits === digits || chatDigits.endsWith(digits);
-    });
+    const digitMatch = [...chats]
+      .filter((chat) => {
+        const chatDigits = normalizeDigits(
+          chat.phoneNumber || chat.title || ""
+        );
+        return chatDigits === digits || chatDigits.endsWith(digits);
+      })
+      .sort((left, right) => rankChat(right) - rankChat(left))[0];
     if (digitMatch) return digitMatch;
   }
 
@@ -1942,41 +3135,448 @@ function resolveChatFromList(chats = [], target = "") {
   );
 }
 
-async function listWhatsAppChats(userId, { search = "", limit = 80 } = {}) {
-  const rooms = await listMatrixWhatsAppRooms(userId, {
-    search,
-    limit,
-    force: false,
-  });
-
-  return rooms.map((room) => ({
+function buildWhatsAppPlaceholderTimeline(room = {}) {
+  const placeholderRoom = {
     roomId: room.roomId,
-    id: room.roomId,
-    title: room.title,
-    name: room.name,
-    avatarUrl: room.avatarUrl,
-    lastMessagePreview: room.lastMessage || "",
-    lastMessageAt: room.lastMessageAt,
-    unreadCount: Number(room.unreadCount || 0),
+    id: room.id || room.roomId,
+    title: room.title || room.name || room.phoneNumber || "WhatsApp contact",
+    name: room.name || room.title || room.phoneNumber || "WhatsApp contact",
+    avatarUrl: room.avatarUrl || "",
+    avatarMxc: room.avatarMxc || null,
+    isDirect: true,
+    isGroup: false,
+    memberCount: Number(room.memberCount || 2) || 2,
+    unreadCount: 0,
+    highlightCount: 0,
+    lastMessage: room.lastMessage || "",
+    lastSender: room.lastSender || "",
+    lastMessageFromMe: false,
+    lastMessageAt: room.lastMessageAt || null,
+    lastMessageTs: Number(room.lastMessageTs || 0) || 0,
+    lastEventId: room.lastEventId || null,
+    latestMessageId: room.lastEventId || room.latestMessageId || null,
+    prevBatch: null,
     source: "whatsapp",
-    isGroup: Boolean(room.isGroup),
     isPinned: Boolean(room.isPinned),
     isMuted: Boolean(room.isMuted),
-    lastSender: room.lastSender || "",
-    memberCount: Number(room.memberCount || 0),
-  }));
+    lastMessagePreview: room.lastMessagePreview || "",
+    phoneNumber: room.phoneNumber || "",
+    contactJid: room.contactJid || "",
+    contactMxid: room.contactMxid || "",
+    bridgeStatus: room.bridgeStatus || "contact",
+    fullName: room.fullName || "",
+    pushName: room.pushName || "",
+    businessName: room.businessName || "",
+    typingUsers: Array.isArray(room.typingUsers) ? room.typingUsers : [],
+  };
+
+  return {
+    room: placeholderRoom,
+    messages: [],
+    prevBatch: null,
+  };
 }
 
-async function resolveRoomReference(userId, roomRef = "") {
+function findWhatsAppRoomByContact(matrixRooms = [], contact = {}) {
+  const targetKey = buildWhatsAppContactKey(contact);
+  const targetPhone = normalizeDigits(contact.phoneNumber || "");
+  const targetJid = normalizeWhatsAppContactIdentifier(
+    contact.canonicalContactJid || contact.contactJid || ""
+  );
+  const targetName = normalizeSearchValue(
+    [
+      contact.title,
+      contact.name,
+      contact.fullName,
+      contact.pushName,
+      contact.businessName,
+    ]
+      .filter(Boolean)
+      .join(" ")
+  );
+
+  return (
+    matrixRooms.find((room) => {
+      const roomKey = buildWhatsAppContactKey(room);
+      if (targetKey && roomKey && roomKey === targetKey) return true;
+
+      const roomPhone = normalizeDigits(room.phoneNumber || "");
+      if (targetPhone && roomPhone && roomPhone === targetPhone) return true;
+
+      const roomJid = normalizeWhatsAppContactIdentifier(
+        room.canonicalContactJid || room.contactJid || ""
+      );
+      if (targetJid && roomJid && roomJid === targetJid) return true;
+
+      const roomName = normalizeSearchValue(
+        [room.title, room.name, room.fullName, room.pushName, room.businessName]
+          .filter(Boolean)
+          .join(" ")
+      );
+      return Boolean(targetName && roomName && roomName === targetName);
+    }) || null
+  );
+}
+
+function getPreferredWhatsAppContactIdentifier(contact = {}) {
+  const digits = normalizeDigits(contact.phoneNumber || "");
+  return (
+    String(contact.canonicalContactJid || "").trim() ||
+    String(contact.contactJid || "").trim() ||
+    String(contact.rawContactJid || "").trim() ||
+    (digits ? `${digits}@s.whatsapp.net` : "") ||
+    digits ||
+    String(contact.phoneNumber || "").trim()
+  );
+}
+
+function buildWhatsAppPortalRequestCandidates(contact = {}) {
+  const digits = normalizeDigits(
+    contact.phoneNumber ||
+      extractWhatsAppIdentifier(
+        contact.canonicalContactJid ||
+          contact.contactJid ||
+          contact.rawContactJid ||
+          ""
+      )
+  );
+
+  return [
+    ...new Set(
+      [
+        String(contact.canonicalContactJid || "").trim(),
+        String(contact.contactJid || "").trim(),
+        String(contact.rawContactJid || "").trim(),
+        digits ? `${digits}@s.whatsapp.net` : "",
+        digits,
+        digits ? `+${digits}` : "",
+      ].filter(Boolean)
+    ),
+  ];
+}
+
+async function createWhatsAppPortalRoom(userId, contact = {}) {
+  const fallbackGhostId = extractWhatsAppIdentifier(
+    contact.canonicalContactJid ||
+      contact.contactJid ||
+      contact.rawContactJid ||
+      contact.phoneNumber ||
+      ""
+  );
+  const contactMxid = normalizeMxid(
+    contact.contactMxid || buildWhatsAppGhostMxid(fallbackGhostId)
+  );
+  if (!contactMxid) return null;
+
+  const roomName = sanitizeWhatsAppDisplayLabel(
+    contact.title ||
+      contact.name ||
+      contact.fullName ||
+      contact.pushName ||
+      contact.phoneNumber ||
+      "WhatsApp"
+  );
+  const response = await matrixRequestWithRefresh(
+    userId,
+    "POST",
+    "/_matrix/client/v3/createRoom",
+    {
+      data: {
+        is_direct: true,
+        invite: [contactMxid],
+        preset: "trusted_private_chat",
+        ...(roomName ? { name: roomName } : {}),
+      },
+      timeout: 20_000,
+    }
+  );
+
+  invalidateWhatsAppCache(userId);
+  return String(response.data?.room_id || "").trim() || null;
+}
+
+async function requestWhatsAppPortalCreation(userId, contact = {}) {
+  const candidates = buildWhatsAppPortalRequestCandidates(contact);
+  let attempted = false;
+
+  const createdRoomId = await createWhatsAppPortalRoom(userId, contact).catch(
+    () => ""
+  );
+  if (createdRoomId) {
+    attempted = true;
+  }
+
+  for (const candidate of candidates) {
+    if (!shouldRequestWhatsAppPortal(userId, candidate)) continue;
+    attempted = true;
+    await sendBridgeTextCommand(userId, `start-chat ${candidate}`).catch(
+      () => null
+    );
+  }
+
+  return attempted;
+}
+
+async function waitForWhatsAppContactRoom(
+  userId,
+  contact = {},
+  { timeoutMs = 16_000, intervalMs = 1_000 } = {}
+) {
+  const startedAt = nowTs();
+
+  while (nowTs() - startedAt < timeoutMs) {
+    invalidateWhatsAppCache(userId);
+    const rooms = await listWhatsAppChats(userId, {
+      limit: 200,
+      force: true,
+    }).catch(() => []);
+    const match = findWhatsAppRoomByContact(rooms, contact);
+    if (match?.roomId && !isWhatsAppContactRoomId(match.roomId)) {
+      return match;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  return null;
+}
+
+async function listWhatsAppChats(
+  userId,
+  { search = "", limit = 80, force = false, bridgeSnapshot = null } = {}
+) {
+  const integration = await ensureWhatsAppIntegration(userId);
+  const config = buildConfigFromIntegration(integration);
+  const bridgeSnapshotData =
+    bridgeSnapshot || readWhatsAppBridgeSnapshot(config.mxid);
+  const rooms = await listMatrixWhatsAppRooms(userId, {
+    search,
+    limit: Math.max(120, Number(limit || 80)),
+    force,
+    bridgeSnapshot: bridgeSnapshotData,
+  });
+  const contacts = readWhatsAppBridgeContacts(config.mxid, bridgeSnapshotData);
+
+  const bridgeContactMap = buildWhatsAppBridgeContactMap(contacts);
+  const roomsById = new Map(
+    rooms
+      .filter((room) => room?.roomId || room?.id)
+      .map((room) => [String(room.roomId || room.id).trim(), room])
+  );
+  const chatMap = new Map();
+  const registerChat = (chat = null) => {
+    if (!chat) return;
+    const chatKey = buildWhatsAppChatKey(chat);
+    if (!chatKey) return;
+    chatMap.set(
+      chatKey,
+      pickBetterWhatsAppContact(chatMap.get(chatKey) || null, chat)
+    );
+  };
+
+  for (const room of rooms) {
+    const bridgeContact =
+      bridgeContactMap.get(String(room.roomId || "").trim()) ||
+      bridgeContactMap.get(String(room.contactJid || "").trim()) ||
+      null;
+    registerChat(mergeRoomWithBridgeContactMetadata(room, bridgeContact));
+  }
+
+  const hydratedPortalRooms = await Promise.all(
+    (Array.isArray(bridgeSnapshotData?.portalRooms)
+      ? bridgeSnapshotData.portalRooms
+      : []
+    ).map(async (portal) => {
+      const portalRoomId = String(portal?.roomId || "").trim();
+      if (!portalRoomId) return null;
+
+      const bridgeContact =
+        bridgeContactMap.get(portalRoomId) ||
+        bridgeContactMap.get(
+          normalizeWhatsAppContactIdentifier(portal?.portalId || "")
+        ) ||
+        bridgeContactMap.get(String(portal?.portalId || "").trim()) ||
+        null;
+      const existingRoom = roomsById.get(portalRoomId) || null;
+
+      if (existingRoom) {
+        return mergeRoomWithBridgeContactMetadata(
+          mergeRoomWithBridgePortalMetadata(existingRoom, portal),
+          bridgeContact
+        );
+      }
+
+      const descriptor = await fetchRoomDescriptorById(userId, portalRoomId, {
+        timelineLimit: 40,
+      }).catch(() => null);
+
+      if (descriptor?.room && !descriptor.isManagement) {
+        return mergeRoomWithBridgeContactMetadata(
+          mergeRoomWithBridgePortalMetadata(descriptor.room, portal),
+          bridgeContact
+        );
+      }
+
+      return buildWhatsAppPortalRoom(portal, bridgeContact);
+    })
+  );
+
+  hydratedPortalRooms.forEach(registerChat);
+
+  for (const contact of contacts) {
+    registerChat(contact);
+  }
+
+  const query = normalizeSearchValue(search);
+
+  return [...chatMap.values()]
+    .filter((room) => {
+      if (!query) return true;
+      const haystack = normalizeSearchValue(
+        [
+          room.title,
+          room.name,
+          room.lastMessage,
+          room.lastSender,
+          room.phoneNumber,
+          room.fullName,
+          room.pushName,
+          room.businessName,
+        ]
+          .filter(Boolean)
+          .join(" ")
+      );
+      return haystack.includes(query);
+    })
+    .sort((left, right) => {
+      const unreadDelta =
+        Number(right.unreadCount || 0) - Number(left.unreadCount || 0);
+      if (unreadDelta !== 0) return unreadDelta;
+
+      const timestampDelta =
+        Number(right.lastMessageTs || 0) - Number(left.lastMessageTs || 0);
+      if (timestampDelta !== 0) return timestampDelta;
+
+      return String(left.title || left.name || "").localeCompare(
+        String(right.title || right.name || ""),
+        "en",
+        { sensitivity: "base" }
+      );
+    })
+    .slice(0, Math.max(1, Math.min(200, Number(limit || 80))))
+    .map((room) => ({
+      roomId: room.roomId,
+      id: room.roomId,
+      title: room.title,
+      name: room.name,
+      avatarUrl: room.avatarUrl,
+      lastMessagePreview: room.lastMessage || "",
+      lastMessageAt: room.lastMessageAt,
+      unreadCount: Number(room.unreadCount || 0),
+      source: "whatsapp",
+      isGroup: Boolean(room.isGroup),
+      isPinned: Boolean(room.isPinned),
+      isMuted: Boolean(room.isMuted),
+      lastSender: room.lastSender || "",
+      memberCount: Number(room.memberCount || 0),
+      phoneNumber: room.phoneNumber || "",
+      contactJid: room.contactJid || "",
+      canonicalContactJid: room.canonicalContactJid || room.contactJid || "",
+      contactMxid: room.contactMxid || "",
+      bridgeStatus: room.bridgeStatus || "portal",
+      fullName: room.fullName || "",
+      pushName: room.pushName || "",
+      businessName: room.businessName || "",
+      lastEventId: room.lastEventId || room.latestMessageId || null,
+      latestMessageId: room.lastEventId || room.latestMessageId || null,
+      typingUsers: Array.isArray(room.typingUsers) ? room.typingUsers : [],
+      canOpenTimeline: !isWhatsAppContactRoomId(room.roomId),
+    }));
+}
+
+async function resolveRoomReference(
+  userId,
+  roomRef = "",
+  { createIfMissing = false, portalWaitMs = 16_000 } = {}
+) {
+  const normalizedRoomRef = String(roomRef || "").trim();
   const rooms = await listWhatsAppChats(userId, { limit: 200 });
-  const match = resolveChatFromList(rooms, roomRef);
+  const match = resolveChatFromList(rooms, normalizedRoomRef);
 
   if (!match?.roomId) {
-    throw new Error(`No WhatsApp chat found for: ${roomRef}`);
+    const descriptor = normalizedRoomRef.startsWith("!")
+      ? await fetchRoomDescriptorById(userId, normalizedRoomRef, {
+          timelineLimit: 40,
+        }).catch(() => null)
+      : null;
+
+    if (descriptor?.room && !descriptor.isManagement) {
+      const integration = await ensureWhatsAppIntegration(userId).catch(
+        () => null
+      );
+      const config = integration
+        ? buildConfigFromIntegration(integration)
+        : null;
+      const bridgeSnapshot = config
+        ? readWhatsAppBridgeSnapshot(config.mxid)
+        : null;
+      const bridgePortal = findWhatsAppPortalByRoomId(
+        bridgeSnapshot,
+        normalizedRoomRef
+      );
+      if (descriptor.isWhatsAppRoom || bridgePortal?.roomId) {
+        const bridgeContactMap = buildWhatsAppBridgeContactMap(
+          config ? readWhatsAppBridgeContacts(config.mxid, bridgeSnapshot) : []
+        );
+        const hydratedRoom = mergeRoomWithBridgeContactMetadata(
+          mergeRoomWithBridgePortalMetadata(descriptor.room, bridgePortal),
+          bridgeContactMap.get(normalizedRoomRef) ||
+            bridgeContactMap.get(
+              String(descriptor.room?.contactJid || "").trim()
+            ) ||
+            null
+        );
+        return {
+          ...hydratedRoom,
+          placeholder: false,
+          roomId: String(hydratedRoom.roomId || normalizedRoomRef),
+        };
+      }
+    }
+
+    throw new Error(`No WhatsApp chat found for: ${normalizedRoomRef}`);
+  }
+
+  if (isWhatsAppContactRoomId(match.roomId)) {
+    if (createIfMissing) {
+      await requestWhatsAppPortalCreation(userId, match).catch(() => null);
+
+      const createdRoom = await waitForWhatsAppContactRoom(userId, match, {
+        timeoutMs: portalWaitMs,
+      }).catch(() => null);
+      if (createdRoom?.roomId && !isWhatsAppContactRoomId(createdRoom.roomId)) {
+        await assertWhatsAppRoom(userId, createdRoom.roomId);
+        return {
+          ...createdRoom,
+          placeholder: false,
+          roomId: String(createdRoom.roomId),
+        };
+      }
+    }
+
+    return {
+      ...match,
+      placeholder: true,
+      roomId: String(match.roomId),
+    };
   }
 
   await assertWhatsAppRoom(userId, match.roomId);
-  return match;
+  return {
+    ...match,
+    placeholder: false,
+    roomId: String(match.roomId),
+  };
 }
 
 function normalizeMessageForClient(message = {}) {
@@ -1995,23 +3595,37 @@ function normalizeMessageForClient(message = {}) {
   return {
     id: message.id,
     eventId: message.eventId,
+    roomId: message.roomId || "",
     senderId: message.sender,
     senderName: message.senderName,
+    senderAvatarUrl: message.senderAvatarUrl || "",
     direction: message.fromMe ? "outbound" : "inbound",
     text: message.text || "",
     timestamp: message.isoTimestamp,
     timeLabel: message.timeLabel,
     attachments: attachment ? [attachment] : [],
+    media: message.media || null,
     isVoice: attachment?.type === "audio",
     reactions: message.reactions || [],
     replyPreview: message.replyPreview || null,
     deleted: Boolean(message.deleted),
     fromMe: Boolean(message.fromMe),
+    deliveryState: message.deliveryState || null,
+    deliveryLabel: message.deliveryLabel || null,
+    readByCount: Number(message.readByCount || 0) || 0,
   };
 }
 
 async function getWhatsAppRoomTimeline(userId, roomId, { limit = 50 } = {}) {
-  const resolvedRoom = await assertWhatsAppRoom(userId, roomId);
+  const resolvedRoom = await resolveRoomReference(userId, roomId, {
+    createIfMissing: true,
+    portalWaitMs: 8_000,
+  });
+  if (resolvedRoom.placeholder) {
+    return buildWhatsAppPlaceholderTimeline(resolvedRoom);
+  }
+
+  await assertWhatsAppRoom(userId, resolvedRoom.roomId);
 
   const snapshot = await fetchSyncSnapshot(userId, {
     timelineLimit: Math.max(limit, 50),
@@ -2030,12 +3644,27 @@ async function getWhatsAppRoomTimeline(userId, roomId, { limit = 50 } = {}) {
       }
     );
 
-    if (!descriptor || !descriptor.isWhatsAppRoom || descriptor.isManagement) {
+    if (
+      !descriptor ||
+      descriptor.isManagement ||
+      (!descriptor.isWhatsAppRoom && resolvedRoom.bridgeStatus !== "portal")
+    ) {
       throw new Error("WhatsApp conversation not found.");
     }
 
+    const contactMap = buildWhatsAppBridgeContactMap(
+      readWhatsAppBridgeContacts(snapshot.config.mxid)
+    );
+    const room = mergeResolvedWhatsAppRoomMetadata(
+      descriptor.room,
+      resolvedRoom,
+      contactMap.get(String(descriptor.room?.roomId || "")) ||
+        contactMap.get(String(descriptor.room?.contactJid || "")) ||
+        null
+    );
+
     return {
-      room: descriptor.room,
+      room,
       messages: descriptor.messages
         .slice(-Math.max(1, Number(limit || 50)))
         .map(normalizeMessageForClient),
@@ -2054,16 +3683,129 @@ async function getWhatsAppRoomTimeline(userId, roomId, { limit = 50 } = {}) {
     directMap,
   });
 
-  if (!descriptor.isWhatsAppRoom || descriptor.isManagement) {
+  if (
+    descriptor.isManagement ||
+    (!descriptor.isWhatsAppRoom && resolvedRoom.bridgeStatus !== "portal")
+  ) {
     throw new Error("Invalid WhatsApp room.");
   }
 
+  const contactMap = buildWhatsAppBridgeContactMap(
+    readWhatsAppBridgeContacts(snapshot.config.mxid)
+  );
+  const room = mergeResolvedWhatsAppRoomMetadata(
+    descriptor.room,
+    resolvedRoom,
+    contactMap.get(String(descriptor.room?.roomId || "")) ||
+      contactMap.get(String(descriptor.room?.contactJid || "")) ||
+      null
+  );
+
   return {
-    room: descriptor.room,
+    room,
     messages: descriptor.messages
       .slice(-Math.max(1, Number(limit || 50)))
       .map(normalizeMessageForClient),
     prevBatch: descriptor.room.prevBatch || null,
+  };
+}
+
+async function getWhatsAppRoomHistory(
+  userId,
+  roomId,
+  { from = "", limit = 50 } = {}
+) {
+  const resolvedRoom = await resolveRoomReference(userId, roomId, {
+    createIfMissing: false,
+  });
+  if (resolvedRoom.placeholder) {
+    return buildWhatsAppPlaceholderTimeline(resolvedRoom);
+  }
+
+  if (!String(from || "").trim()) {
+    return getWhatsAppRoomTimeline(userId, resolvedRoom.roomId, { limit });
+  }
+
+  const snapshot = await fetchSyncSnapshot(userId, {
+    timelineLimit: 1,
+    force: false,
+  });
+  const roomData = snapshot.data.rooms?.join?.[resolvedRoom.roomId] || null;
+
+  const response = await matrixRequestWithRefresh(
+    userId,
+    "GET",
+    `/_matrix/client/v3/rooms/${encodeURIComponent(
+      resolvedRoom.roomId
+    )}/messages`,
+    {
+      params: {
+        dir: "b",
+        from,
+        limit: Math.max(1, Math.min(100, Number(limit || 50))),
+      },
+      timeout: 20_000,
+    }
+  );
+
+  const fallbackStateEvents = !roomData
+    ? await matrixRequestWithRefresh(
+        userId,
+        "GET",
+        `/_matrix/client/v3/rooms/${encodeURIComponent(
+          resolvedRoom.roomId
+        )}/state`,
+        {
+          timeout: 20_000,
+        }
+      )
+        .then((result) => (Array.isArray(result?.data) ? result.data : []))
+        .catch(() => [])
+    : [];
+
+  const syntheticRoomData = {
+    state: roomData?.state || { events: fallbackStateEvents },
+    timeline: {
+      events: [...(response.data?.chunk || [])].reverse(),
+      prev_batch: response.data?.end || null,
+    },
+    summary: roomData?.summary || {},
+    unread_notifications: roomData?.unread_notifications || {},
+    ephemeral: roomData?.ephemeral || { events: [] },
+  };
+
+  const directMap = parseDirectMap(snapshot.data);
+  const descriptor = buildRoomDescriptor({
+    roomId: resolvedRoom.roomId,
+    roomData: syntheticRoomData,
+    currentUserId: snapshot.config.mxid,
+    bridgeBotMxid: snapshot.config.bridgeBotMxid,
+    managementRoomId: snapshot.config.managementRoomId,
+    directMap,
+  });
+
+  if (
+    descriptor.isManagement ||
+    (!descriptor.isWhatsAppRoom && resolvedRoom.bridgeStatus !== "portal")
+  ) {
+    throw new Error("WhatsApp conversation not found.");
+  }
+
+  const contactMap = buildWhatsAppBridgeContactMap(
+    readWhatsAppBridgeContacts(snapshot.config.mxid)
+  );
+  const room = mergeResolvedWhatsAppRoomMetadata(
+    descriptor.room,
+    resolvedRoom,
+    contactMap.get(String(descriptor.room?.roomId || "")) ||
+      contactMap.get(String(descriptor.room?.contactJid || "")) ||
+      null
+  );
+
+  return {
+    room,
+    messages: descriptor.messages.map(normalizeMessageForClient),
+    prevBatch: response.data?.end || null,
   };
 }
 async function sendWhatsAppMessage(
@@ -2072,7 +3814,17 @@ async function sendWhatsAppMessage(
   text,
   { replyToEventId = null } = {}
 ) {
-  const resolvedRoom = await assertWhatsAppRoom(userId, roomId);
+  const resolvedRoom = await resolveRoomReference(userId, roomId, {
+    createIfMissing: true,
+    portalWaitMs: 25_000,
+  });
+  if (resolvedRoom.placeholder) {
+    throw new Error(
+      "This WhatsApp chat is known to the bridge, but its live Matrix room has not been created yet. Reconnect WhatsApp or wait for the bridge to finish syncing that chat."
+    );
+  }
+
+  await assertWhatsAppRoom(userId, resolvedRoom.roomId);
   const body = String(text || "").trim();
   if (!body) throw new Error("Message text is required.");
 
@@ -2114,7 +3866,17 @@ async function uploadWhatsAppMedia(
   mimeType,
   { caption = "", replyToEventId = null } = {}
 ) {
-  const resolvedRoom = await assertWhatsAppRoom(userId, roomId);
+  const resolvedRoom = await resolveRoomReference(userId, roomId, {
+    createIfMissing: true,
+    portalWaitMs: 25_000,
+  });
+  if (resolvedRoom.placeholder) {
+    throw new Error(
+      "This WhatsApp chat is known to the bridge, but its live Matrix room has not been created yet. Reconnect WhatsApp or wait for the bridge to finish syncing that chat."
+    );
+  }
+
+  await assertWhatsAppRoom(userId, resolvedRoom.roomId);
   if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) {
     throw new Error("File content is required.");
   }
@@ -2141,7 +3903,11 @@ async function uploadWhatsAppMedia(
   let msgtype = "m.file";
   if (normalizedMime.startsWith("image/")) msgtype = "m.image";
   else if (normalizedMime.startsWith("video/")) msgtype = "m.video";
-  else if (normalizedMime.startsWith("audio/")) msgtype = "m.audio";
+  else if (normalizedMime.startsWith("audio/")) {
+    msgtype = /^audio\/webm(?:;|$)/i.test(normalizedMime)
+      ? "m.file"
+      : "m.audio";
+  }
 
   const content = {
     msgtype,
@@ -2195,7 +3961,11 @@ async function uploadWhatsAppMedia(
 }
 
 async function markWhatsAppRoomAsRead(userId, roomId, eventId = "") {
-  const resolvedRoom = await assertWhatsAppRoom(userId, roomId);
+  const resolvedRoom = await resolveRoomReference(userId, roomId, {
+    createIfMissing: false,
+  });
+  if (resolvedRoom.placeholder) return { ok: true };
+  await assertWhatsAppRoom(userId, resolvedRoom.roomId);
   let targetEventId = String(eventId || "").trim();
   if (!targetEventId) {
     const timeline = await getWhatsAppRoomTimeline(
@@ -2301,7 +4071,7 @@ async function getWhatsAppUnreadSummary(userId) {
       name: chat.title,
       unread: chat.unreadCount,
       preview: chat.lastMessagePreview || "",
-      latestMessageId: null,
+      latestMessageId: chat.lastEventId || chat.latestMessageId || null,
       latestMessageAt: chat.lastMessageAt || null,
       isDirect: !chat.isGroup,
     })),
@@ -2311,7 +4081,7 @@ async function getWhatsAppUnreadSummary(userId) {
       unreadCount: chat.unreadCount,
       isGroup: chat.isGroup,
       lastMessage: chat.lastMessagePreview || "",
-      latestMessageId: null,
+      latestMessageId: chat.lastEventId || chat.latestMessageId || null,
       latestMessageAt: chat.lastMessageAt || null,
     })),
     summary:
@@ -2333,11 +4103,13 @@ module.exports = {
   buildWhatsAppClientIntegration,
   listWhatsAppChats,
   getWhatsAppRoomTimeline,
+  getWhatsAppRoomHistory,
   sendWhatsAppMessage,
   uploadWhatsAppMedia,
   markWhatsAppRoomAsRead,
   fetchWhatsAppMedia,
   getWhatsAppUnreadSummary,
+  getWhatsAppUnreadSignal: getWhatsAppUnreadSummary,
   sendBridgeCommand: sendBridgeTextCommand,
   invalidateWhatsAppCache,
   __test: {
@@ -2345,6 +4117,14 @@ module.exports = {
     resolveMessageText,
     buildMediaDescriptor,
     buildWhatsAppMediaRequestPath,
+    buildWhatsAppBridgeSnapshot,
+    buildWhatsAppBridgePortalMap,
+    buildWhatsAppBridgeContactMap,
+    findWhatsAppPortalByRoomId,
+    mergeRoomWithBridgePortalMetadata,
+    mergeRoomWithBridgeContactMetadata,
+    buildWhatsAppPortalRoom,
+    deriveWhatsAppConnectionState,
     collectMemberMap,
     parseRoomEvents,
     buildRoomDescriptor,
@@ -2352,5 +4132,18 @@ module.exports = {
     isBridgeBotMessage,
     extractBridgeRoomState,
     buildQrDataUrl,
+    buildWhatsAppContactRoomId,
+    isWhatsAppContactRoomId,
+    parseWhatsAppContactRoomId,
+    extractWhatsAppIdentifier,
+    buildWhatsAppContactDisplayName,
+    buildWhatsAppGhostMxid,
+    buildWhatsAppPlaceholderTimeline,
+    canonicalizeWhatsAppContactJid,
+    buildWhatsAppContactKey,
+    buildWhatsAppChatKey,
+    pickBetterWhatsAppContact,
+    applyDeliveryStateToMessages,
+    extractMatrixReadReceipts,
   },
 };

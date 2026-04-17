@@ -10,6 +10,7 @@ const {
   getWhatsAppStatus,
   listWhatsAppChats,
   getWhatsAppRoomTimeline,
+  getWhatsAppRoomHistory,
   sendWhatsAppMessage,
   uploadWhatsAppMedia,
   markWhatsAppRoomAsRead,
@@ -99,11 +100,15 @@ router.get("/unread", async (req, res) => {
 
 router.get("/rooms/:roomId/messages", async (req, res) => {
   try {
-    const result = await getWhatsAppRoomTimeline(
-      req.user?.username,
-      req.params.roomId,
-      { limit: Number(req.query.limit || 60) }
-    );
+    const from = String(req.query.from || "").trim();
+    const result = from
+      ? await getWhatsAppRoomHistory(req.user?.username, req.params.roomId, {
+          from,
+          limit: Number(req.query.limit || 60),
+        })
+      : await getWhatsAppRoomTimeline(req.user?.username, req.params.roomId, {
+          limit: Number(req.query.limit || 60),
+        });
     res.json(result);
   } catch (err) {
     console.error("WhatsApp room messages error:", err.message);

@@ -1,16 +1,33 @@
 <template>
-  <div class="wa-shell">
-    <aside class="wa-sidebar">
+  <div class="wa-shell" :class="{ 'is-collapsed': sidebarCollapsed }">
+    <aside class="wa-sidebar" :class="{ collapsed: sidebarCollapsed }">
       <div class="wa-sidebar-head">
-        <button class="wa-brand" type="button" @click="selectedChat = null">
-          <span class="wa-brand-icon">💬</span>
-          <span class="wa-brand-copy">
+        <button
+          class="wa-brand wa-brand-btn"
+          type="button"
+          :disabled="!sidebarCollapsed && !isConnected"
+          :title="sidebarCollapsed ? 'Expand sidebar' : (isConnected ? 'View your WhatsApp profile' : 'WhatsApp not connected')"
+          @click="sidebarCollapsed ? (sidebarCollapsed = false) : toggleProfilePanel()"
+        >
+          <div class="wa-brand-icon">
+            <img
+              v-if="status.profile?.avatarUrl && !isImageBroken(status.profile.avatarUrl)"
+              :src="authMediaUrl(status.profile.avatarUrl)"
+              :alt="status.profile?.displayName || 'WhatsApp profile'"
+              class="wa-brand-avatar"
+              @error="markImageBroken(status.profile?.avatarUrl)"
+            />
+            <span v-else class="wa-avatar-fallback">
+              {{ avatarInitials(status.profile?.displayName || status.profile?.phone || 'WhatsApp') }}
+            </span>
+          </div>
+          <div v-if="!sidebarCollapsed" class="wa-brand-copy">
             <strong>WhatsApp</strong>
-            <span>{{ isConnected ? 'Live in OrionAI' : 'Hidden bridge setup' }}</span>
-          </span>
+            <span>{{ isConnected ? (status.profile?.displayName || 'Connected') : 'Connect WhatsApp in Integrations' }}</span>
+          </div>
         </button>
 
-        <div class="wa-head-actions">
+        <div v-if="!sidebarCollapsed" class="wa-head-actions">
           <button class="wa-icon-btn" :disabled="refreshing" title="Refresh WhatsApp" @click="refreshAll">
             <span v-if="refreshing" class="wa-spinner wa-spinner--sm"></span>
             <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -20,16 +37,69 @@
               <path d="M1 14l4.6 4.4A9 9 0 0 0 20.5 15" />
             </svg>
           </button>
-          <button class="wa-icon-btn" title="Back" @click="emit('close')">
+          <button
+            class="wa-icon-btn"
+            title="Collapse sidebar"
+            @click="sidebarCollapsed = true"
+          >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M19 12H5" />
-              <path d="m12 5-7 7 7 7" />
+              <path d="m15 18-6-6 6-6" />
             </svg>
           </button>
         </div>
       </div>
 
-      <div v-if="isConnected" class="wa-action-panel-wrap">
+      <div v-if="showProfilePanel && isConnected && !sidebarCollapsed" class="wa-profile-popover">
+        <div class="wa-profile-card">
+          <div class="wa-profile-actions">
+            <button class="wa-icon-btn wa-icon-btn--ghost" title="Close profile" @click="showProfilePanel = false">
+              <span aria-hidden="true">✕</span>
+            </button>
+          </div>
+
+          <div class="wa-profile-hero">
+            <div class="wa-profile-avatar">
+              <img
+                v-if="status.profile?.avatarUrl && !isImageBroken(status.profile.avatarUrl)"
+                :src="authMediaUrl(status.profile.avatarUrl)"
+                :alt="status.profile?.displayName || 'WhatsApp profile'"
+                @error="markImageBroken(status.profile?.avatarUrl)"
+              />
+              <span v-else>{{ avatarInitials(status.profile?.displayName || status.profile?.phone || 'WhatsApp') }}</span>
+            </div>
+            <div class="wa-profile-copy">
+              <strong>{{ status.profile?.displayName || 'WhatsApp profile' }}</strong>
+              <span>{{ status.profile?.phone || 'Linked on this device' }}</span>
+            </div>
+          </div>
+
+          <div class="wa-info-grid">
+            <div class="wa-info-item">
+              <span>Chats</span>
+              <strong>{{ chats.length }}</strong>
+            </div>
+            <div class="wa-info-item">
+              <span>Unread</span>
+              <strong>{{ status.unreadCount || 0 }}</strong>
+            </div>
+            <div class="wa-info-item">
+              <span>Status</span>
+              <strong>{{ status.loginState || 'connected' }}</strong>
+            </div>
+            <div class="wa-info-item">
+              <span>Linked</span>
+              <strong>{{ status.connectedAt ? formatDateDivider(status.connectedAt) : 'Now' }}</strong>
+            </div>
+          </div>
+
+          <div class="wa-info-actions">
+            <button class="wa-chip-btn" @click="showProfilePanel = false">Close</button>
+            <button class="wa-chip-btn" @click="emit('open-integrations')">Open Integrations</button>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="isConnected && !sidebarCollapsed" class="wa-action-panel-wrap">
         <CommunicationInsightsWidget
           title="OrionAI insights"
           panel-title="Reply / Action Required"
@@ -49,7 +119,7 @@
         />
       </div>
 
-      <div class="wa-search-wrap">
+      <div v-if="!sidebarCollapsed" class="wa-search-wrap">
         <svg class="wa-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="11" cy="11" r="7" />
           <path d="m20 20-3.5-3.5" />
@@ -63,7 +133,7 @@
         />
       </div>
 
-      <div class="wa-filter-row">
+      <div v-if="!sidebarCollapsed" class="wa-filter-row">
         <button
           v-for="filter in CHAT_FILTERS"
           :key="filter.id"
@@ -76,17 +146,17 @@
         </button>
       </div>
 
-      <div v-if="loadingChats && chats.length === 0" class="wa-list-state">
-        <div v-for="n in 5" :key="`chat-skeleton-${n}`" class="wa-chat-skeleton">
+      <div v-if="loadingChats && chats.length === 0" class="wa-list-state" :class="{ compact: sidebarCollapsed }">
+        <div v-for="n in sidebarCollapsed ? 6 : 5" :key="`chat-skeleton-${n}`" class="wa-chat-skeleton" :class="{ compact: sidebarCollapsed }">
           <span class="wa-chat-skeleton-avatar"></span>
-          <span class="wa-chat-skeleton-lines">
+          <span v-if="!sidebarCollapsed" class="wa-chat-skeleton-lines">
             <span></span>
             <span></span>
           </span>
         </div>
       </div>
 
-      <div v-else-if="!isConnected" class="wa-list-empty">
+      <div v-else-if="!isConnected && !sidebarCollapsed" class="wa-list-empty">
         <div class="wa-empty-orb">
           <span>QR</span>
         </div>
@@ -102,7 +172,7 @@
         <button class="wa-primary-btn" @click="emit('open-integrations')">Open Integrations</button>
       </div>
 
-      <div v-else-if="filteredChats.length === 0" class="wa-list-empty">
+      <div v-else-if="filteredChats.length === 0 && !sidebarCollapsed" class="wa-list-empty">
         <div class="wa-empty-orb">
           <span>0</span>
         </div>
@@ -114,12 +184,13 @@
         </p>
       </div>
 
-      <div v-else class="wa-chat-list">
+      <div v-else class="wa-chat-list" :class="{ compact: sidebarCollapsed }">
         <button
           v-for="chat in filteredChats"
           :key="chat.roomId || chat.id"
           class="wa-chat-row"
-          :class="{ active: currentRoomId(chat) === currentRoomId(selectedChat) }"
+          :class="{ active: currentRoomId(chat) === currentRoomId(selectedChat), compact: sidebarCollapsed }"
+          :title="chat.title || chat.name"
           @click="selectChat(chat)"
         >
           <div class="wa-chat-avatar">
@@ -132,22 +203,25 @@
             <span v-else>{{ avatarInitials(chat.title || chat.name) }}</span>
           </div>
 
-          <div class="wa-chat-copy">
-            <div class="wa-chat-title-row">
-              <strong>{{ chat.title || chat.name }}</strong>
-              <span>{{ formatChatTime(chat.lastMessageAt) }}</span>
+          <template v-if="!sidebarCollapsed">
+            <div class="wa-chat-copy">
+              <div class="wa-chat-title-row">
+                <strong>{{ chat.title || chat.name }}</strong>
+                <span>{{ formatChatTime(chat.lastMessageAt) }}</span>
+              </div>
+              <div class="wa-chat-preview-row">
+                <p>{{ chat.lastMessagePreview || (chat.bridgeStatus === 'contact' ? 'Known contact, chat sync pending' : 'No messages yet') }}</p>
+                <span v-if="chat.isPinned" class="wa-chat-flag" title="Pinned">Pin</span>
+                <span v-if="chat.isMuted" class="wa-chat-flag" title="Muted">Mute</span>
+                <span v-if="chat.bridgeStatus === 'contact'" class="wa-chat-flag" title="Bridge contact">Contact</span>
+              </div>
             </div>
-            <div class="wa-chat-preview-row">
-              <p>{{ chat.lastMessagePreview || 'No messages yet' }}</p>
-              <span v-if="chat.isPinned" class="wa-chat-flag" title="Pinned">Pin</span>
-              <span v-if="chat.isMuted" class="wa-chat-flag" title="Muted">Mute</span>
-            </div>
-          </div>
 
-          <div class="wa-chat-meta">
-            <span v-if="chat.unreadCount" class="wa-chat-badge">{{ chat.unreadCount }}</span>
-            <span class="wa-chat-kind">{{ chat.isGroup ? 'Group' : 'Direct' }}</span>
-          </div>
+            <div class="wa-chat-meta">
+              <span v-if="chat.unreadCount" class="wa-chat-badge">{{ chat.unreadCount }}</span>
+              <span class="wa-chat-kind">{{ chat.bridgeStatus === 'contact' ? 'Known' : (chat.isGroup ? 'Group' : 'Direct') }}</span>
+            </div>
+          </template>
         </button>
       </div>
     </aside>
@@ -192,21 +266,6 @@
       <template v-else-if="!selectedChat">
         <section class="wa-state-panel">
           <div class="wa-state-hero">
-            <div class="wa-state-illustration">
-              <span class="wa-state-circle wa-state-circle--one"></span>
-              <span class="wa-state-circle wa-state-circle--two"></span>
-              <div class="wa-state-card">
-                <div class="wa-state-card-head">
-                  <span class="wa-state-card-dot"></span>
-                  <span>Choose a conversation</span>
-                </div>
-                <div class="wa-state-lines">
-                  <span></span>
-                  <span></span>
-                  <span></span>
-                </div>
-              </div>
-            </div>
             <div class="wa-state-copy">
               <strong>Your WhatsApp workspace is ready</strong>
               <p>Select a chat on the left to read messages, send files, record a voice note, and reply without leaving OrionAI.</p>
@@ -217,7 +276,7 @@
 
       <template v-else>
         <header class="wa-chat-head">
-          <button class="wa-chat-head-main" type="button" @click="searchInChatOpen = false">
+          <button class="wa-chat-head-main wa-chat-head-main-btn" type="button" @click="showInfoPanel = !showInfoPanel">
             <div class="wa-chat-head-avatar">
               <img
                 v-if="selectedChat.avatarUrl && !isImageBroken(selectedChat.avatarUrl)"
@@ -229,7 +288,7 @@
             </div>
             <div class="wa-chat-head-copy">
               <strong>{{ selectedChat.title || selectedChat.name }}</strong>
-              <span>{{ selectedChatSubtitle }}</span>
+              <span>{{ selectedChatStatusLine }}</span>
             </div>
           </button>
 
@@ -240,18 +299,18 @@
                 <path d="m20 20-3.5-3.5" />
               </svg>
             </button>
-            <button class="wa-icon-btn wa-icon-btn--ghost" title="Calls coming soon" disabled>
+            <button class="wa-icon-btn" title="Call contact" @click="startVoiceCall">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.79 19.79 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72l.33 2.53a2 2 0 0 1-.57 1.72l-1.1 1.1a16 16 0 0 0 6 6l1.1-1.1a2 2 0 0 1 1.72-.57l2.53.33A2 2 0 0 1 22 16.92Z" />
               </svg>
             </button>
-            <button class="wa-icon-btn wa-icon-btn--ghost" title="Video coming soon" disabled>
+            <button class="wa-icon-btn" title="Open WhatsApp video handoff" @click="startVideoCall">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="m22 8-6 4 6 4V8Z" />
                 <rect x="2" y="6" width="14" height="12" rx="2" />
               </svg>
             </button>
-            <button class="wa-icon-btn" :disabled="loadingMessages" title="Refresh chat" @click="loadSelectedConversation">
+            <button class="wa-icon-btn" :disabled="loadingMessages" title="Refresh chat" @click="refreshSelectedConversation">
               <span v-if="loadingMessages" class="wa-spinner wa-spinner--sm"></span>
               <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M23 4v6h-6" />
@@ -270,118 +329,224 @@
             type="search"
             placeholder="Search this conversation"
           />
-          <span class="wa-chat-search-meta">
-            {{ visibleMessages.length === messages.length ? `${messages.length} shown` : `${visibleMessages.length} matches` }}
-          </span>
         </div>
 
-        <section ref="messagesEl" class="wa-thread">
-          <div v-if="loadingMessages && messages.length === 0" class="wa-thread-loading">
-            <div v-for="n in 4" :key="`msg-skeleton-${n}`" class="wa-msg-skeleton" :class="{ 'is-out': n % 2 === 0 }">
-              <span></span>
+        <div class="wa-chat-layout">
+          <section class="wa-thread-panel">
+            <div v-if="prevBatch" class="wa-load-earlier">
+              <button class="wa-load-btn" :disabled="loadingOlder" @click="loadOlderMessages">
+                <span v-if="loadingOlder" class="wa-spinner wa-spinner--sm"></span>
+                <span v-else>Load earlier messages</span>
+              </button>
             </div>
-          </div>
 
-          <template v-else>
-            <template v-for="(message, index) in visibleMessages" :key="message.id">
-              <div v-if="showDateDivider(message, index)" class="wa-date-divider">
-                <span>{{ formatDateDivider(message.timestamp) }}</span>
+            <div ref="messagesEl" class="wa-thread-scroll">
+              <!-- FIX 1: spacer pushes messages to the bottom when content is short -->
+              <div class="wa-thread-push"></div>
+
+              <div v-if="loadingMessages && messages.length === 0" class="wa-thread-loading">
+                <div v-for="n in 4" :key="`msg-skeleton-${n}`" class="wa-msg-skeleton" :class="{ 'is-out': n % 2 === 0 }">
+                  <span></span>
+                </div>
               </div>
 
-              <div class="wa-message-row" :class="{ 'from-me': message.direction === 'outbound' || message.fromMe }">
-                <div v-if="message.direction !== 'outbound' && !message.fromMe" class="wa-message-avatar">
-                  {{ avatarInitials(message.senderName) }}
-                </div>
-
-                <div class="wa-message-stack">
-                  <div class="wa-message-actions">
-                    <button class="wa-mini-btn" @click="startReply(message)">Reply</button>
-                    <button class="wa-mini-btn" @click="copyMessage(message)">Copy</button>
-                    <button
-                      v-if="firstAttachment(message)?.url"
-                      class="wa-mini-btn"
-                      @click="downloadAttachment(firstAttachment(message))"
-                    >
-                      Download
-                    </button>
+              <template v-else>
+                <template v-for="(message, index) in visibleMessages" :key="message.id">
+                  <div v-if="showDateDivider(message, index)" class="wa-date-divider">
+                    <span>{{ formatDateDivider(message.timestamp) }}</span>
                   </div>
 
-                  <div class="wa-bubble" :class="{ deleted: message.deleted }">
-                    <div v-if="message.direction !== 'outbound' && !message.fromMe && selectedChat.isGroup" class="wa-message-sender">
-                      {{ message.senderName }}
+                  <div class="wa-message-row" :class="{ 'from-me': message.direction === 'outbound' || message.fromMe }">
+                    <div v-if="message.direction !== 'outbound' && !message.fromMe" class="wa-message-avatar">
+                      <img
+                        v-if="message.senderAvatarUrl && !isImageBroken(message.senderAvatarUrl)"
+                        :src="authMediaUrl(message.senderAvatarUrl)"
+                        :alt="message.senderName"
+                        @error="markImageBroken(message.senderAvatarUrl)"
+                      />
+                      <span v-else>{{ avatarInitials(message.senderName) }}</span>
                     </div>
 
-                    <div v-if="message.replyPreview" class="wa-reply-preview">
-                      <strong>{{ message.replyPreview.senderName }}</strong>
-                      <span>{{ message.replyPreview.text }}</span>
-                    </div>
-
-                    <div v-if="message.deleted" class="wa-deleted-copy">Message deleted</div>
-
-                    <template v-else>
-                      <div v-if="firstAttachment(message)?.type === 'image'" class="wa-media-card wa-media-card--image">
-                        <img
-                          :src="authMediaUrl(firstAttachment(message).url)"
-                          :alt="firstAttachment(message).fileName"
-                          @click="openLightbox(firstAttachment(message))"
-                        />
+                    <div class="wa-message-stack">
+                      <div class="wa-message-actions">
+                        <button class="wa-mini-btn" @click="startReply(message)">Reply</button>
+                        <button class="wa-mini-btn" @click="copyMessage(message)">Copy</button>
+                        <button
+                          v-if="firstAttachment(message)?.url"
+                          class="wa-mini-btn"
+                          @click="downloadAttachment(firstAttachment(message))"
+                        >
+                          Download
+                        </button>
                       </div>
 
-                      <div v-else-if="firstAttachment(message)?.type === 'audio'" class="wa-media-card wa-media-card--audio">
-                        <div class="wa-audio-pill">
-                          <span class="wa-audio-wave"></span>
-                          <span>{{ message.isVoice ? 'Voice message' : 'Audio attachment' }}</span>
+                      <div class="wa-bubble" :class="{ deleted: message.deleted }">
+                        <div v-if="message.direction !== 'outbound' && !message.fromMe && selectedChat.isGroup" class="wa-message-sender">
+                          {{ message.senderName }}
                         </div>
-                        <audio :src="authMediaUrl(firstAttachment(message).url)" controls preload="metadata"></audio>
-                      </div>
 
-                      <div v-else-if="firstAttachment(message)?.url" class="wa-media-card">
-                        <div class="wa-file-card">
-                          <div>
-                            <strong>{{ firstAttachment(message).fileName }}</strong>
-                            <span>{{ readableSize(firstAttachment(message).size) || firstAttachment(message).mimeType || 'Attachment' }}</span>
+                        <div v-if="message.replyPreview" class="wa-reply-preview">
+                          <strong>{{ message.replyPreview.senderName }}</strong>
+                          <span>{{ message.replyPreview.text }}</span>
+                        </div>
+
+                        <div v-if="message.deleted" class="wa-deleted-copy">Message deleted</div>
+
+                        <template v-else>
+                          <div
+                            v-if="firstAttachment(message)?.type === 'image' && firstAttachment(message)?.url && !isImageBroken(firstAttachment(message)?.url)"
+                            class="wa-media-card wa-media-card--image"
+                          >
+                            <img
+                              :src="authMediaUrl(firstAttachment(message).url)"
+                              :alt="firstAttachment(message).fileName"
+                              @click="openLightbox(firstAttachment(message))"
+                              @error="markImageBroken(firstAttachment(message).url)"
+                            />
                           </div>
-                          <button class="wa-mini-btn" @click="downloadAttachment(firstAttachment(message))">Open</button>
+
+                          <div v-else-if="firstAttachment(message)?.type === 'video'" class="wa-media-card wa-media-card--video">
+                            <video :src="authMediaUrl(firstAttachment(message).url)" controls preload="metadata"></video>
+                          </div>
+
+                          <div v-else-if="firstAttachment(message)?.type === 'audio'" class="wa-media-card wa-media-card--audio">
+                            <div class="wa-audio-pill">
+                              <span class="wa-audio-wave"></span>
+                              <span>{{ message.isVoice ? 'Voice message' : 'Audio attachment' }}</span>
+                            </div>
+                            <audio :src="authMediaUrl(firstAttachment(message).url)" controls preload="metadata"></audio>
+                          </div>
+
+                          <div v-else-if="firstAttachment(message)?.url" class="wa-media-card">
+                            <div class="wa-file-card">
+                              <div>
+                                <strong>{{ firstAttachment(message).fileName }}</strong>
+                                <span>{{ readableSize(firstAttachment(message).size) || firstAttachment(message).mimeType || 'Attachment' }}</span>
+                              </div>
+                              <button class="wa-mini-btn" @click="downloadAttachment(firstAttachment(message))">Open</button>
+                            </div>
+                          </div>
+
+                          <p v-if="message.text" class="wa-message-text">{{ message.text }}</p>
+
+                          <div v-if="message.reactions?.length" class="wa-reaction-row">
+                            <span v-for="reaction in message.reactions" :key="`${message.id}-${reaction.key}`" class="wa-reaction-pill">
+                              {{ reaction.key }} {{ reaction.count }}
+                            </span>
+                          </div>
+                        </template>
+
+                        <div class="wa-message-meta">
+                          <span>{{ message.timeLabel || formatChatTime(message.timestamp) }}</span>
+                          <span v-if="message.direction === 'outbound' || message.fromMe">
+                            {{ message.deliveryLabel || 'Sent' }}
+                          </span>
                         </div>
                       </div>
-
-                      <p v-if="message.text" class="wa-message-text">{{ message.text }}</p>
-
-                      <div v-if="message.reactions?.length" class="wa-reaction-row">
-                        <span v-for="reaction in message.reactions" :key="`${message.id}-${reaction.key}`" class="wa-reaction-pill">
-                          {{ reaction.key }} {{ reaction.count }}
-                        </span>
-                      </div>
-                    </template>
-
-                    <div class="wa-message-meta">
-                      <span>{{ message.timeLabel || formatChatTime(message.timestamp) }}</span>
-                      <span v-if="message.direction === 'outbound' || message.fromMe">Sent</span>
                     </div>
                   </div>
-                </div>
-              </div>
-            </template>
+                </template>
 
-            <div v-if="visibleMessages.length === 0" class="wa-thread-empty">
-              <strong>{{ messageQuery ? 'No messages match your search' : 'No messages yet' }}</strong>
-              <p>{{ messageQuery ? 'Try a different search phrase.' : 'Start the conversation from OrionAI.' }}</p>
+                <div v-if="visibleMessages.length === 0" class="wa-thread-empty">
+                  <strong>{{ messageQuery ? 'No messages match your search' : (selectedChat.bridgeStatus === 'contact' ? 'Chat sync pending' : 'No messages yet') }}</strong>
+                  <p>
+                    {{ messageQuery
+                      ? 'Try a different search phrase.'
+                      : selectedChat.bridgeStatus === 'contact'
+                        ? 'OrionAI is creating the live chat room for this contact. You can keep typing while it finishes.'
+                        : 'Start the conversation from OrionAI.' }}
+                  </p>
+                </div>
+              </template>
             </div>
-          </template>
-        </section>
+          </section>
+
+          <aside v-if="showInfoPanel" class="wa-info-panel">
+            <div class="wa-info-head">
+              <strong>Contact info</strong>
+              <button class="wa-icon-btn wa-icon-btn--ghost" title="Close profile" @click="showInfoPanel = false">
+                <span aria-hidden="true">✕</span>
+              </button>
+            </div>
+
+            <div class="wa-info-card">
+              <div class="wa-info-avatar">
+                <img
+                  v-if="selectedChat.avatarUrl && !isImageBroken(selectedChat.avatarUrl)"
+                  :src="authMediaUrl(selectedChat.avatarUrl)"
+                  :alt="selectedChat.title || selectedChat.name"
+                  @error="markImageBroken(selectedChat.avatarUrl)"
+                />
+                <span v-else>{{ avatarInitials(selectedChat.title || selectedChat.name) }}</span>
+              </div>
+              <strong>{{ selectedChat.title || selectedChat.name }}</strong>
+              <span>{{ selectedChatSubtitle }}</span>
+            </div>
+
+            <div class="wa-info-grid">
+              <div class="wa-info-item">
+                <span>Unread</span>
+                <strong>{{ selectedChat.unreadCount || 0 }}</strong>
+              </div>
+              <div class="wa-info-item">
+                <span>Type</span>
+                <strong>{{ selectedChat.isGroup ? 'Group' : 'Direct' }}</strong>
+              </div>
+              <div class="wa-info-item">
+                <span>Phone</span>
+                <strong>{{ selectedChat.phoneNumber || 'Not available' }}</strong>
+              </div>
+              <div class="wa-info-item">
+                <span>Bridge</span>
+                <strong>{{ selectedChat.bridgeStatus === 'contact' ? 'Contact only' : 'Live portal' }}</strong>
+              </div>
+            </div>
+
+            <div class="wa-info-section">
+              <span class="wa-info-label">Profile</span>
+              <p>{{ selectedChat.fullName || selectedChat.title || selectedChat.name }}</p>
+              <p v-if="selectedChat.pushName && selectedChat.pushName !== selectedChat.fullName">Push name: {{ selectedChat.pushName }}</p>
+              <p v-if="selectedChat.businessName">Business: {{ selectedChat.businessName }}</p>
+              <p v-if="selectedChat.contactMxid">Ghost: <code>{{ selectedChat.contactMxid }}</code></p>
+              <p v-if="selectedChat.contactJid">JID: <code>{{ selectedChat.contactJid }}</code></p>
+            </div>
+
+            <div class="wa-info-section">
+              <span class="wa-info-label">Sync</span>
+              <p>{{ selectedChat.bridgeStatus === 'contact' ? 'The bridge has the contact metadata, but the live Matrix portal has not finished syncing yet.' : 'Live WhatsApp chats are loaded on demand and proxied through Matrix without storing message history in MongoDB.' }}</p>
+            </div>
+
+            <div class="wa-info-actions">
+              <button class="wa-chip-btn" @click="markCurrentRoomRead()">Mark read</button>
+              <button class="wa-chip-btn" @click="refreshSelectedConversation">Refresh chat</button>
+            </div>
+          </aside>
+        </div>
 
         <section class="wa-composer-shell">
-          <div v-if="replyTarget" class="wa-reply-bar">
-            <div class="wa-reply-chip">
-              <strong>Replying to {{ replyTarget.senderName }}</strong>
-              <span>{{ replyTarget.text || firstAttachment(replyTarget)?.fileName || 'Attachment' }}</span>
+          <div v-if="replyTarget || draftAttachments.length || recording" class="wa-compose-top">
+            <div v-if="replyTarget" class="wa-compose-banner">
+              <span class="wa-compose-banner-label">Replying to {{ replyTarget.senderName }}</span>
+              <span class="wa-compose-banner-text">{{ replyTarget.text || firstAttachment(replyTarget)?.fileName || 'Attachment' }}</span>
+              <button @click="clearReply">✕</button>
             </div>
-            <button class="wa-icon-btn" title="Cancel reply" @click="clearReply">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M18 6 6 18" />
-                <path d="m6 6 12 12" />
-              </svg>
-            </button>
+
+            <div v-if="draftAttachments.length" class="wa-upload-strip">
+              <div v-for="(draft, index) in draftAttachments" :key="draft.id" class="wa-upload-chip">
+                <div class="wa-upload-thumb">
+                  <img v-if="draft.previewType === 'image' && draft.previewUrl" :src="draft.previewUrl" :alt="draft.fileName" />
+                  <span v-else>{{ draft.previewLabel }}</span>
+                </div>
+                <span>{{ draft.fileName }}</span>
+                <button @click="removeDraftAttachment(index)">✕</button>
+              </div>
+            </div>
+
+            <div v-if="recording" class="wa-compose-banner wa-compose-banner--recording">
+              <span class="wa-compose-banner-label">Recording voice note</span>
+              <span class="wa-compose-banner-text">{{ formatRecordingTime(recordingSeconds) }}</span>
+              <button @click="stopVoiceRecording()">Stop</button>
+            </div>
           </div>
 
           <div v-if="composerNotice" class="wa-composer-notice">
@@ -389,35 +554,14 @@
             <button type="button" @click="composerNotice = ''">Dismiss</button>
           </div>
 
-          <div v-if="draftAttachments.length" class="wa-draft-strip">
-            <div v-for="(draft, index) in draftAttachments" :key="draft.id" class="wa-draft-card">
-              <div class="wa-draft-preview">
-                <img v-if="draft.previewType === 'image' && draft.previewUrl" :src="draft.previewUrl" :alt="draft.fileName" />
-                <span v-else>{{ draft.previewLabel }}</span>
-              </div>
-              <div class="wa-draft-copy">
-                <strong>{{ draft.fileName }}</strong>
-                <span>{{ readableSize(draft.size) || draft.mimeType || 'Attachment' }}</span>
-              </div>
-              <button class="wa-mini-btn" @click="removeDraftAttachment(index)">Remove</button>
-            </div>
-          </div>
-
           <div v-if="emojiPanelOpen" class="wa-quick-panel">
-            <button
-              v-for="emoji in EMOJI_OPTIONS"
-              :key="emoji"
-              class="wa-emoji-btn"
-              @click="insertEmoji(emoji)"
-            >
-              {{ emoji }}
-            </button>
+            <div ref="emojiPickerEl" class="wa-emoji-mart"></div>
           </div>
 
           <div v-if="gifPanelOpen" class="wa-quick-panel wa-quick-panel--gif">
             <div class="wa-panel-head">
               <strong>GIF picker</strong>
-              <span>UI scaffolded for a provider hookup</span>
+              <span>Provider hookup is still pending</span>
             </div>
             <div class="wa-gif-grid">
               <button
@@ -427,28 +571,19 @@
                 @click="useGifPlaceholder(prompt)"
               >
                 <span>{{ prompt }}</span>
-                <small>Provider setup pending</small>
+                <small>Pick a provider later</small>
               </button>
             </div>
           </div>
 
-          <div v-if="recording" class="wa-recording-banner">
-            <div class="wa-record-dot"></div>
-            <strong>Recording voice note</strong>
-            <span>{{ formatRecordingTime(recordingSeconds) }}</span>
-            <button class="wa-mini-btn" @click="stopVoiceRecording()">Save</button>
-            <button class="wa-mini-btn wa-mini-btn--danger" @click="cancelVoiceRecording">Cancel</button>
-          </div>
-
-          <div class="wa-composer">
+          <footer class="wa-compose">
             <input ref="fileInputEl" class="wa-hidden-input" type="file" multiple @change="handleFilePick" />
-
-            <button class="wa-icon-btn" :disabled="composerDisabled" title="Attach files" @click="openAttachmentPicker">
+            <button class="wa-compose-btn" :disabled="composerDisabled" title="Attach files" @click="openAttachmentPicker">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="m21.44 11.05-8.49 8.49a5.5 5.5 0 0 1-7.78-7.78l9.2-9.19a3.5 3.5 0 1 1 4.95 4.95l-9.19 9.2a1.5 1.5 0 0 1-2.12-2.12l8.49-8.48" />
               </svg>
             </button>
-            <button class="wa-icon-btn" :disabled="composerDisabled" title="Emoji picker" @click="toggleEmojiPanel">
+            <button class="wa-compose-btn wa-emoji-btn" :disabled="composerDisabled" title="Emoji picker" @click="toggleEmojiPanel">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="12" cy="12" r="10" />
                 <path d="M8 14s1.5 2 4 2 4-2 4-2" />
@@ -456,41 +591,41 @@
                 <path d="M15 9h.01" />
               </svg>
             </button>
-            <button class="wa-icon-btn" :disabled="composerDisabled" title="GIF picker" @click="toggleGifPanel">
-              GIF
+            <button class="wa-compose-btn" :disabled="composerDisabled" title="GIF picker" @click="toggleGifPanel">GIF</button>
+            <button
+              class="wa-compose-btn"
+              :class="{ 'is-recording': recording }"
+              :disabled="composerDisabled || !canRecordVoice"
+              :title="recording ? 'Stop voice recording' : 'Record a voice message'"
+              @click="toggleVoiceRecording"
+            >
+              <span v-if="recording" class="wa-recording-dot"></span>
+              <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 1 1-6 0V6a3 3 0 0 1 3-3Z" />
+                <path d="M19 11a7 7 0 0 1-14 0" />
+                <path d="M12 18v3" />
+              </svg>
             </button>
 
             <textarea
               ref="composerEl"
               v-model="composer"
-              class="wa-composer-input"
-              :disabled="!isConnected"
-              :placeholder="composerPlaceholder"
+              class="wa-compose-input"
               rows="1"
-              @input="autoResize"
+              :disabled="!selectedChat || !isConnected || sending"
+              :placeholder="composerPlaceholder"
               @keydown.enter.exact.prevent="sendMessage"
+              @input="autoResize"
             ></textarea>
 
-            <button
-              class="wa-icon-btn"
-              :disabled="composerDisabled || !canRecordVoice || recording"
-              :title="canRecordVoice ? 'Record voice message' : 'Voice recording not supported in this browser'"
-              @click="startVoiceRecording"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-                <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
-                <path d="M12 18v4" />
-              </svg>
-            </button>
-            <button class="wa-send-btn" :disabled="sendDisabled" @click="sendMessage">
+            <button class="wa-compose-send" :disabled="sendDisabled" @click="sendMessage">
               <span v-if="sending" class="wa-spinner wa-spinner--sm"></span>
               <svg v-else width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="22" y1="2" x2="11" y2="13" />
                 <polygon points="22 2 15 22 11 13 2 9 22 2" />
               </svg>
             </button>
-          </div>
+          </footer>
         </section>
       </template>
     </main>
@@ -510,11 +645,16 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import emojiData from '@emoji-mart/data'
+import { Picker, init as initEmojiMart } from 'emoji-mart'
 import api, { API_BASE } from '../services/api'
 import CommunicationInsightsWidget from '../components/communications/CommunicationInsightsWidget.vue'
 import { useCommunicationActions, emitCommunicationPriorityRefresh } from '../composables/useCommunicationActions'
+import { useWebSocket } from '../composables/useWebSocket'
 import { store, setModuleContext } from '../stores/app'
+
+initEmojiMart({ data: emojiData })
 
 const emit = defineEmits(['close', 'open-integrations'])
 
@@ -523,7 +663,6 @@ const CHAT_FILTERS = [
   { id: 'unread', label: 'Unread' },
   { id: 'groups', label: 'Groups' },
 ]
-const EMOJI_OPTIONS = ['😀', '😂', '🙏', '👍', '🔥', '✅', '🎉', '❤️', '👀', '💡']
 const GIF_PLACEHOLDERS = ['Celebrate', 'Thanks', 'Follow up', 'On my way', 'Approved']
 
 const status = ref({
@@ -531,10 +670,14 @@ const status = ref({
   loginState: 'disconnected',
   lastError: '',
   qrImageUrl: null,
+  roomCount: 0,
+  unreadCount: 0,
   profile: null,
+  connectedAt: null,
 })
 const chats = ref([])
 const messages = ref([])
+const prevBatch = ref(null)
 const selectedChat = ref(null)
 const chatQuery = ref('')
 const messageQuery = ref('')
@@ -543,6 +686,7 @@ const composer = ref('')
 const replyTarget = ref(null)
 const loadingChats = ref(false)
 const loadingMessages = ref(false)
+const loadingOlder = ref(false)
 const refreshing = ref(false)
 const sending = ref(false)
 const emojiPanelOpen = ref(false)
@@ -554,10 +698,15 @@ const recording = ref(false)
 const recordingSeconds = ref(0)
 const lightbox = ref(null)
 const failedImages = ref({})
+const showInfoPanel = ref(false)
+const showProfilePanel = ref(false)
+const sidebarCollapsed = ref(false)
+const localReadCutoffs = ref({})
 
 const fileInputEl = ref(null)
 const messagesEl = ref(null)
 const composerEl = ref(null)
+const emojiPickerEl = ref(null)
 
 let refreshTimer = null
 let mediaRecorder = null
@@ -565,6 +714,7 @@ let recordingStream = null
 let recordingTimer = null
 let recordingChunks = []
 let recordingMode = 'queue'
+let emojiPicker = null
 
 const {
   actionableItems: whatsappActionItems,
@@ -575,6 +725,7 @@ const {
   refresh: refreshWhatsAppActions,
   recordAction: recordWhatsAppAction,
 } = useCommunicationActions('whatsapp')
+const { unreadByApp } = useWebSocket()
 
 const isConnected = computed(() =>
   Boolean(status.value.connected || status.value.loginState === 'connected')
@@ -584,45 +735,84 @@ const canRecordVoice = computed(() =>
   typeof MediaRecorder !== 'undefined' &&
   Boolean(navigator?.mediaDevices?.getUserMedia)
 )
-const composerDisabled = computed(() => !isConnected.value || sending.value)
+const composerDisabled = computed(() =>
+  !selectedChat.value ||
+  !isConnected.value ||
+  sending.value
+)
 const sendDisabled = computed(() => {
   if (composerDisabled.value) return true
   return !composer.value.trim() && draftAttachments.value.length === 0
 })
-const composerPlaceholder = computed(() =>
-  isConnected.value
-    ? 'Type a message'
-    : 'Connect WhatsApp in Integrations first'
-)
+const composerPlaceholder = computed(() => {
+  if (!selectedChat.value) return 'Choose a conversation first'
+  if (!isConnected.value) return 'Connect WhatsApp in Integrations first'
+  if (selectedChat.value.bridgeStatus === 'contact') {
+    return 'Type a message and OrionAI will prepare the live chat room'
+  }
+  return draftAttachments.value.length ? 'Add a caption or send the files…' : 'Type a message'
+})
 const selectedChatSubtitle = computed(() => {
   if (!selectedChat.value) return ''
-  if (selectedChat.value.isGroup) {
-    const count = Number(selectedChat.value.memberCount || 0)
-    return count ? `${count} members` : 'Group conversation'
+  if (selectedChat.value.bridgeStatus === 'contact') {
+    return 'Known contact, live chat sync pending'
   }
-  return 'Live via OrionAI'
+  if (selectedChat.value.isGroup) {
+    const unread = Number(selectedChat.value.unreadCount || 0)
+    return `${selectedChat.value.memberCount || 0} members${unread ? ` · ${unread} unread` : ''}`
+  }
+  return selectedChat.value.unreadCount
+    ? `${selectedChat.value.unreadCount} unread`
+    : 'Direct WhatsApp conversation'
 })
+const selectedChatStatusLine = computed(() => {
+  if (!selectedChat.value) return ''
 
+  const typingUsers = Array.isArray(selectedChat.value.typingUsers)
+    ? selectedChat.value.typingUsers
+    : []
+
+  if (typingUsers.length === 1) {
+    return `${typingUsers[0].displayName || 'Someone'} is typing…`
+  }
+  if (typingUsers.length > 1) {
+    return 'Several people are typing…'
+  }
+  if (selectedChat.value.bridgeStatus === 'contact') {
+    return 'Preparing live chat…'
+  }
+  if (selectedChat.value.isGroup) {
+    return selectedChatSubtitle.value
+  }
+  return 'Live in OrionAI'
+})
+const callPhoneNumber = computed(() => normalizeDigits(selectedChat.value?.phoneNumber || ''))
 
 const filteredChats = computed(() => {
   const query = chatQuery.value.trim().toLowerCase()
-  return chats.value
-    .filter((chat) => {
-      if (activeFilter.value === 'unread' && !Number(chat.unreadCount || 0)) return false
-      if (activeFilter.value === 'groups' && !chat.isGroup) return false
-      if (!query) return true
-      const haystack = [
-        chat.title,
-        chat.name,
-        chat.lastMessagePreview,
-        chat.lastSender,
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase()
-      return haystack.includes(query)
-    })
+  return chats.value.filter((chat) => {
+    if (activeFilter.value === 'unread' && !Number(chat.unreadCount || 0)) return false
+    if (activeFilter.value === 'groups' && !chat.isGroup) return false
+    if (!query) return true
+
+    const haystack = [
+      chat.title,
+      chat.name,
+      chat.lastMessagePreview,
+      chat.lastSender,
+      chat.phoneNumber,
+      chat.fullName,
+      chat.pushName,
+      chat.businessName,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+
+    return haystack.includes(query)
+  })
 })
+
 const visibleMessages = computed(() => {
   const query = messageQuery.value.trim().toLowerCase()
   if (!query) return messages.value
@@ -631,16 +821,85 @@ const visibleMessages = computed(() => {
       message.text,
       message.senderName,
       firstAttachment(message)?.fileName,
+      message.replyPreview?.text,
     ]
       .filter(Boolean)
       .join(' ')
       .toLowerCase()
+
     return haystack.includes(query)
   })
 })
 
+function normalizeDigits(value = '') {
+  return String(value || '').replace(/\D/g, '')
+}
+
+function normalizeTimestamp(value) {
+  if (!value) return 0
+  const numeric = Number(value)
+  if (Number.isFinite(numeric) && numeric > 0) return numeric
+  const parsed = new Date(value).getTime()
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
+}
+
 function currentRoomId(chat = null) {
   return String(chat?.roomId || chat?.id || '')
+}
+
+function normalizeChatIdentityKey(chat = null) {
+  if (!chat) return ''
+
+  const canonical = String(chat.canonicalContactJid || chat.contactJid || '').trim().toLowerCase()
+  if (canonical) return canonical
+
+  const digits = normalizeDigits(chat.phoneNumber || chat.title || chat.name || '')
+  if (digits) return digits
+
+  return currentRoomId(chat)
+}
+
+function chatsMatch(left = null, right = null) {
+  if (!left || !right) return false
+
+  const leftRoomId = currentRoomId(left)
+  const rightRoomId = currentRoomId(right)
+  if (leftRoomId && rightRoomId && leftRoomId === rightRoomId) return true
+
+  const leftKey = normalizeChatIdentityKey(left)
+  const rightKey = normalizeChatIdentityKey(right)
+  return Boolean(leftKey && rightKey && leftKey === rightKey)
+}
+
+function findMatchingChat(collection = [], target = null) {
+  return (collection || []).find((chat) => chatsMatch(chat, target)) || null
+}
+
+function replaceChatInList(nextChat = null) {
+  if (!nextChat?.roomId) return
+
+  let matched = false
+  chats.value = chats.value.map((chat) => {
+    if (!chatsMatch(chat, nextChat)) return chat
+    matched = true
+    return normalizeChatReadState({
+      ...chat,
+      ...nextChat,
+      roomId: nextChat.roomId,
+      id: nextChat.roomId,
+    })
+  })
+
+  if (!matched) {
+    chats.value = [
+      normalizeChatReadState({
+        ...nextChat,
+        roomId: nextChat.roomId,
+        id: nextChat.roomId,
+      }),
+      ...chats.value,
+    ]
+  }
 }
 
 function authMediaUrl(url = '') {
@@ -733,12 +992,12 @@ function scrollToBottom() {
 
 function mergeMessages(existing = [], incoming = []) {
   const byId = new Map()
-  for (const message of [...existing, ...incoming]) {
-    if (!message?.id) continue
+  ;[...(existing || []), ...(incoming || [])].forEach((message) => {
+    if (!message?.id) return
     byId.set(String(message.id), message)
-  }
+  })
   return [...byId.values()].sort(
-    (left, right) => new Date(left.timestamp || 0).getTime() - new Date(right.timestamp || 0).getTime()
+    (left, right) => normalizeTimestamp(left.timestamp) - normalizeTimestamp(right.timestamp)
   )
 }
 
@@ -760,108 +1019,212 @@ function markImageBroken(url = '') {
   }
 }
 
+function setLocalReadCutoff(roomId = '', timestamp = 0) {
+  const key = String(roomId || '').trim()
+  if (!key) return
+  localReadCutoffs.value = {
+    ...localReadCutoffs.value,
+    [key]: normalizeTimestamp(timestamp || Date.now()),
+  }
+}
+
+function clearLocalReadCutoff(roomId = '') {
+  const key = String(roomId || '').trim()
+  if (!key || !(key in localReadCutoffs.value)) return
+  const next = { ...localReadCutoffs.value }
+  delete next[key]
+  localReadCutoffs.value = next
+}
+
+function getLocalReadCutoff(roomId = '') {
+  return Number(localReadCutoffs.value[String(roomId || '').trim()] || 0)
+}
+
+function normalizeChatReadState(chat = null) {
+  if (!chat?.roomId) return chat
+  const roomId = String(chat.roomId)
+  const latestTimestamp = normalizeTimestamp(chat.lastMessageTs || chat.lastMessageAt)
+  const localCutoff = getLocalReadCutoff(roomId)
+  const isOpenRoom = String(selectedChat.value?.roomId || '') === roomId
+
+  if (localCutoff && latestTimestamp > localCutoff) {
+    clearLocalReadCutoff(roomId)
+  }
+
+  if (isOpenRoom || (localCutoff && (!latestTimestamp || latestTimestamp <= localCutoff))) {
+    return {
+      ...chat,
+      unreadCount: 0,
+      highlightCount: 0,
+    }
+  }
+
+  return chat
+}
+
+function buildMediaUrlFromMxc(mxc = '') {
+  const raw = String(mxc || '').trim()
+  return raw ? `/api/whatsapp/media?mxc=${encodeURIComponent(raw)}` : ''
+}
+
 async function loadStatus() {
   const { data } = await api.get('/api/whatsapp/status')
   status.value = data || {
     connected: false,
     loginState: 'disconnected',
     lastError: '',
+    qrImageUrl: null,
+    profile: null,
   }
 }
-function isValidWhatsAppChat(chat) {
-  const title = String(chat?.title || chat?.name || "").toLowerCase();
-  return (
-    chat &&
-    chat.source === "whatsapp" &&
-    !title.includes("signal bridge bot")
-  );
-}
 
-function syncSelectedChatFromList() {
+function updateSelectedChatFromList() {
   if (!selectedChat.value) return
-  const fresh = chats.value.find((chat) => currentRoomId(chat) === currentRoomId(selectedChat.value))
+  const fresh = findMatchingChat(chats.value, selectedChat.value)
   if (fresh) {
     selectedChat.value = fresh
-  } else {
-    selectedChat.value = null
   }
 }
 
 async function loadChats({ silent = false } = {}) {
   if (!silent) loadingChats.value = true
   try {
-    const { data } = await api.get('/api/whatsapp/chats')
+    const { data } = await api.get('/api/whatsapp/chats', {
+      params: { limit: 200 },
+    })
+    chats.value = (Array.isArray(data?.chats) ? data.chats : []).map((chat) => normalizeChatReadState(chat))
 
-    const incomingChats = Array.isArray(data?.chats) ? data.chats : []
-    chats.value = incomingChats.filter(isValidWhatsAppChat)
-
-    if (
-      selectedChat.value &&
-      !chats.value.some((chat) => currentRoomId(chat) === currentRoomId(selectedChat.value))
-    ) {
+    if (selectedChat.value && !findMatchingChat(chats.value, selectedChat.value)) {
       selectedChat.value = null
+      messages.value = []
+      prevBatch.value = null
+      showInfoPanel.value = false
     }
 
-    syncSelectedChatFromList()
+    updateSelectedChatFromList()
   } finally {
-    loadingChats.value = false
+    if (!silent) loadingChats.value = false
   }
 }
 
-async function markCurrentRoomRead(roomId = '', eventId = '') {
+async function markCurrentRoomRead(roomId = selectedChat.value?.roomId || '', eventId = '') {
   const targetRoomId = String(roomId || '').trim()
   if (!targetRoomId) return
-  await api.post(`/api/whatsapp/rooms/${encodeURIComponent(targetRoomId)}/read`, {
-    eventId: eventId || undefined,
-  }).catch(() => {})
+  try {
+    const readTimestamp =
+      normalizeTimestamp(eventId ? messages.value.find((message) => message.id === eventId)?.timestamp : 0) ||
+      normalizeTimestamp(selectedChat.value?.lastMessageTs || selectedChat.value?.lastMessageAt) ||
+      Date.now()
+    setLocalReadCutoff(targetRoomId, readTimestamp)
+
+    await api.post(`/api/whatsapp/rooms/${encodeURIComponent(targetRoomId)}/read`, {
+      eventId: eventId || undefined,
+    })
+
+    chats.value = chats.value.map((chat) =>
+      currentRoomId(chat) === targetRoomId
+        ? normalizeChatReadState({ ...chat, unreadCount: 0, highlightCount: 0 })
+        : chat
+    )
+    if (selectedChat.value?.roomId === targetRoomId) {
+      selectedChat.value = normalizeChatReadState({
+        ...selectedChat.value,
+        unreadCount: 0,
+        highlightCount: 0,
+      })
+    }
+
+    emitCommunicationPriorityRefresh('communication_read', {
+      sourceApp: 'whatsapp',
+      conversationId: targetRoomId,
+    })
+    refreshWhatsAppActions({ silent: true }).catch(() => {})
+  } catch (error) {
+    console.debug('Failed to mark WhatsApp room as read:', error?.message || error)
+  }
 }
 
-async function loadSelectedConversation({ silent = false } = {}) {
+async function loadSelectedConversation({ from = '', append = false, silent = false } = {}) {
   if (!selectedChat.value) return
+
   const roomId = currentRoomId(selectedChat.value)
   if (!roomId) return
 
-  const shouldStick = isNearBottom()
-  if (!silent) loadingMessages.value = true
+  const previousHeight = messagesEl.value?.scrollHeight || 0
+  const shouldStick = !append && isNearBottom()
+  const sameRoomHistory = messages.value.every(
+    (message) => String(message.roomId || roomId) === String(roomId)
+  )
+
+  if (append) loadingOlder.value = true
+  else if (!silent) loadingMessages.value = true
 
   try {
     const { data } = await api.get(`/api/whatsapp/rooms/${encodeURIComponent(roomId)}/messages`, {
-      params: { limit: 90 },
+      params: {
+        limit: append ? 50 : 90,
+        ...(from ? { from } : {}),
+      },
     })
-    const incoming = Array.isArray(data?.messages) ? data.messages : []
-    messages.value = silent ? mergeMessages(messages.value, incoming) : incoming
 
-    const latestMessage = [...messages.value].reverse().find((message) => message?.id) || null
-    if (Number(selectedChat.value?.unreadCount || 0) > 0 || Number(data?.room?.unreadCount || 0) > 0) {
-      await markCurrentRoomRead(roomId, latestMessage?.id || '')
-      chats.value = chats.value.map((chat) =>
-        currentRoomId(chat) === roomId
-          ? { ...chat, unreadCount: 0 }
-          : chat
-      )
-      selectedChat.value = {
-        ...(selectedChat.value || {}),
-        unreadCount: 0,
+    const incoming = Array.isArray(data?.messages) ? data.messages : []
+    prevBatch.value = data?.prevBatch || null
+    selectedChat.value = normalizeChatReadState(data?.room || selectedChat.value)
+    replaceChatInList(selectedChat.value)
+    const resolvedRoomId = currentRoomId(selectedChat.value)
+
+    if (append) {
+      messages.value = mergeMessages(incoming, messages.value)
+      await nextTick()
+      if (messagesEl.value) {
+        const delta = messagesEl.value.scrollHeight - previousHeight
+        messagesEl.value.scrollTop += delta
       }
-      emitCommunicationPriorityRefresh('communication_read', {
-        sourceApp: 'whatsapp',
-        conversationId: roomId,
-      })
-      refreshWhatsAppActions({ silent: true }).catch(() => {})
+    } else {
+      messages.value = sameRoomHistory ? mergeMessages(messages.value, incoming) : incoming
+      await nextTick()
+      if (shouldStick || !silent) scrollToBottom()
     }
 
-    await nextTick()
-    if (shouldStick || !silent) scrollToBottom()
+    const latestVisible = [...messages.value].reverse().find((message) => message?.id) || null
+    const unreadCount = Number(data?.room?.unreadCount || selectedChat.value?.unreadCount || 0)
+    if (selectedChat.value?.bridgeStatus !== 'contact' && unreadCount > 0 && latestVisible?.id) {
+      await markCurrentRoomRead(resolvedRoomId, latestVisible.id)
+    }
   } finally {
-    loadingMessages.value = false
+    if (append) loadingOlder.value = false
+    else if (!silent) loadingMessages.value = false
   }
 }
 
 async function selectChat(chat) {
-  selectedChat.value = chat
+  if (!chat?.roomId) return
+  const unreadBeforeOpen = Number(chat.unreadCount || 0)
+  const switchingRooms = !chatsMatch(selectedChat.value, chat)
+  setLocalReadCutoff(chat.roomId, chat.lastMessageTs || chat.lastMessageAt || Date.now())
+  selectedChat.value = normalizeChatReadState(chat)
+  showProfilePanel.value = false
+  replyTarget.value = null
   searchInChatOpen.value = false
   messageQuery.value = ''
+  composerNotice.value = ''
+  if (switchingRooms) {
+    messages.value = []
+    prevBatch.value = null
+  }
   await loadSelectedConversation()
+  if (unreadBeforeOpen > 0 && selectedChat.value?.bridgeStatus !== 'contact') {
+    const latestVisible = [...messages.value].reverse().find((message) => message?.id) || null
+    if (latestVisible?.id) {
+      await markCurrentRoomRead(currentRoomId(selectedChat.value), latestVisible.id)
+    }
+  }
+}
+
+async function refreshSelectedConversation() {
+  if (!selectedChat.value?.roomId) return
+  await loadSelectedConversation({ silent: false })
+  await loadChats({ silent: true })
 }
 
 async function refreshAll() {
@@ -870,6 +1233,7 @@ async function refreshAll() {
     await loadStatus()
     if (isConnected.value) {
       await loadChats()
+      applyUnreadHints()
       await applyModuleContext()
       if (selectedChat.value) {
         await loadSelectedConversation({ silent: true })
@@ -878,11 +1242,19 @@ async function refreshAll() {
     } else {
       chats.value = []
       messages.value = []
+      prevBatch.value = null
       selectedChat.value = null
+      showProfilePanel.value = false
+      showInfoPanel.value = false
     }
   } finally {
     refreshing.value = false
   }
+}
+
+async function loadOlderMessages() {
+  if (!selectedChat.value?.roomId || !prevBatch.value || loadingOlder.value) return
+  await loadSelectedConversation({ from: prevBatch.value, append: true })
 }
 
 function startPolling() {
@@ -898,7 +1270,53 @@ function startPolling() {
     } catch {
       // Keep the page usable during background polling failures.
     }
-  }, 10000)
+  }, 8000)
+}
+
+function applyUnreadHints() {
+  const entry = unreadByApp.whatsapp
+  const liveItems = Array.isArray(entry?.items) ? entry.items : []
+  if (!liveItems.length || !chats.value.length) return
+
+  const liveMap = new Map(
+    liveItems
+      .filter((item) => item?.chatId || item?.id)
+      .map((item) => [String(item.chatId || item.id), item])
+  )
+
+  chats.value = chats.value.map((chat) => {
+    const live = liveMap.get(String(chat.roomId || chat.id))
+    if (!live) return chat
+
+    const latestLiveTimestamp = normalizeTimestamp(live.latestMessageAt)
+    const localCutoff = getLocalReadCutoff(chat.roomId)
+    const nextBase = {
+      ...chat,
+      lastMessagePreview: live.preview || chat.lastMessagePreview,
+      lastEventId: live.latestMessageId || chat.lastEventId,
+      latestMessageId: live.latestMessageId || chat.latestMessageId,
+      lastMessageAt: live.latestMessageAt || chat.lastMessageAt,
+      lastMessageTs: latestLiveTimestamp || chat.lastMessageTs,
+    }
+
+    if (
+      String(selectedChat.value?.roomId || '') === String(chat.roomId || '') ||
+      (localCutoff && latestLiveTimestamp && latestLiveTimestamp <= localCutoff)
+    ) {
+      return normalizeChatReadState({
+        ...nextBase,
+        unreadCount: 0,
+        highlightCount: 0,
+      })
+    }
+
+    return normalizeChatReadState({
+      ...nextBase,
+      unreadCount: Math.max(Number(chat.unreadCount || 0), Number(live.unread || 0)),
+    })
+  })
+
+  updateSelectedChatFromList()
 }
 
 function stopPolling() {
@@ -920,7 +1338,12 @@ async function applyModuleContext() {
     return
   }
 
-  const chat = chats.value.find((entry) => currentRoomId(entry) === targetRoomId)
+  let chat = chats.value.find((entry) => currentRoomId(entry) === targetRoomId)
+  if (!chat) {
+    await loadChats({ silent: true })
+    chat = chats.value.find((entry) => currentRoomId(entry) === targetRoomId)
+  }
+
   if (chat) {
     await selectChat(chat)
   }
@@ -939,7 +1362,7 @@ async function openWhatsAppActionConversation(state) {
 
   let chat = chats.value.find((entry) => currentRoomId(entry) === targetRoomId)
   if (!chat) {
-    await loadChats()
+    await loadChats({ silent: true })
     chat = chats.value.find((entry) => currentRoomId(entry) === targetRoomId)
   }
   if (chat) await selectChat(chat)
@@ -947,8 +1370,7 @@ async function openWhatsAppActionConversation(state) {
 
 async function draftWhatsAppActionConversation(state) {
   await openWhatsAppActionConversation(state)
-  await nextTick()
-  composerEl.value?.focus()
+  nextTick(() => composerEl.value?.focus())
 }
 
 async function completeWhatsAppAction(state) {
@@ -973,6 +1395,11 @@ async function dismissWhatsAppAction(state) {
   } catch (error) {
     console.error('Failed to dismiss WhatsApp action:', error.message)
   }
+}
+
+function toggleProfilePanel() {
+  if (!isConnected.value) return
+  showProfilePanel.value = !showProfilePanel.value
 }
 
 function clearReply() {
@@ -1060,6 +1487,33 @@ function handleFilePick(event) {
   if (event?.target) event.target.value = ''
 }
 
+// FIX 2: Always re-append the picker to the current DOM node when the panel opens.
+// The v-if destroys the DOM node on close, so we must re-attach every time.
+function ensureEmojiPicker() {
+  if (!emojiPickerEl.value) return
+
+  if (!emojiPicker) {
+    emojiPicker = new Picker({
+      data: emojiData,
+      theme: 'dark',
+      previewPosition: 'none',
+      navPosition: 'bottom',
+      searchPosition: 'sticky',
+      emojiButtonRadius: '14px',
+      emojiButtonSize: 34,
+      emojiSize: 20,
+      onEmojiSelect: (emoji) => insertEmoji(emoji?.native || ''),
+      onClickOutside: () => {
+        emojiPanelOpen.value = false
+      },
+    })
+  }
+
+  // Always clear and re-append so the picker attaches to the freshly rendered DOM node
+  emojiPickerEl.value.innerHTML = ''
+  emojiPickerEl.value.appendChild(emojiPicker)
+}
+
 function toggleEmojiPanel() {
   emojiPanelOpen.value = !emojiPanelOpen.value
   if (emojiPanelOpen.value) gifPanelOpen.value = false
@@ -1071,6 +1525,7 @@ function toggleGifPanel() {
 }
 
 function insertEmoji(emoji) {
+  if (!emoji) return
   composer.value = `${composer.value}${emoji}`
   emojiPanelOpen.value = false
   nextTick(() => composerEl.value?.focus())
@@ -1095,16 +1550,27 @@ function releaseRecordingStream() {
   }
 }
 
+function pickVoiceMimeType() {
+  if (typeof window === 'undefined' || typeof MediaRecorder === 'undefined') return ''
+  const candidates = [
+    'audio/ogg;codecs=opus',
+    'audio/webm;codecs=opus',
+    'audio/ogg',
+    'audio/webm',
+  ]
+  return candidates.find((type) => MediaRecorder.isTypeSupported?.(type)) || ''
+}
+
 async function startVoiceRecording() {
   if (!canRecordVoice.value || recording.value) return
 
   composerNotice.value = ''
   try {
     recordingStream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    const preferredType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-      ? 'audio/webm;codecs=opus'
-      : 'audio/webm'
-    mediaRecorder = new MediaRecorder(recordingStream, { mimeType: preferredType })
+    const preferredType = pickVoiceMimeType()
+    mediaRecorder = preferredType
+      ? new MediaRecorder(recordingStream, { mimeType: preferredType })
+      : new MediaRecorder(recordingStream)
     recordingChunks = []
     recordingMode = 'queue'
 
@@ -1113,7 +1579,7 @@ async function startVoiceRecording() {
     }
 
     mediaRecorder.onstop = () => {
-      const mimeType = mediaRecorder?.mimeType || 'audio/webm'
+      const mimeType = mediaRecorder?.mimeType || preferredType || 'audio/webm'
       const shouldQueue = recordingMode === 'queue'
       const blob = new Blob(recordingChunks, { type: mimeType })
       recording.value = false
@@ -1132,7 +1598,9 @@ async function startVoiceRecording() {
         ...draftAttachments.value,
         createDraftAttachment(file, 'voice'),
       ]
-      composerNotice.value = 'Voice note ready to send.'
+      composerNotice.value = /audio\/webm/i.test(mimeType)
+        ? 'Voice note ready. OrionAI will send WEBM as an audio attachment on WhatsApp.'
+        : 'Voice note ready to send.'
     }
 
     mediaRecorder.start(250)
@@ -1160,10 +1628,131 @@ function cancelVoiceRecording() {
   mediaRecorder.stop()
 }
 
+function toggleVoiceRecording() {
+  if (recording.value) {
+    stopVoiceRecording()
+    return
+  }
+  startVoiceRecording()
+}
+
 function formatRecordingTime(value = 0) {
   const minutes = Math.floor(Number(value || 0) / 60)
   const seconds = Number(value || 0) % 60
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+}
+
+function buildOptimisticMessage({
+  eventId,
+  roomId,
+  text = '',
+  attachment = null,
+  replyToEventId = null,
+  timestamp = Date.now(),
+}) {
+  const attachmentArray = attachment ? [attachment] : []
+  const replySource = replyToEventId
+    ? messages.value.find((message) => String(message.id) === String(replyToEventId))
+    : null
+
+  return {
+    id: String(eventId || `local-${timestamp}`),
+    eventId: String(eventId || `local-${timestamp}`),
+    roomId: String(roomId),
+    senderId: 'me',
+    senderName: 'You',
+    senderAvatarUrl: status.value.profile?.avatarUrl || '',
+    direction: 'outbound',
+    text: String(text || '').trim(),
+    timestamp: new Date(timestamp).toISOString(),
+    timeLabel: formatChatTime(timestamp),
+    attachments: attachmentArray,
+    media: attachment || null,
+    isVoice: attachment?.type === 'audio',
+    reactions: [],
+    replyPreview: replySource
+      ? {
+          eventId: replySource.id,
+          senderName: replySource.senderName || 'You',
+          text: replySource.text || firstAttachment(replySource)?.fileName || 'Attachment',
+        }
+      : null,
+    deleted: false,
+    fromMe: true,
+    deliveryState: 'sent',
+    deliveryLabel: 'Sent',
+    readByCount: 0,
+  }
+}
+
+function applyOptimisticChatState(message = {}) {
+  if (!message?.roomId) return
+  const roomId = String(message.roomId)
+  const timestamp = normalizeTimestamp(message.timestamp || Date.now())
+  const isoTimestamp = new Date(timestamp).toISOString()
+  const preview =
+    message.text ||
+    firstAttachment(message)?.fileName ||
+    (firstAttachment(message)?.type === 'image'
+      ? 'Sent an image'
+      : firstAttachment(message)?.type === 'video'
+        ? 'Sent a video'
+        : firstAttachment(message)?.type === 'audio'
+          ? 'Sent an audio message'
+          : 'Attachment')
+
+  chats.value = chats.value.map((chat) =>
+    chatsMatch(chat, selectedChat.value || { roomId })
+      ? normalizeChatReadState({
+          ...chat,
+          roomId,
+          id: roomId,
+          lastMessagePreview: preview,
+          lastMessageAt: isoTimestamp,
+          lastMessageTs: timestamp,
+          lastSender: 'You',
+          lastEventId: message.id,
+          latestMessageId: message.id,
+          bridgeStatus: 'portal',
+        })
+      : chat
+  )
+
+  if (selectedChat.value && chatsMatch(selectedChat.value, { roomId, ...selectedChat.value })) {
+    selectedChat.value = normalizeChatReadState({
+      ...selectedChat.value,
+      roomId,
+      id: roomId,
+      lastMessagePreview: preview,
+      lastMessageAt: isoTimestamp,
+      lastMessageTs: timestamp,
+      lastSender: 'You',
+      lastEventId: message.id,
+      latestMessageId: message.id,
+      bridgeStatus: 'portal',
+    })
+  }
+}
+
+function appendOptimisticMessages(nextMessages = []) {
+  const validMessages = (nextMessages || []).filter(Boolean)
+  if (!validMessages.length) return
+  messages.value = mergeMessages(messages.value, validMessages)
+  validMessages.forEach((message) => applyOptimisticChatState(message))
+}
+
+function buildAttachmentPayload(draft, contentUri = '') {
+  const mediaUrl = draft.previewUrl || buildMediaUrlFromMxc(contentUri)
+  return {
+    type: draft.previewType === 'file' ? 'file' : draft.previewType,
+    mxc: contentUri || '',
+    url: mediaUrl,
+    thumbnailUrl: '',
+    fileName: draft.fileName,
+    mimeType: draft.mimeType,
+    size: draft.size || 0,
+    duration: 0,
+  }
 }
 
 async function sendMessage() {
@@ -1172,6 +1761,7 @@ async function sendMessage() {
   const roomId = currentRoomId(selectedChat.value)
   const text = composer.value.trim()
   const replyToEventId = replyTarget.value?.id || null
+  const optimisticMessages = []
 
   sending.value = true
   composerNotice.value = ''
@@ -1185,17 +1775,67 @@ async function sendMessage() {
         formData.append('file', draft.file, draft.fileName)
         if (index === 0 && text) formData.append('caption', text)
         if (index === 0 && replyToEventId) formData.append('replyToEventId', replyToEventId)
-        await api.post(
+
+        const { data } = await api.post(
           `/api/whatsapp/rooms/${encodeURIComponent(roomId)}/upload`,
           formData,
           { headers: { 'Content-Type': 'multipart/form-data' } }
         )
+        const resolvedRoomId = String(data?.roomId || roomId)
+        if (selectedChat.value && resolvedRoomId !== currentRoomId(selectedChat.value)) {
+          selectedChat.value = normalizeChatReadState({
+            ...selectedChat.value,
+            roomId: resolvedRoomId,
+            id: resolvedRoomId,
+            bridgeStatus: 'portal',
+          })
+          replaceChatInList(selectedChat.value)
+        }
+
+        optimisticMessages.push(
+          buildOptimisticMessage({
+            eventId: data?.eventId,
+            roomId: resolvedRoomId,
+            attachment: buildAttachmentPayload(draft, data?.contentUri || ''),
+            replyToEventId,
+          })
+        )
+
+        if (index === 0 && text && data?.captionEventId) {
+          optimisticMessages.push(
+            buildOptimisticMessage({
+              eventId: data.captionEventId,
+              roomId: resolvedRoomId,
+              text,
+              replyToEventId,
+            })
+          )
+        }
       }
     } else {
-      await api.post(`/api/whatsapp/rooms/${encodeURIComponent(roomId)}/send`, {
+      const { data } = await api.post(`/api/whatsapp/rooms/${encodeURIComponent(roomId)}/send`, {
         text,
         replyToEventId: replyToEventId || undefined,
       })
+      const resolvedRoomId = String(data?.roomId || roomId)
+      if (selectedChat.value && resolvedRoomId !== currentRoomId(selectedChat.value)) {
+        selectedChat.value = normalizeChatReadState({
+          ...selectedChat.value,
+          roomId: resolvedRoomId,
+          id: resolvedRoomId,
+          bridgeStatus: 'portal',
+        })
+        replaceChatInList(selectedChat.value)
+      }
+
+      optimisticMessages.push(
+        buildOptimisticMessage({
+          eventId: data?.eventId,
+          roomId: resolvedRoomId,
+          text,
+          replyToEventId,
+        })
+      )
     }
 
     composer.value = ''
@@ -1203,17 +1843,22 @@ async function sendMessage() {
     clearDraftAttachments()
     emojiPanelOpen.value = false
     gifPanelOpen.value = false
-
-    await Promise.all([
-      loadChats({ silent: true }),
-      loadSelectedConversation({ silent: true }),
-    ])
+    appendOptimisticMessages(optimisticMessages)
 
     emitCommunicationPriorityRefresh('communication_replied', {
       sourceApp: 'whatsapp',
-      conversationId: roomId,
+      conversationId: currentRoomId(selectedChat.value) || roomId,
     })
-    refreshWhatsAppActions({ silent: true }).catch(() => {})
+
+    await nextTick()
+    scrollToBottom()
+
+    Promise.all([
+      loadChats({ silent: true }),
+      loadSelectedConversation({ silent: true }),
+      refreshWhatsAppActions({ silent: true }),
+    ]).catch(() => {})
+
     nextTick(() => {
       composerEl.value?.focus()
       autoResize({ target: composerEl.value })
@@ -1228,7 +1873,41 @@ async function sendMessage() {
 
 function toggleMessageSearch() {
   searchInChatOpen.value = !searchInChatOpen.value
-  if (!searchInChatOpen.value) messageQuery.value = ''
+  if (!searchInChatOpen.value) {
+    messageQuery.value = ''
+  } else {
+    nextTick(() => {
+      const input = document.querySelector('.wa-chat-search-input')
+      input?.focus()
+    })
+  }
+}
+
+function startVoiceCall() {
+  const phone = callPhoneNumber.value
+  if (!phone) {
+    composerNotice.value = 'Phone number is not available for this contact.'
+    return
+  }
+
+  composerNotice.value = `Opening your system dialer for +${phone}.`
+  try {
+    window.location.href = `tel:+${phone}`
+  } catch {
+    composerNotice.value = 'Your browser could not open the system dialer.'
+  }
+}
+
+function startVideoCall() {
+  const phone = callPhoneNumber.value
+  if (!phone) {
+    composerNotice.value = 'Phone number is not available for this contact.'
+    return
+  }
+
+  composerNotice.value =
+    'mautrix-whatsapp does not expose in-app video calls yet. Opening the contact in WhatsApp instead.'
+  window.open(`https://wa.me/${phone}`, '_blank', 'noopener')
 }
 
 function openLightbox(attachment) {
@@ -1245,6 +1924,30 @@ function downloadAttachment(attachment) {
   window.open(authMediaUrl(attachment.url), '_blank', 'noopener')
 }
 
+// FIX 2: Watch for emoji panel open and always re-attach picker to fresh DOM node
+watch(
+  () => unreadByApp.whatsapp?.items,
+  () => {
+    applyUnreadHints()
+  }
+)
+
+watch(
+  () => emojiPanelOpen.value,
+  async (open) => {
+    if (!open) return
+    await nextTick()
+    ensureEmojiPicker()
+  }
+)
+
+watch(
+  () => store.moduleContext,
+  async () => {
+    await applyModuleContext()
+  }
+)
+
 onMounted(async () => {
   await refreshAll()
   startPolling()
@@ -1259,6 +1962,12 @@ onUnmounted(() => {
   }
   releaseRecordingStream()
   clearDraftAttachments()
+  if (emojiPickerEl.value) {
+    emojiPickerEl.value.innerHTML = ''
+  }
+  emojiPicker = null
+  showInfoPanel.value = false
+  showProfilePanel.value = false
 })
 </script>
 
@@ -1274,13 +1983,29 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
+.wa-shell.is-collapsed {
+  grid-template-columns: 92px minmax(0, 1fr);
+}
+
+/* FIX 3: overflow: hidden ensures the sidebar respects the grid cell height
+   so flex children (chat list) can scroll properly */
 .wa-sidebar {
+  position: relative;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
-  min-width: 0;
+  gap: 10px;
+  padding: 16px 14px 14px;
   border-right: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(7, 12, 22, 0.78);
   backdrop-filter: blur(22px);
+  box-sizing: border-box;
+}
+
+.wa-sidebar.collapsed {
+  padding-inline: 10px;
 }
 
 .wa-sidebar-head,
@@ -1289,8 +2014,6 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 18px 18px 14px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .wa-brand,
@@ -1298,19 +2021,31 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 12px;
-  background: transparent;
+  min-width: 0;
+}
+
+.wa-brand-btn,
+.wa-chat-head-main-btn {
   border: 0;
-  color: inherit;
   padding: 0;
+  background: transparent;
+  color: inherit;
   text-align: left;
+  cursor: pointer;
+}
+
+.wa-brand-btn:disabled {
+  cursor: default;
 }
 
 .wa-brand-icon,
 .wa-chat-head-avatar,
 .wa-chat-avatar,
-.wa-message-avatar {
-  width: 42px;
-  height: 42px;
+.wa-message-avatar,
+.wa-profile-avatar,
+.wa-info-avatar {
+  width: 44px;
+  height: 44px;
   border-radius: 16px;
   background: linear-gradient(145deg, rgba(37, 211, 102, 0.24), rgba(9, 192, 156, 0.22));
   border: 1px solid rgba(95, 255, 170, 0.22);
@@ -1324,38 +2059,58 @@ onUnmounted(() => {
 }
 
 .wa-chat-head-avatar,
-.wa-chat-avatar {
-  border-radius: 18px;
+.wa-chat-avatar,
+.wa-message-avatar,
+.wa-info-avatar {
+  border-radius: 50%;
 }
 
-.wa-brand-icon {
-  font-size: 18px;
-}
-
+.wa-brand-avatar,
 .wa-chat-head-avatar img,
-.wa-chat-avatar img {
+.wa-chat-avatar img,
+.wa-message-avatar img,
+.wa-profile-avatar img,
+.wa-info-avatar img {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
 
+.wa-avatar-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .wa-brand-copy,
-.wa-chat-head-copy {
+.wa-chat-head-copy,
+.wa-profile-copy {
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
 
 .wa-brand-copy strong,
-.wa-chat-head-copy strong {
+.wa-chat-head-copy strong,
+.wa-profile-copy strong,
+.wa-info-card strong {
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 15px;
 }
 
 .wa-brand-copy span,
-.wa-chat-head-copy span {
-  color: var(--text-muted);
-  font-size: 12px;
+.wa-chat-head-copy span,
+.wa-profile-copy span,
+.wa-info-card span {
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .wa-head-actions,
@@ -1365,46 +2120,104 @@ onUnmounted(() => {
   gap: 8px;
 }
 
-.wa-action-panel-wrap {
-  padding: 0 14px 10px;
+.wa-profile-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
 }
 
-.wa-sidebar :deep(.comm-insights),
-.wa-sidebar :deep(.comm-panel) {
-  background: rgba(10, 17, 28, 0.84);
+.wa-info-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.wa-profile-popover {
+  position: absolute;
+  top: 76px;
+  left: 14px;
+  right: 14px;
+  z-index: 4;
+}
+
+.wa-profile-card,
+.wa-info-card,
+.wa-info-section,
+.wa-compose-top,
+.wa-chat-search,
+.wa-quick-panel,
+.wa-action-panel-wrap :deep(.comm-insights),
+.wa-action-panel-wrap :deep(.comm-panel) {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  backdrop-filter: blur(16px);
+}
+
+.wa-profile-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  background: rgba(10, 17, 28, 0.96);
+  border-color: rgba(69, 211, 152, 0.18);
+  box-shadow: 0 28px 48px rgba(3, 8, 20, 0.42);
+}
+
+.wa-profile-hero {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.wa-profile-avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 20px;
+}
+
+.wa-action-panel-wrap {
+  min-height: 0;
 }
 
 .wa-search-wrap {
   position: relative;
-  padding: 0 14px 10px;
+  padding-top: 2px;
+  flex-shrink: 0;
 }
 
 .wa-search-icon {
   position: absolute;
-  left: 26px;
+  left: 12px;
   top: 50%;
   transform: translateY(-50%);
   color: var(--text-muted);
 }
 
 .wa-search,
-.wa-chat-search-input {
+.wa-chat-search-input,
+.wa-compose-input {
   width: 100%;
   box-sizing: border-box;
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(255, 255, 255, 0.05);
   color: var(--text-primary);
-  border-radius: 999px;
   outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
 }
 
-.wa-search {
+.wa-search,
+.wa-chat-search-input {
+  border-radius: 999px;
   padding: 11px 14px 11px 38px;
+  font-size: 12px;
 }
 
 .wa-search:focus,
 .wa-chat-search-input:focus,
-.wa-composer-input:focus {
+.wa-compose-input:focus {
   border-color: rgba(95, 255, 170, 0.36);
   box-shadow: 0 0 0 4px rgba(69, 211, 152, 0.08);
 }
@@ -1412,38 +2225,25 @@ onUnmounted(() => {
 .wa-filter-row {
   display: flex;
   gap: 8px;
-  padding: 0 14px 12px;
   overflow-x: auto;
+  flex-shrink: 0;
 }
 
-.wa-filter-chip,
-.wa-mini-btn,
-.wa-icon-btn,
-.wa-primary-btn,
-.wa-send-btn,
-.wa-gif-card {
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--text-secondary);
-  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+/* FIX 3: chat list must flex: 1 with min-height: 0 to scroll inside sidebar */
+.wa-chat-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 4px;
 }
 
-.wa-filter-chip {
-  padding: 8px 12px;
-  border-radius: 999px;
-  white-space: nowrap;
-  font-size: 12px;
-}
-
-.wa-filter-chip.active {
-  color: #e6fff1;
-  border-color: rgba(95, 255, 170, 0.34);
-  background: rgba(69, 211, 152, 0.14);
-}
-
-.wa-chat-list,
-.wa-thread {
-  overflow: auto;
+.wa-chat-list.compact {
+  align-items: center;
+  gap: 8px;
 }
 
 .wa-chat-row {
@@ -1452,17 +2252,27 @@ onUnmounted(() => {
   gap: 12px;
   align-items: center;
   width: 100%;
-  text-align: left;
-  padding: 12px 16px;
+  padding: 10px 12px;
   border: 0;
+  border-radius: 18px;
   color: inherit;
+  text-align: left;
   background: transparent;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+  flex-shrink: 0;
+}
+
+.wa-chat-row.compact {
+  grid-template-columns: 46px;
+  justify-content: center;
+  width: 56px;
+  padding: 4px 0;
 }
 
 .wa-chat-row:hover,
 .wa-chat-row.active {
   background: linear-gradient(90deg, rgba(69, 211, 152, 0.12), rgba(82, 212, 255, 0.08));
+  box-shadow: inset 0 0 0 1px rgba(95, 255, 170, 0.12);
 }
 
 .wa-chat-copy {
@@ -1498,7 +2308,7 @@ onUnmounted(() => {
 .wa-chat-preview-row p {
   margin: 0;
   font-size: 12px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1543,13 +2353,6 @@ onUnmounted(() => {
   text-align: center;
 }
 
-.wa-list-empty {
-  flex: 1;
-  flex-direction: column;
-  gap: 10px;
-  padding: 28px 22px;
-}
-
 .wa-list-state,
 .wa-thread-empty {
   flex-direction: column;
@@ -1558,6 +2361,19 @@ onUnmounted(() => {
 .wa-list-state {
   flex: 1;
   padding: 12px 0;
+  min-height: 0;
+}
+
+.wa-list-state.compact {
+  align-items: center;
+}
+
+.wa-list-empty {
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  padding: 28px 22px;
+  min-height: 0;
 }
 
 .wa-list-empty strong,
@@ -1569,12 +2385,12 @@ onUnmounted(() => {
 
 .wa-list-empty p,
 .wa-state-copy p,
-.wa-thread-empty p {
+.wa-thread-empty p,
+.wa-info-section p {
   margin: 0;
   color: var(--text-muted);
   font-size: 13px;
   line-height: 1.5;
-  max-width: 420px;
 }
 
 .wa-empty-orb {
@@ -1596,6 +2412,12 @@ onUnmounted(() => {
   grid-template-columns: 42px 1fr;
   gap: 12px;
   padding: 12px 16px;
+  flex-shrink: 0;
+}
+
+.wa-chat-skeleton.compact {
+  grid-template-columns: 42px;
+  justify-content: center;
 }
 
 .wa-chat-skeleton-avatar,
@@ -1634,8 +2456,11 @@ onUnmounted(() => {
 
 .wa-main {
   min-width: 0;
+  min-height: 0;
+  height: 100%;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   background:
     linear-gradient(rgba(5, 11, 19, 0.86), rgba(5, 11, 19, 0.92)),
     radial-gradient(circle at 50% 20%, rgba(69, 211, 152, 0.08), transparent 28%),
@@ -1645,6 +2470,7 @@ onUnmounted(() => {
 .wa-state-panel {
   flex: 1;
   padding: 34px;
+  min-height: 0;
 }
 
 .wa-state-hero {
@@ -1703,7 +2529,8 @@ onUnmounted(() => {
   font-size: 13px;
 }
 
-.wa-state-card-dot {
+.wa-state-card-dot,
+.wa-recording-dot {
   width: 10px;
   height: 10px;
   border-radius: 50%;
@@ -1742,24 +2569,51 @@ onUnmounted(() => {
   border-radius: 24px;
 }
 
-.wa-chat-search {
-  padding: 10px 18px 0;
+.wa-chat-head {
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
 }
 
-.wa-chat-search-input {
-  padding: 11px 14px;
-}
-
-.wa-chat-search-meta {
-  display: inline-flex;
-  margin-top: 8px;
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.wa-thread {
+.wa-chat-layout {
   flex: 1;
-  padding: 20px 26px 10px;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.wa-thread-panel {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.wa-load-earlier {
+  padding: 14px 18px 0;
+  display: flex;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* FIX 1: flex column enables the wa-thread-push spacer to work correctly,
+   pushing messages to the bottom when content is shorter than the viewport */
+.wa-thread-scroll {
+  flex: 1;
+  min-height: 0;
+  padding: 18px 24px 10px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* FIX 1: spacer that collapses when messages overflow, fills space when they don't */
+.wa-thread-push {
+  flex: 1;
+  min-height: 0;
 }
 
 .wa-thread-loading {
@@ -1784,7 +2638,8 @@ onUnmounted(() => {
 .wa-date-divider {
   display: flex;
   justify-content: center;
-  margin: 18px 0 12px;
+  margin: 16px 0 12px;
+  flex-shrink: 0;
 }
 
 .wa-date-divider span {
@@ -1801,6 +2656,7 @@ onUnmounted(() => {
   align-items: flex-end;
   gap: 10px;
   margin-bottom: 14px;
+  flex-shrink: 0;
 }
 
 .wa-message-row.from-me {
@@ -1810,12 +2666,11 @@ onUnmounted(() => {
 .wa-message-avatar {
   width: 34px;
   height: 34px;
-  border-radius: 14px;
   font-size: 11px;
 }
 
 .wa-message-stack {
-  max-width: min(72%, 740px);
+  max-width: min(64%, 560px);
 }
 
 .wa-message-actions {
@@ -1830,17 +2685,6 @@ onUnmounted(() => {
 .wa-message-row:hover .wa-message-actions {
   opacity: 1;
   transform: translateY(0);
-}
-
-.wa-mini-btn {
-  padding: 5px 9px;
-  border-radius: 999px;
-  font-size: 11px;
-}
-
-.wa-mini-btn--danger {
-  color: #ffc9c9;
-  border-color: rgba(255, 138, 138, 0.2);
 }
 
 .wa-bubble {
@@ -1894,10 +2738,20 @@ onUnmounted(() => {
 }
 
 .wa-media-card--image img {
-  max-width: min(360px, 100%);
+  max-width: min(220px, 100%);
+  max-height: 280px;
   display: block;
   border-radius: 18px;
   cursor: zoom-in;
+  object-fit: cover;
+}
+
+.wa-media-card--video video {
+  width: min(260px, 100%);
+  max-height: 260px;
+  border-radius: 18px;
+  display: block;
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .wa-media-card--audio audio {
@@ -1917,8 +2771,7 @@ onUnmounted(() => {
   width: 42px;
   height: 12px;
   border-radius: 999px;
-  background:
-    linear-gradient(90deg, rgba(95, 255, 170, 0.2), rgba(95, 255, 170, 0.9), rgba(95, 255, 170, 0.2));
+  background: linear-gradient(90deg, rgba(95, 255, 170, 0.2), rgba(95, 255, 170, 0.9), rgba(95, 255, 170, 0.2));
 }
 
 .wa-file-card {
@@ -1931,15 +2784,13 @@ onUnmounted(() => {
   background: rgba(255, 255, 255, 0.05);
 }
 
-.wa-file-card strong,
-.wa-draft-copy strong {
+.wa-file-card strong {
   display: block;
   color: var(--text-primary);
   font-size: 13px;
 }
 
-.wa-file-card span,
-.wa-draft-copy span {
+.wa-file-card span {
   display: block;
   color: var(--text-muted);
   font-size: 11px;
@@ -1983,24 +2834,89 @@ onUnmounted(() => {
   font-size: 13px;
 }
 
-.wa-composer-shell {
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(7, 12, 22, 0.78);
-  backdrop-filter: blur(20px);
-  padding: 12px 18px 18px;
+.wa-thread-empty {
+  min-height: 220px;
+  flex-direction: column;
+  gap: 10px;
+  flex-shrink: 0;
 }
 
-.wa-reply-bar,
-.wa-recording-banner,
-.wa-composer-notice,
-.wa-draft-strip,
-.wa-quick-panel {
+.wa-info-panel {
+  width: 320px;
+  flex-shrink: 0;
+  padding: 18px 18px 18px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.wa-info-card,
+.wa-info-section {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wa-info-card {
+  align-items: center;
+  text-align: center;
+}
+
+.wa-info-avatar {
+  width: 74px;
+  height: 74px;
+}
+
+.wa-info-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.wa-info-item {
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.wa-info-item span,
+.wa-info-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.wa-info-item strong {
+  color: var(--text-primary);
+  font-size: 13px;
+  word-break: break-word;
+}
+
+.wa-info-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.wa-compose-top {
   margin-bottom: 12px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.wa-reply-bar,
-.wa-recording-banner,
-.wa-composer-notice {
+.wa-compose-banner,
+.wa-composer-notice,
+.wa-upload-chip {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -2009,37 +2925,80 @@ onUnmounted(() => {
   background: rgba(255, 255, 255, 0.05);
 }
 
-.wa-reply-chip {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
+.wa-compose-banner {
+  justify-content: space-between;
 }
 
-.wa-reply-chip strong {
-  font-size: 12px;
+.wa-compose-banner-label {
   color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
 }
 
-.wa-reply-chip span {
-  color: var(--text-muted);
+.wa-compose-banner-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-secondary);
   font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.wa-record-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #ff5f74;
-  box-shadow: 0 0 0 7px rgba(255, 95, 116, 0.14);
+.wa-compose-banner button,
+.wa-upload-chip button {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.wa-compose-banner--recording .wa-compose-banner-label {
+  color: #ffd7d7;
+}
+
+.wa-upload-strip {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+}
+
+.wa-upload-chip {
+  min-width: 220px;
+}
+
+.wa-upload-thumb {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.wa-upload-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.wa-composer-shell {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(7, 12, 22, 0.78);
+  backdrop-filter: blur(20px);
+  padding: 12px 18px 18px;
+  flex-shrink: 0;
 }
 
 .wa-composer-notice {
   justify-content: space-between;
   color: var(--text-secondary);
   font-size: 12px;
+  margin-bottom: 12px;
 }
 
 .wa-composer-notice button {
@@ -2048,52 +3007,13 @@ onUnmounted(() => {
   color: #b4f0cb;
 }
 
-.wa-draft-strip {
-  display: flex;
-  gap: 10px;
-  overflow-x: auto;
-}
-
-.wa-draft-card {
-  display: grid;
-  grid-template-columns: 52px minmax(120px, 1fr) auto;
-  gap: 10px;
-  align-items: center;
-  min-width: 260px;
-  padding: 10px;
-  border-radius: 18px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.05);
-}
-
-.wa-draft-preview {
-  width: 52px;
-  height: 52px;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.06);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-secondary);
-  overflow: hidden;
-}
-
-.wa-draft-preview img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
 .wa-quick-panel {
-  border-radius: 22px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(13, 20, 33, 0.88);
+  margin-bottom: 12px;
   padding: 12px;
 }
 
-.wa-quick-panel--gif {
-  display: grid;
-  gap: 12px;
+.wa-emoji-mart :deep(em-emoji-picker) {
+  width: 100%;
 }
 
 .wa-panel-head {
@@ -2102,23 +3022,14 @@ onUnmounted(() => {
   gap: 12px;
   color: var(--text-muted);
   font-size: 12px;
+  margin-bottom: 12px;
 }
 
 .wa-panel-head strong {
   color: var(--text-primary);
 }
 
-.wa-emoji-btn {
-  width: 40px;
-  height: 40px;
-  border-radius: 14px;
-  border: 0;
-  background: rgba(255, 255, 255, 0.05);
-  font-size: 20px;
-}
-
-.wa-gif-grid,
-.wa-quick-panel:not(.wa-quick-panel--gif) {
+.wa-gif-grid {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
@@ -2142,29 +3053,49 @@ onUnmounted(() => {
   color: var(--text-muted);
 }
 
-.wa-composer {
+.wa-compose {
   display: grid;
-  grid-template-columns: auto auto auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto auto auto auto minmax(0, 1fr) auto;
   gap: 10px;
   align-items: end;
 }
 
 .wa-icon-btn,
-.wa-send-btn {
-  width: 42px;
-  height: 42px;
-  border-radius: 14px;
+.wa-chip-btn,
+.wa-load-btn,
+.wa-compose-btn,
+.wa-compose-send,
+.wa-mini-btn,
+.wa-filter-chip,
+.wa-primary-btn,
+.wa-gif-card {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.wa-icon-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 .wa-icon-btn--ghost {
-  opacity: 0.6;
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .wa-icon-btn.active,
 .wa-icon-btn:hover:not(:disabled),
+.wa-chip-btn:hover,
+.wa-load-btn:hover,
+.wa-compose-btn:hover,
+.wa-compose-send:hover,
 .wa-mini-btn:hover,
 .wa-filter-chip:hover,
 .wa-primary-btn:hover,
@@ -2176,28 +3107,69 @@ onUnmounted(() => {
 }
 
 .wa-icon-btn:disabled,
-.wa-send-btn:disabled,
-.wa-filter-chip:disabled {
+.wa-compose-btn:disabled,
+.wa-compose-send:disabled,
+.wa-filter-chip:disabled,
+.wa-load-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.wa-composer-input {
+.wa-chip-btn,
+.wa-load-btn {
+  padding: 9px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.wa-filter-chip {
+  padding: 8px 12px;
+  border-radius: 999px;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.wa-filter-chip.active {
+  color: #e6fff1;
+  border-color: rgba(95, 255, 170, 0.34);
+  background: rgba(69, 211, 152, 0.14);
+}
+
+.wa-mini-btn {
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+}
+
+.wa-compose-btn,
+.wa-compose-send {
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wa-compose-btn.is-recording {
+  color: #ffe8e8;
+  border-color: rgba(255, 95, 116, 0.26);
+  background: rgba(255, 95, 116, 0.12);
+}
+
+.wa-compose-input {
   min-height: 46px;
   max-height: 150px;
   resize: none;
   box-sizing: border-box;
   padding: 12px 14px;
   border-radius: 18px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--text-primary);
   font: inherit;
   line-height: 1.45;
-  outline: none;
 }
 
-.wa-send-btn {
+.wa-compose-send {
   background: linear-gradient(145deg, rgba(69, 211, 152, 0.9), rgba(22, 191, 155, 0.92));
   color: #04210f;
   border-color: rgba(95, 255, 170, 0.3);
@@ -2206,7 +3178,6 @@ onUnmounted(() => {
 .wa-primary-btn {
   padding: 11px 16px;
   border-radius: 14px;
-  color: var(--text-primary);
 }
 
 .wa-hidden-input {
@@ -2289,58 +3260,106 @@ onUnmounted(() => {
   }
 }
 
+@media (max-width: 1280px) {
+  .wa-info-panel {
+    width: 280px;
+  }
+}
+
 @media (max-width: 1180px) {
   .wa-shell {
     grid-template-columns: 320px minmax(0, 1fr);
+  }
+
+  .wa-shell.is-collapsed {
+    grid-template-columns: 88px minmax(0, 1fr);
   }
 
   .wa-state-hero {
     grid-template-columns: 1fr;
     justify-items: center;
   }
+
+  .wa-message-stack {
+    max-width: min(76%, 520px);
+  }
+}
+
+@media (max-width: 980px) {
+  .wa-chat-layout {
+    flex-direction: column;
+  }
+
+  .wa-info-panel {
+    width: auto;
+    padding: 0 18px 14px;
+  }
 }
 
 @media (max-width: 860px) {
-  .wa-shell {
+  .wa-shell,
+  .wa-shell.is-collapsed {
     grid-template-columns: 1fr;
   }
 
-  .wa-sidebar {
-    min-height: 42vh;
+  .wa-sidebar,
+  .wa-sidebar.collapsed {
+    min-height: 40vh;
+    height: auto;
     border-right: 0;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    padding-inline: 14px;
   }
 
-  .wa-composer {
-    grid-template-columns: auto auto auto minmax(0, 1fr) auto auto;
+  .wa-chat-row.compact {
+    grid-template-columns: 46px minmax(0, 1fr) auto;
+    width: 100%;
+    padding: 10px 12px;
+  }
+
+  .wa-chat-list.compact {
+    align-items: stretch;
+    gap: 2px;
+  }
+
+  .wa-brand-copy {
+    display: flex;
+  }
+
+  .wa-search-wrap,
+  .wa-filter-row,
+  .wa-action-panel-wrap {
+    display: block;
   }
 }
 
 @media (max-width: 640px) {
-  .wa-chat-row {
+  .wa-chat-head,
+  .wa-composer-shell,
+  .wa-thread-scroll {
     padding-inline: 12px;
   }
 
-  .wa-thread {
-    padding: 16px 14px 8px;
+  .wa-thread-scroll {
+    padding-top: 14px;
   }
 
-  .wa-composer-shell {
-    padding: 12px 12px 16px;
-  }
-
-  .wa-composer {
+  .wa-compose {
     grid-template-columns: auto auto auto minmax(0, 1fr);
   }
 
-  .wa-composer-input {
+  .wa-compose-input {
     grid-column: 1 / -1;
     order: 2;
   }
 
-  .wa-send-btn,
-  .wa-icon-btn:last-child {
+  .wa-compose-send,
+  .wa-compose-btn:last-child {
     order: 3;
+  }
+
+  .wa-message-stack {
+    max-width: min(86%, 100%);
   }
 }
 </style>

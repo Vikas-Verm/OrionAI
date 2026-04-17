@@ -982,7 +982,6 @@ const signalStatus = ref(null)
 const signalQrModalOpen = ref(false)
 const whatsappStatus = ref(null)
 const whatsappQrModalOpen = ref(false)
-const whatsappQrResolvedSrc = ref('')
 const whatsappQrStableSrc = ref('')
 let signalPollTimer = null
 let whatsappPollTimer = null
@@ -1242,7 +1241,10 @@ function syncWhatsAppPolling() {
 
 function syncStableQrSrc(currentValueRef, nextUrl) {
     const normalizedNext = String(nextUrl || '').trim()
-    if (!normalizedNext) return
+    if (!normalizedNext) {
+        currentValueRef.value = ''
+        return
+    }
     if (currentValueRef.value === normalizedNext) return
     currentValueRef.value = normalizedNext
 }
@@ -1430,7 +1432,6 @@ async function saveIntegration(type) {
 onUnmounted(() => {
     stopWhatsAppPolling()
     stopSignalPolling()
-    revokeObjectUrlIfNeeded(whatsappQrResolvedSrc.value)
 })
 
 async function testConnection(type) {
@@ -1520,43 +1521,6 @@ async function refreshSignalStatus() {
     }
 }
 
-async function loadProtectedImage(url) {
-    const normalizedUrl = String(url || '').trim()
-    if (!normalizedUrl) return ''
-
-    if (normalizedUrl.startsWith('data:')) {
-        return normalizedUrl
-    }
-
-    try {
-        const { data } = await api.get(normalizedUrl, {
-            responseType: 'blob',
-        })
-        return URL.createObjectURL(data)
-    } catch (err) {
-        console.error('Failed to load protected image:', normalizedUrl, err?.message || err)
-        return ''
-    }
-}
-
-function revokeObjectUrlIfNeeded(url) {
-    if (typeof url === 'string' && url.startsWith('blob:')) {
-        URL.revokeObjectURL(url)
-    }
-}
-
-async function syncWhatsAppQrImage() {
-    const nextUrl = String(whatsappStatus.value?.qrImageUrl || '').trim()
-
-    revokeObjectUrlIfNeeded(whatsappQrResolvedSrc.value)
-    whatsappQrResolvedSrc.value = ''
-
-    if (!nextUrl) return
-
-    whatsappQrResolvedSrc.value = await loadProtectedImage(nextUrl)
-}
-
-
 async function refreshWhatsAppStatus() {
     const previousConnected = Boolean(whatsappStatus.value?.connected)
     const previousState = String(whatsappStatus.value?.loginState || '').trim()
@@ -1577,8 +1541,6 @@ async function refreshWhatsAppStatus() {
             qrImageUrl: null,
         }
     }
-
-    await syncWhatsAppQrImage()
 
     applyWhatsAppIntegrationState(whatsappStatus.value)
 
@@ -1711,7 +1673,6 @@ async function startWhatsAppConnect(options = {}) {
         if (data.integration) connected.whatsapp = data.integration
         whatsappStatus.value = data.status || null
         syncStableQrSrc(whatsappQrStableSrc, data?.status?.qrImageUrl)
-        await syncWhatsAppQrImage()
 
         applyWhatsAppIntegrationState(whatsappStatus.value)
         syncWhatsAppPolling()
