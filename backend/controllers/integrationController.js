@@ -12,10 +12,19 @@ const { toolRazorpayGetPayouts } = require("../services/tools/toolRazorpay");
 const {
   buildSignalClientIntegration,
 } = require("../services/signalMatrixService");
+const {
+  buildWhatsAppClientIntegration,
+} = require("../services/whatsappMatrixService");
 
 function sanitizeIntegrationForClient(integration) {
-  if (!integration || integration.type !== "signal") return integration;
-  return buildSignalClientIntegration(integration);
+  if (!integration) return integration;
+  if (integration.type === "signal") {
+    return buildSignalClientIntegration(integration);
+  }
+  if (integration.type === "whatsapp") {
+    return buildWhatsAppClientIntegration(integration);
+  }
+  return integration;
 }
 
 // ── GET /api/integrations ─────────────────────────────────
@@ -37,6 +46,18 @@ async function saveIntegration(req, res) {
         connectSignalIntegration,
       } = require("../services/signalMatrixService");
       const result = await connectSignalIntegration(userId, payload || {});
+      return res.json({
+        ok: true,
+        integration: result.clientIntegration || result.integration || null,
+        status: result.status || null,
+      });
+    }
+
+    if (type === "whatsapp") {
+      const {
+        connectWhatsAppIntegration,
+      } = require("../services/whatsappMatrixService");
+      const result = await connectWhatsAppIntegration(userId, payload || {});
       return res.json({
         ok: true,
         integration: result.clientIntegration || result.integration || null,
@@ -74,6 +95,12 @@ async function deleteIntegration(req, res) {
     const { invalidateSignalCache } = require("../services/signalMatrixService");
     invalidateSignalCache(userId);
   }
+  if (type === "whatsapp") {
+    const {
+      invalidateWhatsAppCache,
+    } = require("../services/whatsappMatrixService");
+    invalidateWhatsAppCache(userId);
+  }
   res.json({ ok: true });
 }
 
@@ -99,6 +126,16 @@ async function testIntegration(req, res) {
       });
       ok = true;
       message = "Test message sent to Slack!";
+    } else if (type === "google_docs") {
+      const { listRecentDocuments } = require("../services/googleDocsService");
+      await listRecentDocuments(userId, { limit: 1 });
+      ok = true;
+      message = "Google Docs connection verified!";
+    } else if (type === "google_sheets") {
+      const { listRecentSpreadsheets } = require("../services/googleSheetsService");
+      await listRecentSpreadsheets(userId, { limit: 1 });
+      ok = true;
+      message = "Google Sheets connection verified!";
     } else if (type === "notion") {
       const { apiToken, databaseId } = integration.notion;
       if (!apiToken) throw new Error("API token is required");
@@ -157,6 +194,20 @@ async function testIntegration(req, res) {
       }
       ok = true;
       message = `Signal connected${
+        status.profile?.displayName ? ` for ${status.profile.displayName}` : ""
+      }${
+        status.roomCount
+          ? ` with ${status.roomCount} chat${status.roomCount === 1 ? "" : "s"}`
+          : ""
+      }.`;
+    } else if (type === "whatsapp") {
+      const { getWhatsAppStatus } = require("../services/whatsappMatrixService");
+      const status = await getWhatsAppStatus(userId);
+      if (!status.connected) {
+        throw new Error(status.lastError || status.error || "WhatsApp not connected");
+      }
+      ok = true;
+      message = `WhatsApp connected${
         status.profile?.displayName ? ` for ${status.profile.displayName}` : ""
       }${
         status.roomCount

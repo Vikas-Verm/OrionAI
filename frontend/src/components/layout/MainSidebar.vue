@@ -357,11 +357,23 @@ const SignalIcon = ic(s => h('svg', { width: s, height: s, viewBox: '0 0 24 24',
   h('path', { d: 'M12 5.2a6.8 6.8 0 0 0-6.8 6.8c0 1.34.39 2.6 1.07 3.65l-.7 2.92 3-.67A6.8 6.8 0 1 0 12 5.2Z', fill: 'white', opacity: 0.92 }),
   h('path', { d: 'M12 7.35a4.65 4.65 0 1 0 0 9.3 4.65 4.65 0 0 0 0-9.3Zm0 8.1a3.45 3.45 0 1 1 0-6.9 3.45 3.45 0 0 1 0 6.9Z', fill: '#3b82f6' }),
 ]))
-const WhatsAppIcon = ic(s => h('svg', { width: s, height: s, viewBox: '0 0 24 24', fill: '#25D366' }, [
-  h('path', { d: 'M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51a4.7 4.7 0 00-.57-.01c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347M12 0C5.373 0 0 5.373 0 12c0 2.117.549 4.103 1.509 5.831L0 24l6.335-1.652A11.94 11.94 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0z' }),
+const WhatsAppIcon = ic(s => h('svg', { width: s, height: s, viewBox: '0 0 24 24', fill: 'none' }, [
+  h('circle', { cx: 12, cy: 12, r: 12, fill: '#25D366' }),
+  h('path', { d: 'M6.6 8.4A2.4 2.4 0 0 1 9 6h5.8a2.4 2.4 0 0 1 2.4 2.4v3.55a2.4 2.4 0 0 1-2.4 2.4h-3.2l-2.7 2.15a.5.5 0 0 1-.82-.39v-1.76H9a2.4 2.4 0 0 1-2.4-2.4V8.4Z', fill: 'white', opacity: 0.95 }),
+  h('path', { d: 'M10.1 9.8h3.8M10.1 12h2.35', stroke: '#25D366', 'stroke-width': 1.5, 'stroke-linecap': 'round' }),
 ]))
 const GmailIcon = ic(s => h('svg', { width: s, height: s, viewBox: '0 0 24 24' }, [
   h('path', { fill: '#EA4335', d: 'M24 5.457v13.909c0 .904-.732 1.636-1.636 1.636h-3.819V11.73L12 16.64l-6.545-4.91v9.273H1.636A1.636 1.636 0 010 19.366V5.457c0-2.023 2.309-3.178 3.927-1.964L5.455 4.64 12 9.548l6.545-4.91 1.528-1.145C21.69 2.28 24 3.434 24 5.457z' }),
+]))
+const GoogleDocsIcon = ic(s => h('svg', { width: s, height: s, viewBox: '0 0 24 24', fill: 'none' }, [
+  h('path', { d: 'M8 2h7l5 5v13a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Z', fill: '#4285F4' }),
+  h('path', { d: 'M15 2v5h5', fill: '#8AB4F8' }),
+  h('path', { d: 'M10 11h6M10 14h6M10 17h4', stroke: 'white', 'stroke-width': 1.6, 'stroke-linecap': 'round' }),
+]))
+const GoogleSheetsIcon = ic(s => h('svg', { width: s, height: s, viewBox: '0 0 24 24', fill: 'none' }, [
+  h('path', { d: 'M8 2h7l5 5v13a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Z', fill: '#34A853' }),
+  h('path', { d: 'M15 2v5h5', fill: '#7BD48F' }),
+  h('path', { d: 'M9.5 11.25h7M9.5 14.5h7M9.5 17.75h7M12.25 9v10M15.5 9v10', stroke: 'white', 'stroke-width': 1.4, 'stroke-linecap': 'round' }),
 ]))
 const SlackIcon = ic(s => h('svg', { width: s, height: s, viewBox: '0 0 24 24' }, [
   h('path', { fill: '#E01E5A', d: 'M5.042 15.165a2.528 2.528 0 01-2.52 2.523A2.528 2.528 0 010 15.165a2.527 2.527 0 012.522-2.52h2.52v2.52zM6.313 15.165a2.527 2.527 0 012.521-2.52 2.527 2.527 0 012.521 2.52v6.313A2.528 2.528 0 018.834 24a2.528 2.528 0 01-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 01-2.521-2.52A2.528 2.528 0 018.834 0a2.527 2.527 0 012.521 2.522v2.52H8.834zM8.834 6.313a2.527 2.527 0 012.521 2.521 2.527 2.527 0 01-2.521 2.521H2.522A2.528 2.528 0 010 8.834a2.528 2.528 0 012.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 012.522-2.521A2.528 2.528 0 0124 8.834a2.527 2.527 0 01-2.522 2.521h-2.522V8.834zM17.688 8.834a2.527 2.527 0 01-2.521 2.521 2.527 2.527 0 01-2.521-2.521V2.522A2.528 2.528 0 0115.167 0a2.528 2.528 0 012.521 2.522v6.312zM15.167 18.956a2.528 2.528 0 012.521 2.522A2.528 2.528 0 0115.167 24a2.527 2.527 0 01-2.521-2.522v-2.522h2.521zM15.167 17.688a2.527 2.527 0 01-2.521-2.523 2.527 2.527 0 012.521-2.52h6.313A2.528 2.528 0 0124 15.165a2.528 2.528 0 01-2.522 2.523h-6.311z' }),
@@ -392,6 +404,8 @@ const ALL_APPS = [
   { id: 'signal', label: 'Signal', color: '#3b82f6', icon: SignalIcon, apiType: 'signal' },
   { id: 'whatsapp', label: 'WhatsApp', color: '#25D366', icon: WhatsAppIcon, apiType: 'whatsapp' },
   { id: 'gmail', label: 'Gmail', color: '#EA4335', icon: GmailIcon, apiType: 'gmail' },
+  { id: 'google_docs', label: 'Google Docs', color: '#4285F4', icon: GoogleDocsIcon, apiType: 'google_docs' },
+  { id: 'google_sheets', label: 'Google Sheets', color: '#34A853', icon: GoogleSheetsIcon, apiType: 'google_sheets' },
   { id: 'slack', label: 'Slack', color: '#E01E5A', icon: SlackIcon, apiType: 'slack' },
   { id: 'jira', label: 'Jira', color: '#0052CC', icon: JiraIcon, apiType: 'jira' },
   { id: 'google_calendar', label: 'Calendar', color: '#1a73e8', icon: CalendarIcon, apiType: 'google_calendar' },
@@ -475,6 +489,8 @@ function applyConnectedIntegrations(integrations = []) {
 function hasConnectedState(int) {
   if (!int?.type) return false
   if (int.type === 'gmail') return Boolean(int.gmail?.refreshToken || int.gmail?.accessToken || int.gmail?.userEmail)
+  if (int.type === 'google_docs') return Boolean(int.googleDocs?.refreshToken || int.googleDocs?.accessToken || int.googleDocs?.userEmail)
+  if (int.type === 'google_sheets') return Boolean(int.googleSheets?.refreshToken || int.googleSheets?.accessToken || int.googleSheets?.userEmail)
   if (int.type === 'google_calendar') return Boolean(int.googleCalendar?.refreshToken || int.googleCalendar?.accessToken || int.googleCalendar?.userEmail)
   if (int.type === 'slack') return Boolean(int.slack?.userToken || int.slack?.webhookUrl)
   if (int.type === 'telegram') return Boolean(int.telegram?.sessionString)
@@ -484,7 +500,12 @@ function hasConnectedState(int) {
       (int.signal?.accessToken && int.signal?.homeserverUrl && int.signal?.mxid)
     )
   }
-  if (int.type === 'whatsapp') return Boolean(int.whatsapp?.connected)
+  if (int.type === 'whatsapp') {
+    return Boolean(
+      (int.matrix?.loginState === 'connected' && int.connected !== false) ||
+      int.whatsapp?.connected
+    )
+  }
   if (int.type === 'jira') return Boolean(int.jira?.domain && int.jira?.email && int.jira?.apiToken)
   if (int.type === 'database') return Boolean(int.database?.connectionString || int.database?.filePath)
   if (int.type === 'notion') return Boolean(int.notion?.apiToken)
@@ -672,7 +693,7 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
 
 .sidebar-brand-name {
   font-family: var(--font-brand);
-  font-size: 18px;
+  font-size: 17px;
   letter-spacing: -0.45px;
   color: var(--text-primary);
   min-width: 0;

@@ -11,6 +11,7 @@
 # https://element-hq.github.io/synapse/latest/usage/configuration/config_documentation.html
 app_service_config_files:
   - /data/appservices/mautrix-signal-registration.yaml
+  - /data/appservices/mautrix-whatsapp-registration.yaml
 server_name: "orion.local"
 pid_file: /data/homeserver.pid
 listeners:

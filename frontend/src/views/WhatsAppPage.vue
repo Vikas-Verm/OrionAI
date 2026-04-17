@@ -1,670 +1,3365 @@
 <template>
-    <div class="wa-page">
-  
-      <!-- ── Sidebar: chat list ────────────────────────────────────────── -->
-      <div class="wa-sidebar">
-        <div class="wa-sidebar-head">
-          <div class="wa-sidebar-title">
-            <span style="font-size:18px">💬</span>
-            WhatsApp
+  <div class="wa-shell" :class="{ 'is-collapsed': sidebarCollapsed }">
+    <aside class="wa-sidebar" :class="{ collapsed: sidebarCollapsed }">
+      <div class="wa-sidebar-head">
+        <button
+          class="wa-brand wa-brand-btn"
+          type="button"
+          :disabled="!sidebarCollapsed && !isConnected"
+          :title="sidebarCollapsed ? 'Expand sidebar' : (isConnected ? 'View your WhatsApp profile' : 'WhatsApp not connected')"
+          @click="sidebarCollapsed ? (sidebarCollapsed = false) : toggleProfilePanel()"
+        >
+          <div class="wa-brand-icon">
+            <img
+              v-if="status.profile?.avatarUrl && !isImageBroken(status.profile.avatarUrl)"
+              :src="authMediaUrl(status.profile.avatarUrl)"
+              :alt="status.profile?.displayName || 'WhatsApp profile'"
+              class="wa-brand-avatar"
+              @error="markImageBroken(status.profile?.avatarUrl)"
+            />
+            <span v-else class="wa-avatar-fallback">
+              {{ avatarInitials(status.profile?.displayName || status.profile?.phone || 'WhatsApp') }}
+            </span>
           </div>
-          <button class="wa-icon-btn" title="Refresh" @click="loadChats">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M23 4v6h-6M1 20v-6h6"/>
-              <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+          <div v-if="!sidebarCollapsed" class="wa-brand-copy">
+            <strong>WhatsApp</strong>
+            <span>{{ isConnected ? (status.profile?.displayName || 'Connected') : 'Connect WhatsApp in Integrations' }}</span>
+          </div>
+        </button>
+
+        <div v-if="!sidebarCollapsed" class="wa-head-actions">
+          <button class="wa-icon-btn" :disabled="refreshing" title="Refresh WhatsApp" @click="refreshAll">
+            <span v-if="refreshing" class="wa-spinner wa-spinner--sm"></span>
+            <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M23 4v6h-6" />
+              <path d="M1 20v-6h6" />
+              <path d="M3.5 9a9 9 0 0 1 14.9-3.4L23 10" />
+              <path d="M1 14l4.6 4.4A9 9 0 0 0 20.5 15" />
+            </svg>
+          </button>
+          <button
+            class="wa-icon-btn"
+            title="Collapse sidebar"
+            @click="sidebarCollapsed = true"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="m15 18-6-6 6-6" />
             </svg>
           </button>
         </div>
-  
-        <!-- Search -->
-        <div class="wa-search-wrap">
-          <input v-model="search" class="wa-search" placeholder="Search chats..." />
-        </div>
+      </div>
 
-        <div v-if="isConnected" class="wa-action-panel-wrap">
-          <CommunicationInsightsWidget
-            title="OrionAI insights"
-            panel-title="Reply / Action Required"
-            :panel-headline="'WhatsApp chats OrionAI believes are truly waiting on you'"
-            :summary-text="whatsappActionSummary"
-            :counts="whatsappActionCounts"
-            :items="whatsappActionItems"
-            :groups="whatsappActionGroups"
-            :loading="whatsappActionsLoading"
-            :selected-conversation-id="selectedChat?.id"
-            @refresh="refreshWhatsAppActions"
-            @open="openWhatsAppActionConversation"
-            @draft="draftWhatsAppActionConversation"
-            @done="completeWhatsAppAction"
-            @snooze="snoozeWhatsAppAction"
-            @dismiss="dismissWhatsAppAction"
-          />
-        </div>
-  
-        <!-- Loading -->
-        <div v-if="loading" class="wa-loading">
-          <span class="wa-spinner"></span> Loading chats...
-        </div>
-  
-        <!-- Not connected -->
-        <div v-else-if="!isConnected" class="wa-not-connected">
-          <div style="font-size:32px;margin-bottom:8px">💬</div>
-          <div style="font-weight:600;margin-bottom:4px">WhatsApp not connected</div>
-          <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Connect WhatsApp in Integrations</div>
-          <button class="wa-connect-btn" @click="$emit('close')">Go to Integrations</button>
-        </div>
-  
-        <!-- Chat list -->
-        <div v-else class="wa-chat-list">
-          <div
-            v-for="chat in filteredChats"
-            :key="chat.id"
-            class="wa-chat-item"
-            :class="{ active: selectedChat?.id === chat.id }"
-            @click="selectChat(chat)"
-          >
-            <div class="wa-chat-avatar" :class="{ 'is-group': chat.isGroup }">
-              {{ avatarInitials(chat.name) }}
+      <div v-if="showProfilePanel && isConnected && !sidebarCollapsed" class="wa-profile-popover">
+        <div class="wa-profile-card">
+          <div class="wa-profile-actions">
+            <button class="wa-icon-btn wa-icon-btn--ghost" title="Close profile" @click="showProfilePanel = false">
+              <span aria-hidden="true">✕</span>
+            </button>
+          </div>
+
+          <div class="wa-profile-hero">
+            <div class="wa-profile-avatar">
+              <img
+                v-if="status.profile?.avatarUrl && !isImageBroken(status.profile.avatarUrl)"
+                :src="authMediaUrl(status.profile.avatarUrl)"
+                :alt="status.profile?.displayName || 'WhatsApp profile'"
+                @error="markImageBroken(status.profile?.avatarUrl)"
+              />
+              <span v-else>{{ avatarInitials(status.profile?.displayName || status.profile?.phone || 'WhatsApp') }}</span>
             </div>
-            <div class="wa-chat-info">
-              <div class="wa-chat-name-row">
-                <div class="wa-chat-name">{{ chat.name }}</div>
-              </div>
-              <div class="wa-chat-preview">{{ chat.lastMessage || '...' }}</div>
-            </div>
-            <div class="wa-chat-meta">
-              <span v-if="chat.unread > 0" class="wa-unread-badge">{{ chat.unread }}</span>
-              <span v-if="chat.pinned" class="wa-pin">📌</span>
+            <div class="wa-profile-copy">
+              <strong>{{ status.profile?.displayName || 'WhatsApp profile' }}</strong>
+              <span>{{ status.profile?.phone || 'Linked on this device' }}</span>
             </div>
           </div>
-          <div v-if="filteredChats.length === 0" class="wa-empty-chats">
-            No chats found
+
+          <div class="wa-info-grid">
+            <div class="wa-info-item">
+              <span>Chats</span>
+              <strong>{{ chats.length }}</strong>
+            </div>
+            <div class="wa-info-item">
+              <span>Unread</span>
+              <strong>{{ status.unreadCount || 0 }}</strong>
+            </div>
+            <div class="wa-info-item">
+              <span>Status</span>
+              <strong>{{ status.loginState || 'connected' }}</strong>
+            </div>
+            <div class="wa-info-item">
+              <span>Linked</span>
+              <strong>{{ status.connectedAt ? formatDateDivider(status.connectedAt) : 'Now' }}</strong>
+            </div>
+          </div>
+
+          <div class="wa-info-actions">
+            <button class="wa-chip-btn" @click="showProfilePanel = false">Close</button>
+            <button class="wa-chip-btn" @click="emit('open-integrations')">Open Integrations</button>
           </div>
         </div>
       </div>
-  
-      <!-- ── Main: messages ────────────────────────────────────────────── -->
-      <div class="wa-main">
-  
-        <!-- No chat selected -->
-        <div v-if="!selectedChat" class="wa-no-chat">
-          <div style="font-size:48px;margin-bottom:12px">💬</div>
-          <div style="font-size:16px;font-weight:600;margin-bottom:6px">Select a chat</div>
-          <div style="font-size:13px;color:var(--text-muted)">Choose from your conversations</div>
+
+      <div v-if="isConnected && !sidebarCollapsed" class="wa-action-panel-wrap">
+        <CommunicationInsightsWidget
+          title="OrionAI insights"
+          panel-title="Reply / Action Required"
+          :panel-headline="'WhatsApp chats OrionAI believes are truly waiting on you'"
+          :summary-text="whatsappActionSummary"
+          :counts="whatsappActionCounts"
+          :items="whatsappActionItems"
+          :groups="whatsappActionGroups"
+          :loading="whatsappActionsLoading"
+          :selected-conversation-id="selectedChat?.roomId || selectedChat?.id"
+          @refresh="refreshWhatsAppActions"
+          @open="openWhatsAppActionConversation"
+          @draft="draftWhatsAppActionConversation"
+          @done="completeWhatsAppAction"
+          @snooze="snoozeWhatsAppAction"
+          @dismiss="dismissWhatsAppAction"
+        />
+      </div>
+
+      <div v-if="!sidebarCollapsed" class="wa-search-wrap">
+        <svg class="wa-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="7" />
+          <path d="m20 20-3.5-3.5" />
+        </svg>
+        <input
+          v-model="chatQuery"
+          class="wa-search"
+          :disabled="!isConnected"
+          type="search"
+          placeholder="Search chats"
+        />
+      </div>
+
+      <div v-if="!sidebarCollapsed" class="wa-filter-row">
+        <button
+          v-for="filter in CHAT_FILTERS"
+          :key="filter.id"
+          class="wa-filter-chip"
+          :class="{ active: activeFilter === filter.id }"
+          :disabled="!isConnected"
+          @click="activeFilter = filter.id"
+        >
+          {{ filter.label }}
+        </button>
+      </div>
+
+      <div v-if="loadingChats && chats.length === 0" class="wa-list-state" :class="{ compact: sidebarCollapsed }">
+        <div v-for="n in sidebarCollapsed ? 6 : 5" :key="`chat-skeleton-${n}`" class="wa-chat-skeleton" :class="{ compact: sidebarCollapsed }">
+          <span class="wa-chat-skeleton-avatar"></span>
+          <span v-if="!sidebarCollapsed" class="wa-chat-skeleton-lines">
+            <span></span>
+            <span></span>
+          </span>
         </div>
-  
-        <!-- Chat view -->
-        <template v-else>
-  
-          <!-- Chat header -->
-          <div class="wa-chat-head">
-            <div class="wa-chat-head-avatar">{{ avatarInitials(selectedChat.name) }}</div>
-            <div class="wa-chat-head-info">
-              <div class="wa-chat-head-name">{{ selectedChat.name }}</div>
-              <div class="wa-chat-head-sub">{{ selectedChat.isGroup ? 'Group' : 'Contact' }}</div>
-            </div>
-            <button class="wa-icon-btn" @click="loadMessages(selectedChat)">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M23 4v6h-6M1 20v-6h6"/>
-                <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
-              </svg>
-            </button>
+      </div>
+
+      <div v-else-if="!isConnected && !sidebarCollapsed" class="wa-list-empty">
+        <div class="wa-empty-orb">
+          <span>QR</span>
+        </div>
+        <strong>
+          {{ status.loginState === 'pending_qr' ? 'Finish linking WhatsApp' : 'WhatsApp is not connected' }}
+        </strong>
+        <p v-if="status.loginState === 'pending_qr'">
+          OrionAI already requested a QR code. Open Integrations to scan it from Linked Devices on your phone.
+        </p>
+        <p v-else>
+          {{ status.lastError || 'Connect WhatsApp in Integrations to load your live chats inside OrionAI.' }}
+        </p>
+        <button class="wa-primary-btn" @click="emit('open-integrations')">Open Integrations</button>
+      </div>
+
+      <div v-else-if="filteredChats.length === 0 && !sidebarCollapsed" class="wa-list-empty">
+        <div class="wa-empty-orb">
+          <span>0</span>
+        </div>
+        <strong>{{ chatQuery ? 'No chats match your search' : 'No chats synced yet' }}</strong>
+        <p>
+          {{ chatQuery
+            ? 'Try a different name, message preview, or filter.'
+            : 'If you just linked WhatsApp, give OrionAI a moment to finish syncing your rooms.' }}
+        </p>
+      </div>
+
+      <div v-else class="wa-chat-list" :class="{ compact: sidebarCollapsed }">
+        <button
+          v-for="chat in filteredChats"
+          :key="chat.roomId || chat.id"
+          class="wa-chat-row"
+          :class="{ active: currentRoomId(chat) === currentRoomId(selectedChat), compact: sidebarCollapsed }"
+          :title="chat.title || chat.name"
+          @click="selectChat(chat)"
+        >
+          <div class="wa-chat-avatar">
+            <img
+              v-if="chat.avatarUrl && !isImageBroken(chat.avatarUrl)"
+              :src="authMediaUrl(chat.avatarUrl)"
+              :alt="chat.title || chat.name"
+              @error="markImageBroken(chat.avatarUrl)"
+            />
+            <span v-else>{{ avatarInitials(chat.title || chat.name) }}</span>
           </div>
-  
-          <!-- Messages -->
-          <div class="wa-messages" ref="messagesEl">
-            <div v-if="msgsLoading" class="wa-loading" style="margin:auto">
-              <span class="wa-spinner"></span>
+
+          <template v-if="!sidebarCollapsed">
+            <div class="wa-chat-copy">
+              <div class="wa-chat-title-row">
+                <strong>{{ chat.title || chat.name }}</strong>
+                <span>{{ formatChatTime(chat.lastMessageAt) }}</span>
+              </div>
+              <div class="wa-chat-preview-row">
+                <p>{{ chat.lastMessagePreview || (chat.bridgeStatus === 'contact' ? 'Known contact, chat sync pending' : 'No messages yet') }}</p>
+                <span v-if="chat.isPinned" class="wa-chat-flag" title="Pinned">Pin</span>
+                <span v-if="chat.isMuted" class="wa-chat-flag" title="Muted">Mute</span>
+                <span v-if="chat.bridgeStatus === 'contact'" class="wa-chat-flag" title="Bridge contact">Contact</span>
+              </div>
             </div>
-            <template v-else>
-              <div
-                v-for="msg in messages"
-                :key="msg.id"
-                class="wa-msg"
-                :class="msg.fromMe ? 'wa-msg-out' : 'wa-msg-in'"
-              >
-                <div class="wa-msg-bubble">
-                  <div v-if="!msg.fromMe && selectedChat.isGroup" class="wa-msg-sender">
-                    {{ msg.from }}
-                  </div>
-                  <div class="wa-msg-text">{{ msg.message }}</div>
-                  <div class="wa-msg-time">{{ msg.timestamp }}</div>
+
+            <div class="wa-chat-meta">
+              <span v-if="chat.unreadCount" class="wa-chat-badge">{{ chat.unreadCount }}</span>
+              <span class="wa-chat-kind">{{ chat.bridgeStatus === 'contact' ? 'Known' : (chat.isGroup ? 'Group' : 'Direct') }}</span>
+            </div>
+          </template>
+        </button>
+      </div>
+    </aside>
+
+    <main class="wa-main">
+      <template v-if="!isConnected">
+        <section class="wa-state-panel">
+          <div class="wa-state-hero">
+            <div class="wa-state-illustration">
+              <span class="wa-state-circle wa-state-circle--one"></span>
+              <span class="wa-state-circle wa-state-circle--two"></span>
+              <div class="wa-state-card">
+                <div class="wa-state-card-head">
+                  <span class="wa-state-card-dot"></span>
+                  <span>{{ status.loginState === 'pending_qr' ? 'Awaiting QR scan' : 'Bridge offline' }}</span>
+                </div>
+                <div v-if="status.loginState === 'pending_qr' && status.qrImageUrl" class="wa-state-qr">
+                  <img :src="status.qrImageUrl" alt="WhatsApp QR code" />
+                </div>
+                <div v-else class="wa-state-lines">
+                  <span></span>
+                  <span></span>
+                  <span></span>
                 </div>
               </div>
-              <div v-if="messages.length === 0" class="wa-no-msgs">
-                No messages yet
-              </div>
-            </template>
+            </div>
+            <div class="wa-state-copy">
+              <strong>
+                {{ status.loginState === 'pending_qr' ? 'Scan the QR in Integrations' : 'WhatsApp lives here once linked' }}
+              </strong>
+              <p>
+                {{ status.loginState === 'pending_qr'
+                  ? 'OrionAI already provisioned your hidden Matrix session and asked the bridge for a QR. Open Integrations to finish linking from Linked Devices.'
+                  : status.lastError || 'Chats and messages stay live in Matrix and are proxied into OrionAI without storing personal history in MongoDB.' }}
+              </p>
+              <button class="wa-primary-btn" @click="emit('open-integrations')">Go to Integrations</button>
+            </div>
           </div>
-  
-          <!-- Reply box -->
-          <div class="wa-reply-bar">
-            <textarea
-              v-model="replyText"
-              class="wa-reply-input"
-              placeholder="Type a message..."
-              rows="1"
-              @keydown.enter.exact.prevent="sendMessage"
-              @input="autoResize"
-              ref="replyInput"
-            ></textarea>
-            <button
-              class="wa-send-btn"
-              :disabled="!replyText.trim() || sending"
-              @click="sendMessage"
-            >
-              <span v-if="sending" class="wa-spinner-sm"></span>
-              <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="22" y1="2" x2="11" y2="13"/>
-                <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+        </section>
+      </template>
+
+      <template v-else-if="!selectedChat">
+        <section class="wa-state-panel">
+          <div class="wa-state-hero">
+            <div class="wa-state-copy">
+              <strong>Your WhatsApp workspace is ready</strong>
+              <p>Select a chat on the left to read messages, send files, record a voice note, and reply without leaving OrionAI.</p>
+            </div>
+          </div>
+        </section>
+      </template>
+
+      <template v-else>
+        <header class="wa-chat-head">
+          <button class="wa-chat-head-main wa-chat-head-main-btn" type="button" @click="showInfoPanel = !showInfoPanel">
+            <div class="wa-chat-head-avatar">
+              <img
+                v-if="selectedChat.avatarUrl && !isImageBroken(selectedChat.avatarUrl)"
+                :src="authMediaUrl(selectedChat.avatarUrl)"
+                :alt="selectedChat.title || selectedChat.name"
+                @error="markImageBroken(selectedChat.avatarUrl)"
+              />
+              <span v-else>{{ avatarInitials(selectedChat.title || selectedChat.name) }}</span>
+            </div>
+            <div class="wa-chat-head-copy">
+              <strong>{{ selectedChat.title || selectedChat.name }}</strong>
+              <span>{{ selectedChatStatusLine }}</span>
+            </div>
+          </button>
+
+          <div class="wa-chat-actions">
+            <button class="wa-icon-btn" :class="{ active: searchInChatOpen }" title="Search in chat" @click="toggleMessageSearch">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="7" />
+                <path d="m20 20-3.5-3.5" />
+              </svg>
+            </button>
+            <button class="wa-icon-btn" title="Call contact" @click="startVoiceCall">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.79 19.79 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72l.33 2.53a2 2 0 0 1-.57 1.72l-1.1 1.1a16 16 0 0 0 6 6l1.1-1.1a2 2 0 0 1 1.72-.57l2.53.33A2 2 0 0 1 22 16.92Z" />
+              </svg>
+            </button>
+            <button class="wa-icon-btn" title="Open WhatsApp video handoff" @click="startVideoCall">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="m22 8-6 4 6 4V8Z" />
+                <rect x="2" y="6" width="14" height="12" rx="2" />
+              </svg>
+            </button>
+            <button class="wa-icon-btn" :disabled="loadingMessages" title="Refresh chat" @click="refreshSelectedConversation">
+              <span v-if="loadingMessages" class="wa-spinner wa-spinner--sm"></span>
+              <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M23 4v6h-6" />
+                <path d="M1 20v-6h6" />
+                <path d="M3.5 9a9 9 0 0 1 14.9-3.4L23 10" />
+                <path d="M1 14l4.6 4.4A9 9 0 0 0 20.5 15" />
               </svg>
             </button>
           </div>
-        </template>
+        </header>
+
+        <div v-if="searchInChatOpen" class="wa-chat-search">
+          <input
+            v-model="messageQuery"
+            class="wa-chat-search-input"
+            type="search"
+            placeholder="Search this conversation"
+          />
+        </div>
+
+        <div class="wa-chat-layout">
+          <section class="wa-thread-panel">
+            <div v-if="prevBatch" class="wa-load-earlier">
+              <button class="wa-load-btn" :disabled="loadingOlder" @click="loadOlderMessages">
+                <span v-if="loadingOlder" class="wa-spinner wa-spinner--sm"></span>
+                <span v-else>Load earlier messages</span>
+              </button>
+            </div>
+
+            <div ref="messagesEl" class="wa-thread-scroll">
+              <!-- FIX 1: spacer pushes messages to the bottom when content is short -->
+              <div class="wa-thread-push"></div>
+
+              <div v-if="loadingMessages && messages.length === 0" class="wa-thread-loading">
+                <div v-for="n in 4" :key="`msg-skeleton-${n}`" class="wa-msg-skeleton" :class="{ 'is-out': n % 2 === 0 }">
+                  <span></span>
+                </div>
+              </div>
+
+              <template v-else>
+                <template v-for="(message, index) in visibleMessages" :key="message.id">
+                  <div v-if="showDateDivider(message, index)" class="wa-date-divider">
+                    <span>{{ formatDateDivider(message.timestamp) }}</span>
+                  </div>
+
+                  <div class="wa-message-row" :class="{ 'from-me': message.direction === 'outbound' || message.fromMe }">
+                    <div v-if="message.direction !== 'outbound' && !message.fromMe" class="wa-message-avatar">
+                      <img
+                        v-if="message.senderAvatarUrl && !isImageBroken(message.senderAvatarUrl)"
+                        :src="authMediaUrl(message.senderAvatarUrl)"
+                        :alt="message.senderName"
+                        @error="markImageBroken(message.senderAvatarUrl)"
+                      />
+                      <span v-else>{{ avatarInitials(message.senderName) }}</span>
+                    </div>
+
+                    <div class="wa-message-stack">
+                      <div class="wa-message-actions">
+                        <button class="wa-mini-btn" @click="startReply(message)">Reply</button>
+                        <button class="wa-mini-btn" @click="copyMessage(message)">Copy</button>
+                        <button
+                          v-if="firstAttachment(message)?.url"
+                          class="wa-mini-btn"
+                          @click="downloadAttachment(firstAttachment(message))"
+                        >
+                          Download
+                        </button>
+                      </div>
+
+                      <div class="wa-bubble" :class="{ deleted: message.deleted }">
+                        <div v-if="message.direction !== 'outbound' && !message.fromMe && selectedChat.isGroup" class="wa-message-sender">
+                          {{ message.senderName }}
+                        </div>
+
+                        <div v-if="message.replyPreview" class="wa-reply-preview">
+                          <strong>{{ message.replyPreview.senderName }}</strong>
+                          <span>{{ message.replyPreview.text }}</span>
+                        </div>
+
+                        <div v-if="message.deleted" class="wa-deleted-copy">Message deleted</div>
+
+                        <template v-else>
+                          <div
+                            v-if="firstAttachment(message)?.type === 'image' && firstAttachment(message)?.url && !isImageBroken(firstAttachment(message)?.url)"
+                            class="wa-media-card wa-media-card--image"
+                          >
+                            <img
+                              :src="authMediaUrl(firstAttachment(message).url)"
+                              :alt="firstAttachment(message).fileName"
+                              @click="openLightbox(firstAttachment(message))"
+                              @error="markImageBroken(firstAttachment(message).url)"
+                            />
+                          </div>
+
+                          <div v-else-if="firstAttachment(message)?.type === 'video'" class="wa-media-card wa-media-card--video">
+                            <video :src="authMediaUrl(firstAttachment(message).url)" controls preload="metadata"></video>
+                          </div>
+
+                          <div v-else-if="firstAttachment(message)?.type === 'audio'" class="wa-media-card wa-media-card--audio">
+                            <div class="wa-audio-pill">
+                              <span class="wa-audio-wave"></span>
+                              <span>{{ message.isVoice ? 'Voice message' : 'Audio attachment' }}</span>
+                            </div>
+                            <audio :src="authMediaUrl(firstAttachment(message).url)" controls preload="metadata"></audio>
+                          </div>
+
+                          <div v-else-if="firstAttachment(message)?.url" class="wa-media-card">
+                            <div class="wa-file-card">
+                              <div>
+                                <strong>{{ firstAttachment(message).fileName }}</strong>
+                                <span>{{ readableSize(firstAttachment(message).size) || firstAttachment(message).mimeType || 'Attachment' }}</span>
+                              </div>
+                              <button class="wa-mini-btn" @click="downloadAttachment(firstAttachment(message))">Open</button>
+                            </div>
+                          </div>
+
+                          <p v-if="message.text" class="wa-message-text">{{ message.text }}</p>
+
+                          <div v-if="message.reactions?.length" class="wa-reaction-row">
+                            <span v-for="reaction in message.reactions" :key="`${message.id}-${reaction.key}`" class="wa-reaction-pill">
+                              {{ reaction.key }} {{ reaction.count }}
+                            </span>
+                          </div>
+                        </template>
+
+                        <div class="wa-message-meta">
+                          <span>{{ message.timeLabel || formatChatTime(message.timestamp) }}</span>
+                          <span v-if="message.direction === 'outbound' || message.fromMe">
+                            {{ message.deliveryLabel || 'Sent' }}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+
+                <div v-if="visibleMessages.length === 0" class="wa-thread-empty">
+                  <strong>{{ messageQuery ? 'No messages match your search' : (selectedChat.bridgeStatus === 'contact' ? 'Chat sync pending' : 'No messages yet') }}</strong>
+                  <p>
+                    {{ messageQuery
+                      ? 'Try a different search phrase.'
+                      : selectedChat.bridgeStatus === 'contact'
+                        ? 'OrionAI is creating the live chat room for this contact. You can keep typing while it finishes.'
+                        : 'Start the conversation from OrionAI.' }}
+                  </p>
+                </div>
+              </template>
+            </div>
+          </section>
+
+          <aside v-if="showInfoPanel" class="wa-info-panel">
+            <div class="wa-info-head">
+              <strong>Contact info</strong>
+              <button class="wa-icon-btn wa-icon-btn--ghost" title="Close profile" @click="showInfoPanel = false">
+                <span aria-hidden="true">✕</span>
+              </button>
+            </div>
+
+            <div class="wa-info-card">
+              <div class="wa-info-avatar">
+                <img
+                  v-if="selectedChat.avatarUrl && !isImageBroken(selectedChat.avatarUrl)"
+                  :src="authMediaUrl(selectedChat.avatarUrl)"
+                  :alt="selectedChat.title || selectedChat.name"
+                  @error="markImageBroken(selectedChat.avatarUrl)"
+                />
+                <span v-else>{{ avatarInitials(selectedChat.title || selectedChat.name) }}</span>
+              </div>
+              <strong>{{ selectedChat.title || selectedChat.name }}</strong>
+              <span>{{ selectedChatSubtitle }}</span>
+            </div>
+
+            <div class="wa-info-grid">
+              <div class="wa-info-item">
+                <span>Unread</span>
+                <strong>{{ selectedChat.unreadCount || 0 }}</strong>
+              </div>
+              <div class="wa-info-item">
+                <span>Type</span>
+                <strong>{{ selectedChat.isGroup ? 'Group' : 'Direct' }}</strong>
+              </div>
+              <div class="wa-info-item">
+                <span>Phone</span>
+                <strong>{{ selectedChat.phoneNumber || 'Not available' }}</strong>
+              </div>
+              <div class="wa-info-item">
+                <span>Bridge</span>
+                <strong>{{ selectedChat.bridgeStatus === 'contact' ? 'Contact only' : 'Live portal' }}</strong>
+              </div>
+            </div>
+
+            <div class="wa-info-section">
+              <span class="wa-info-label">Profile</span>
+              <p>{{ selectedChat.fullName || selectedChat.title || selectedChat.name }}</p>
+              <p v-if="selectedChat.pushName && selectedChat.pushName !== selectedChat.fullName">Push name: {{ selectedChat.pushName }}</p>
+              <p v-if="selectedChat.businessName">Business: {{ selectedChat.businessName }}</p>
+              <p v-if="selectedChat.contactMxid">Ghost: <code>{{ selectedChat.contactMxid }}</code></p>
+              <p v-if="selectedChat.contactJid">JID: <code>{{ selectedChat.contactJid }}</code></p>
+            </div>
+
+            <div class="wa-info-section">
+              <span class="wa-info-label">Sync</span>
+              <p>{{ selectedChat.bridgeStatus === 'contact' ? 'The bridge has the contact metadata, but the live Matrix portal has not finished syncing yet.' : 'Live WhatsApp chats are loaded on demand and proxied through Matrix without storing message history in MongoDB.' }}</p>
+            </div>
+
+            <div class="wa-info-actions">
+              <button class="wa-chip-btn" @click="markCurrentRoomRead()">Mark read</button>
+              <button class="wa-chip-btn" @click="refreshSelectedConversation">Refresh chat</button>
+            </div>
+          </aside>
+        </div>
+
+        <section class="wa-composer-shell">
+          <div v-if="replyTarget || draftAttachments.length || recording" class="wa-compose-top">
+            <div v-if="replyTarget" class="wa-compose-banner">
+              <span class="wa-compose-banner-label">Replying to {{ replyTarget.senderName }}</span>
+              <span class="wa-compose-banner-text">{{ replyTarget.text || firstAttachment(replyTarget)?.fileName || 'Attachment' }}</span>
+              <button @click="clearReply">✕</button>
+            </div>
+
+            <div v-if="draftAttachments.length" class="wa-upload-strip">
+              <div v-for="(draft, index) in draftAttachments" :key="draft.id" class="wa-upload-chip">
+                <div class="wa-upload-thumb">
+                  <img v-if="draft.previewType === 'image' && draft.previewUrl" :src="draft.previewUrl" :alt="draft.fileName" />
+                  <span v-else>{{ draft.previewLabel }}</span>
+                </div>
+                <span>{{ draft.fileName }}</span>
+                <button @click="removeDraftAttachment(index)">✕</button>
+              </div>
+            </div>
+
+            <div v-if="recording" class="wa-compose-banner wa-compose-banner--recording">
+              <span class="wa-compose-banner-label">Recording voice note</span>
+              <span class="wa-compose-banner-text">{{ formatRecordingTime(recordingSeconds) }}</span>
+              <button @click="stopVoiceRecording()">Stop</button>
+            </div>
+          </div>
+
+          <div v-if="composerNotice" class="wa-composer-notice">
+            <span>{{ composerNotice }}</span>
+            <button type="button" @click="composerNotice = ''">Dismiss</button>
+          </div>
+
+          <div v-if="emojiPanelOpen" class="wa-quick-panel">
+            <div ref="emojiPickerEl" class="wa-emoji-mart"></div>
+          </div>
+
+          <div v-if="gifPanelOpen" class="wa-quick-panel wa-quick-panel--gif">
+            <div class="wa-panel-head">
+              <strong>GIF picker</strong>
+              <span>Provider hookup is still pending</span>
+            </div>
+            <div class="wa-gif-grid">
+              <button
+                v-for="prompt in GIF_PLACEHOLDERS"
+                :key="prompt"
+                class="wa-gif-card"
+                @click="useGifPlaceholder(prompt)"
+              >
+                <span>{{ prompt }}</span>
+                <small>Pick a provider later</small>
+              </button>
+            </div>
+          </div>
+
+          <footer class="wa-compose">
+            <input ref="fileInputEl" class="wa-hidden-input" type="file" multiple @change="handleFilePick" />
+            <button class="wa-compose-btn" :disabled="composerDisabled" title="Attach files" @click="openAttachmentPicker">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="m21.44 11.05-8.49 8.49a5.5 5.5 0 0 1-7.78-7.78l9.2-9.19a3.5 3.5 0 1 1 4.95 4.95l-9.19 9.2a1.5 1.5 0 0 1-2.12-2.12l8.49-8.48" />
+              </svg>
+            </button>
+            <button class="wa-compose-btn wa-emoji-btn" :disabled="composerDisabled" title="Emoji picker" @click="toggleEmojiPanel">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M8 14s1.5 2 4 2 4-2 4-2" />
+                <path d="M9 9h.01" />
+                <path d="M15 9h.01" />
+              </svg>
+            </button>
+            <button class="wa-compose-btn" :disabled="composerDisabled" title="GIF picker" @click="toggleGifPanel">GIF</button>
+            <button
+              class="wa-compose-btn"
+              :class="{ 'is-recording': recording }"
+              :disabled="composerDisabled || !canRecordVoice"
+              :title="recording ? 'Stop voice recording' : 'Record a voice message'"
+              @click="toggleVoiceRecording"
+            >
+              <span v-if="recording" class="wa-recording-dot"></span>
+              <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 1 1-6 0V6a3 3 0 0 1 3-3Z" />
+                <path d="M19 11a7 7 0 0 1-14 0" />
+                <path d="M12 18v3" />
+              </svg>
+            </button>
+
+            <textarea
+              ref="composerEl"
+              v-model="composer"
+              class="wa-compose-input"
+              rows="1"
+              :disabled="!selectedChat || !isConnected || sending"
+              :placeholder="composerPlaceholder"
+              @keydown.enter.exact.prevent="sendMessage"
+              @input="autoResize"
+            ></textarea>
+
+            <button class="wa-compose-send" :disabled="sendDisabled" @click="sendMessage">
+              <span v-if="sending" class="wa-spinner wa-spinner--sm"></span>
+              <svg v-else width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="22" y1="2" x2="11" y2="13" />
+                <polygon points="22 2 15 22 11 13 2 9 22 2" />
+              </svg>
+            </button>
+          </footer>
+        </section>
+      </template>
+    </main>
+
+    <transition name="wa-fade">
+      <div v-if="lightbox" class="wa-lightbox" @click="closeLightbox">
+        <div class="wa-lightbox-card" @click.stop>
+          <img :src="authMediaUrl(lightbox.url)" :alt="lightbox.fileName" />
+          <div class="wa-lightbox-actions">
+            <span>{{ lightbox.fileName }}</span>
+            <button class="wa-mini-btn" @click="downloadAttachment(lightbox)">Download</button>
+          </div>
+        </div>
       </div>
-  
-    </div>
-  </template>
-  
-  <script setup>
-  import { ref, computed, nextTick, onMounted } from 'vue'
-  import api from '../services/api'
-  import CommunicationInsightsWidget from '../components/communications/CommunicationInsightsWidget.vue'
-  import { useCommunicationActions, emitCommunicationPriorityRefresh } from '../composables/useCommunicationActions'
-  import { store, setModuleContext } from '../stores/app'
-  
-//   const emit = defineEmits(['close'])
-  
-  const chats       = ref([])
-  const search      = ref('')
-  const selectedChat = ref(null)
-  const messages    = ref([])
-  const replyText   = ref('')
-  const loading     = ref(false)
-  const msgsLoading = ref(false)
-  const sending     = ref(false)
-  const isConnected = ref(false)
-  const messagesEl  = ref(null)
-  const replyInput  = ref(null)
-  const {
-    actionableItems: whatsappActionItems,
-    counts: whatsappActionCounts,
-    groups: whatsappActionGroups,
-    loading: whatsappActionsLoading,
-    summaryText: whatsappActionSummary,
-    refresh: refreshWhatsAppActions,
-    recordAction: recordWhatsAppAction,
-  } = useCommunicationActions('whatsapp')
-  
-  const filteredChats = computed(() =>
-    search.value
-      ? chats.value.filter(c => c.name.toLowerCase().includes(search.value.toLowerCase()))
-      : chats.value
+    </transition>
+  </div>
+</template>
+
+<script setup>
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import emojiData from '@emoji-mart/data'
+import { Picker, init as initEmojiMart } from 'emoji-mart'
+import api, { API_BASE } from '../services/api'
+import CommunicationInsightsWidget from '../components/communications/CommunicationInsightsWidget.vue'
+import { useCommunicationActions, emitCommunicationPriorityRefresh } from '../composables/useCommunicationActions'
+import { useWebSocket } from '../composables/useWebSocket'
+import { store, setModuleContext } from '../stores/app'
+
+initEmojiMart({ data: emojiData })
+
+const emit = defineEmits(['close', 'open-integrations'])
+
+const CHAT_FILTERS = [
+  { id: 'all', label: 'All' },
+  { id: 'unread', label: 'Unread' },
+  { id: 'groups', label: 'Groups' },
+]
+const GIF_PLACEHOLDERS = ['Celebrate', 'Thanks', 'Follow up', 'On my way', 'Approved']
+
+const status = ref({
+  connected: false,
+  loginState: 'disconnected',
+  lastError: '',
+  qrImageUrl: null,
+  roomCount: 0,
+  unreadCount: 0,
+  profile: null,
+  connectedAt: null,
+})
+const chats = ref([])
+const messages = ref([])
+const prevBatch = ref(null)
+const selectedChat = ref(null)
+const chatQuery = ref('')
+const messageQuery = ref('')
+const activeFilter = ref('all')
+const composer = ref('')
+const replyTarget = ref(null)
+const loadingChats = ref(false)
+const loadingMessages = ref(false)
+const loadingOlder = ref(false)
+const refreshing = ref(false)
+const sending = ref(false)
+const emojiPanelOpen = ref(false)
+const gifPanelOpen = ref(false)
+const searchInChatOpen = ref(false)
+const composerNotice = ref('')
+const draftAttachments = ref([])
+const recording = ref(false)
+const recordingSeconds = ref(0)
+const lightbox = ref(null)
+const failedImages = ref({})
+const showInfoPanel = ref(false)
+const showProfilePanel = ref(false)
+const sidebarCollapsed = ref(false)
+const localReadCutoffs = ref({})
+
+const fileInputEl = ref(null)
+const messagesEl = ref(null)
+const composerEl = ref(null)
+const emojiPickerEl = ref(null)
+
+let refreshTimer = null
+let mediaRecorder = null
+let recordingStream = null
+let recordingTimer = null
+let recordingChunks = []
+let recordingMode = 'queue'
+let emojiPicker = null
+
+const {
+  actionableItems: whatsappActionItems,
+  counts: whatsappActionCounts,
+  groups: whatsappActionGroups,
+  loading: whatsappActionsLoading,
+  summaryText: whatsappActionSummary,
+  refresh: refreshWhatsAppActions,
+  recordAction: recordWhatsAppAction,
+} = useCommunicationActions('whatsapp')
+const { unreadByApp } = useWebSocket()
+
+const isConnected = computed(() =>
+  Boolean(status.value.connected || status.value.loginState === 'connected')
+)
+const canRecordVoice = computed(() =>
+  typeof window !== 'undefined' &&
+  typeof MediaRecorder !== 'undefined' &&
+  Boolean(navigator?.mediaDevices?.getUserMedia)
+)
+const composerDisabled = computed(() =>
+  !selectedChat.value ||
+  !isConnected.value ||
+  sending.value
+)
+const sendDisabled = computed(() => {
+  if (composerDisabled.value) return true
+  return !composer.value.trim() && draftAttachments.value.length === 0
+})
+const composerPlaceholder = computed(() => {
+  if (!selectedChat.value) return 'Choose a conversation first'
+  if (!isConnected.value) return 'Connect WhatsApp in Integrations first'
+  if (selectedChat.value.bridgeStatus === 'contact') {
+    return 'Type a message and OrionAI will prepare the live chat room'
+  }
+  return draftAttachments.value.length ? 'Add a caption or send the files…' : 'Type a message'
+})
+const selectedChatSubtitle = computed(() => {
+  if (!selectedChat.value) return ''
+  if (selectedChat.value.bridgeStatus === 'contact') {
+    return 'Known contact, live chat sync pending'
+  }
+  if (selectedChat.value.isGroup) {
+    const unread = Number(selectedChat.value.unreadCount || 0)
+    return `${selectedChat.value.memberCount || 0} members${unread ? ` · ${unread} unread` : ''}`
+  }
+  return selectedChat.value.unreadCount
+    ? `${selectedChat.value.unreadCount} unread`
+    : 'Direct WhatsApp conversation'
+})
+const selectedChatStatusLine = computed(() => {
+  if (!selectedChat.value) return ''
+
+  const typingUsers = Array.isArray(selectedChat.value.typingUsers)
+    ? selectedChat.value.typingUsers
+    : []
+
+  if (typingUsers.length === 1) {
+    return `${typingUsers[0].displayName || 'Someone'} is typing…`
+  }
+  if (typingUsers.length > 1) {
+    return 'Several people are typing…'
+  }
+  if (selectedChat.value.bridgeStatus === 'contact') {
+    return 'Preparing live chat…'
+  }
+  if (selectedChat.value.isGroup) {
+    return selectedChatSubtitle.value
+  }
+  return 'Live in OrionAI'
+})
+const callPhoneNumber = computed(() => normalizeDigits(selectedChat.value?.phoneNumber || ''))
+
+const filteredChats = computed(() => {
+  const query = chatQuery.value.trim().toLowerCase()
+  return chats.value.filter((chat) => {
+    if (activeFilter.value === 'unread' && !Number(chat.unreadCount || 0)) return false
+    if (activeFilter.value === 'groups' && !chat.isGroup) return false
+    if (!query) return true
+
+    const haystack = [
+      chat.title,
+      chat.name,
+      chat.lastMessagePreview,
+      chat.lastSender,
+      chat.phoneNumber,
+      chat.fullName,
+      chat.pushName,
+      chat.businessName,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+
+    return haystack.includes(query)
+  })
+})
+
+const visibleMessages = computed(() => {
+  const query = messageQuery.value.trim().toLowerCase()
+  if (!query) return messages.value
+  return messages.value.filter((message) => {
+    const haystack = [
+      message.text,
+      message.senderName,
+      firstAttachment(message)?.fileName,
+      message.replyPreview?.text,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+
+    return haystack.includes(query)
+  })
+})
+
+function normalizeDigits(value = '') {
+  return String(value || '').replace(/\D/g, '')
+}
+
+function normalizeTimestamp(value) {
+  if (!value) return 0
+  const numeric = Number(value)
+  if (Number.isFinite(numeric) && numeric > 0) return numeric
+  const parsed = new Date(value).getTime()
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
+}
+
+function currentRoomId(chat = null) {
+  return String(chat?.roomId || chat?.id || '')
+}
+
+function normalizeChatIdentityKey(chat = null) {
+  if (!chat) return ''
+
+  const canonical = String(chat.canonicalContactJid || chat.contactJid || '').trim().toLowerCase()
+  if (canonical) return canonical
+
+  const digits = normalizeDigits(chat.phoneNumber || chat.title || chat.name || '')
+  if (digits) return digits
+
+  return currentRoomId(chat)
+}
+
+function chatsMatch(left = null, right = null) {
+  if (!left || !right) return false
+
+  const leftRoomId = currentRoomId(left)
+  const rightRoomId = currentRoomId(right)
+  if (leftRoomId && rightRoomId && leftRoomId === rightRoomId) return true
+
+  const leftKey = normalizeChatIdentityKey(left)
+  const rightKey = normalizeChatIdentityKey(right)
+  return Boolean(leftKey && rightKey && leftKey === rightKey)
+}
+
+function findMatchingChat(collection = [], target = null) {
+  return (collection || []).find((chat) => chatsMatch(chat, target)) || null
+}
+
+function replaceChatInList(nextChat = null) {
+  if (!nextChat?.roomId) return
+
+  let matched = false
+  chats.value = chats.value.map((chat) => {
+    if (!chatsMatch(chat, nextChat)) return chat
+    matched = true
+    return normalizeChatReadState({
+      ...chat,
+      ...nextChat,
+      roomId: nextChat.roomId,
+      id: nextChat.roomId,
+    })
+  })
+
+  if (!matched) {
+    chats.value = [
+      normalizeChatReadState({
+        ...nextChat,
+        roomId: nextChat.roomId,
+        id: nextChat.roomId,
+      }),
+      ...chats.value,
+    ]
+  }
+}
+
+function authMediaUrl(url = '') {
+  const raw = String(url || '').trim()
+  if (!raw) return ''
+  if (/^(data:|blob:|https?:\/\/)/i.test(raw)) return raw
+
+  const token = localStorage.getItem('token') || ''
+  const resolved = raw.startsWith('http') ? raw : `${API_BASE}${raw}`
+
+  try {
+    const urlObject = new URL(resolved)
+    if (token && !urlObject.searchParams.has('token')) {
+      urlObject.searchParams.set('token', `Bearer ${token}`)
+    }
+    return urlObject.toString()
+  } catch {
+    return resolved
+  }
+}
+
+function avatarInitials(name = '') {
+  const value = String(name || '').trim()
+  if (!value) return '?'
+  const parts = value.split(/\s+/).filter(Boolean)
+  if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase()
+  return value.slice(0, 2).toUpperCase()
+}
+
+function readableSize(bytes = 0) {
+  const value = Number(bytes || 0)
+  if (!value) return ''
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function formatChatTime(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const now = new Date()
+  if (date.toDateString() === now.toDateString()) {
+    return date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
+  }
+  return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
+}
+
+function formatDateDivider(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const today = new Date()
+  const yesterday = new Date()
+  yesterday.setDate(today.getDate() - 1)
+  if (date.toDateString() === today.toDateString()) return 'Today'
+  if (date.toDateString() === yesterday.toDateString()) return 'Yesterday'
+  return date.toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  })
+}
+
+function showDateDivider(message, index) {
+  if (!message || index === 0) return true
+  const previous = visibleMessages.value[index - 1]
+  if (!previous?.timestamp) return true
+  return new Date(previous.timestamp).toDateString() !== new Date(message.timestamp).toDateString()
+}
+
+function autoResize(event) {
+  const element = event?.target || composerEl.value
+  if (!element) return
+  element.style.height = 'auto'
+  element.style.height = `${Math.min(element.scrollHeight, 150)}px`
+}
+
+function isNearBottom() {
+  const element = messagesEl.value
+  if (!element) return true
+  return element.scrollHeight - element.scrollTop - element.clientHeight < 96
+}
+
+function scrollToBottom() {
+  const element = messagesEl.value
+  if (!element) return
+  element.scrollTop = element.scrollHeight
+}
+
+function mergeMessages(existing = [], incoming = []) {
+  const byId = new Map()
+  ;[...(existing || []), ...(incoming || [])].forEach((message) => {
+    if (!message?.id) return
+    byId.set(String(message.id), message)
+  })
+  return [...byId.values()].sort(
+    (left, right) => normalizeTimestamp(left.timestamp) - normalizeTimestamp(right.timestamp)
   )
-  
-  onMounted(async () => {
-    await checkStatus()
+}
+
+function firstAttachment(message = {}) {
+  return Array.isArray(message.attachments) ? message.attachments[0] || null : null
+}
+
+function isImageBroken(url = '') {
+  const key = String(url || '').trim()
+  return Boolean(key && failedImages.value[key])
+}
+
+function markImageBroken(url = '') {
+  const key = String(url || '').trim()
+  if (!key || failedImages.value[key]) return
+  failedImages.value = {
+    ...failedImages.value,
+    [key]: true,
+  }
+}
+
+function setLocalReadCutoff(roomId = '', timestamp = 0) {
+  const key = String(roomId || '').trim()
+  if (!key) return
+  localReadCutoffs.value = {
+    ...localReadCutoffs.value,
+    [key]: normalizeTimestamp(timestamp || Date.now()),
+  }
+}
+
+function clearLocalReadCutoff(roomId = '') {
+  const key = String(roomId || '').trim()
+  if (!key || !(key in localReadCutoffs.value)) return
+  const next = { ...localReadCutoffs.value }
+  delete next[key]
+  localReadCutoffs.value = next
+}
+
+function getLocalReadCutoff(roomId = '') {
+  return Number(localReadCutoffs.value[String(roomId || '').trim()] || 0)
+}
+
+function normalizeChatReadState(chat = null) {
+  if (!chat?.roomId) return chat
+  const roomId = String(chat.roomId)
+  const latestTimestamp = normalizeTimestamp(chat.lastMessageTs || chat.lastMessageAt)
+  const localCutoff = getLocalReadCutoff(roomId)
+  const isOpenRoom = String(selectedChat.value?.roomId || '') === roomId
+
+  if (localCutoff && latestTimestamp > localCutoff) {
+    clearLocalReadCutoff(roomId)
+  }
+
+  if (isOpenRoom || (localCutoff && (!latestTimestamp || latestTimestamp <= localCutoff))) {
+    return {
+      ...chat,
+      unreadCount: 0,
+      highlightCount: 0,
+    }
+  }
+
+  return chat
+}
+
+function buildMediaUrlFromMxc(mxc = '') {
+  const raw = String(mxc || '').trim()
+  return raw ? `/api/whatsapp/media?mxc=${encodeURIComponent(raw)}` : ''
+}
+
+async function loadStatus() {
+  const { data } = await api.get('/api/whatsapp/status')
+  status.value = data || {
+    connected: false,
+    loginState: 'disconnected',
+    lastError: '',
+    qrImageUrl: null,
+    profile: null,
+  }
+}
+
+function updateSelectedChatFromList() {
+  if (!selectedChat.value) return
+  const fresh = findMatchingChat(chats.value, selectedChat.value)
+  if (fresh) {
+    selectedChat.value = fresh
+  }
+}
+
+async function loadChats({ silent = false } = {}) {
+  if (!silent) loadingChats.value = true
+  try {
+    const { data } = await api.get('/api/whatsapp/chats', {
+      params: { limit: 200 },
+    })
+    chats.value = (Array.isArray(data?.chats) ? data.chats : []).map((chat) => normalizeChatReadState(chat))
+
+    if (selectedChat.value && !findMatchingChat(chats.value, selectedChat.value)) {
+      selectedChat.value = null
+      messages.value = []
+      prevBatch.value = null
+      showInfoPanel.value = false
+    }
+
+    updateSelectedChatFromList()
+  } finally {
+    if (!silent) loadingChats.value = false
+  }
+}
+
+async function markCurrentRoomRead(roomId = selectedChat.value?.roomId || '', eventId = '') {
+  const targetRoomId = String(roomId || '').trim()
+  if (!targetRoomId) return
+  try {
+    const readTimestamp =
+      normalizeTimestamp(eventId ? messages.value.find((message) => message.id === eventId)?.timestamp : 0) ||
+      normalizeTimestamp(selectedChat.value?.lastMessageTs || selectedChat.value?.lastMessageAt) ||
+      Date.now()
+    setLocalReadCutoff(targetRoomId, readTimestamp)
+
+    await api.post(`/api/whatsapp/rooms/${encodeURIComponent(targetRoomId)}/read`, {
+      eventId: eventId || undefined,
+    })
+
+    chats.value = chats.value.map((chat) =>
+      currentRoomId(chat) === targetRoomId
+        ? normalizeChatReadState({ ...chat, unreadCount: 0, highlightCount: 0 })
+        : chat
+    )
+    if (selectedChat.value?.roomId === targetRoomId) {
+      selectedChat.value = normalizeChatReadState({
+        ...selectedChat.value,
+        unreadCount: 0,
+        highlightCount: 0,
+      })
+    }
+
+    emitCommunicationPriorityRefresh('communication_read', {
+      sourceApp: 'whatsapp',
+      conversationId: targetRoomId,
+    })
+    refreshWhatsAppActions({ silent: true }).catch(() => {})
+  } catch (error) {
+    console.debug('Failed to mark WhatsApp room as read:', error?.message || error)
+  }
+}
+
+async function loadSelectedConversation({ from = '', append = false, silent = false } = {}) {
+  if (!selectedChat.value) return
+
+  const roomId = currentRoomId(selectedChat.value)
+  if (!roomId) return
+
+  const previousHeight = messagesEl.value?.scrollHeight || 0
+  const shouldStick = !append && isNearBottom()
+  const sameRoomHistory = messages.value.every(
+    (message) => String(message.roomId || roomId) === String(roomId)
+  )
+
+  if (append) loadingOlder.value = true
+  else if (!silent) loadingMessages.value = true
+
+  try {
+    const { data } = await api.get(`/api/whatsapp/rooms/${encodeURIComponent(roomId)}/messages`, {
+      params: {
+        limit: append ? 50 : 90,
+        ...(from ? { from } : {}),
+      },
+    })
+
+    const incoming = Array.isArray(data?.messages) ? data.messages : []
+    prevBatch.value = data?.prevBatch || null
+    selectedChat.value = normalizeChatReadState(data?.room || selectedChat.value)
+    replaceChatInList(selectedChat.value)
+    const resolvedRoomId = currentRoomId(selectedChat.value)
+
+    if (append) {
+      messages.value = mergeMessages(incoming, messages.value)
+      await nextTick()
+      if (messagesEl.value) {
+        const delta = messagesEl.value.scrollHeight - previousHeight
+        messagesEl.value.scrollTop += delta
+      }
+    } else {
+      messages.value = sameRoomHistory ? mergeMessages(messages.value, incoming) : incoming
+      await nextTick()
+      if (shouldStick || !silent) scrollToBottom()
+    }
+
+    const latestVisible = [...messages.value].reverse().find((message) => message?.id) || null
+    const unreadCount = Number(data?.room?.unreadCount || selectedChat.value?.unreadCount || 0)
+    if (selectedChat.value?.bridgeStatus !== 'contact' && unreadCount > 0 && latestVisible?.id) {
+      await markCurrentRoomRead(resolvedRoomId, latestVisible.id)
+    }
+  } finally {
+    if (append) loadingOlder.value = false
+    else if (!silent) loadingMessages.value = false
+  }
+}
+
+async function selectChat(chat) {
+  if (!chat?.roomId) return
+  const unreadBeforeOpen = Number(chat.unreadCount || 0)
+  const switchingRooms = !chatsMatch(selectedChat.value, chat)
+  setLocalReadCutoff(chat.roomId, chat.lastMessageTs || chat.lastMessageAt || Date.now())
+  selectedChat.value = normalizeChatReadState(chat)
+  showProfilePanel.value = false
+  replyTarget.value = null
+  searchInChatOpen.value = false
+  messageQuery.value = ''
+  composerNotice.value = ''
+  if (switchingRooms) {
+    messages.value = []
+    prevBatch.value = null
+  }
+  await loadSelectedConversation()
+  if (unreadBeforeOpen > 0 && selectedChat.value?.bridgeStatus !== 'contact') {
+    const latestVisible = [...messages.value].reverse().find((message) => message?.id) || null
+    if (latestVisible?.id) {
+      await markCurrentRoomRead(currentRoomId(selectedChat.value), latestVisible.id)
+    }
+  }
+}
+
+async function refreshSelectedConversation() {
+  if (!selectedChat.value?.roomId) return
+  await loadSelectedConversation({ silent: false })
+  await loadChats({ silent: true })
+}
+
+async function refreshAll() {
+  refreshing.value = true
+  try {
+    await loadStatus()
     if (isConnected.value) {
       await loadChats()
-      await refreshWhatsAppActions()
+      applyUnreadHints()
       await applyModuleContext()
-    }
-  })
-  
-  async function checkStatus() {
-    try {
-      const { data } = await api.get('/api/whatsapp/status')
-      isConnected.value = data.status === 'connected'
-    } catch {
-      isConnected.value = false
-    }
-  }
-  
-  async function loadChats() {
-    loading.value = true
-    try {
-      const { data } = await api.get('/api/whatsapp/chats')
-      chats.value = data.chats || []
-    } catch (err) {
-      console.error('Failed to load chats:', err)
-    } finally {
-      loading.value = false
-    }
-  }
-
-  async function applyModuleContext() {
-    const context = store.moduleContext
-    if (!context || context.module !== 'whatsapp') return
-
-    if (context.chatId) {
-      const chat = chats.value.find((item) => String(item.id) === String(context.chatId))
-      if (chat) {
-        await selectChat(chat)
+      if (selectedChat.value) {
+        await loadSelectedConversation({ silent: true })
       }
+      await refreshWhatsAppActions()
+    } else {
+      chats.value = []
+      messages.value = []
+      prevBatch.value = null
+      selectedChat.value = null
+      showProfilePanel.value = false
+      showInfoPanel.value = false
+    }
+  } finally {
+    refreshing.value = false
+  }
+}
+
+async function loadOlderMessages() {
+  if (!selectedChat.value?.roomId || !prevBatch.value || loadingOlder.value) return
+  await loadSelectedConversation({ from: prevBatch.value, append: true })
+}
+
+function startPolling() {
+  stopPolling()
+  refreshTimer = window.setInterval(async () => {
+    try {
+      await loadStatus()
+      if (!isConnected.value) return
+      await loadChats({ silent: true })
+      if (selectedChat.value) {
+        await loadSelectedConversation({ silent: true })
+      }
+    } catch {
+      // Keep the page usable during background polling failures.
+    }
+  }, 8000)
+}
+
+function applyUnreadHints() {
+  const entry = unreadByApp.whatsapp
+  const liveItems = Array.isArray(entry?.items) ? entry.items : []
+  if (!liveItems.length || !chats.value.length) return
+
+  const liveMap = new Map(
+    liveItems
+      .filter((item) => item?.chatId || item?.id)
+      .map((item) => [String(item.chatId || item.id), item])
+  )
+
+  chats.value = chats.value.map((chat) => {
+    const live = liveMap.get(String(chat.roomId || chat.id))
+    if (!live) return chat
+
+    const latestLiveTimestamp = normalizeTimestamp(live.latestMessageAt)
+    const localCutoff = getLocalReadCutoff(chat.roomId)
+    const nextBase = {
+      ...chat,
+      lastMessagePreview: live.preview || chat.lastMessagePreview,
+      lastEventId: live.latestMessageId || chat.lastEventId,
+      latestMessageId: live.latestMessageId || chat.latestMessageId,
+      lastMessageAt: live.latestMessageAt || chat.lastMessageAt,
+      lastMessageTs: latestLiveTimestamp || chat.lastMessageTs,
     }
 
+    if (
+      String(selectedChat.value?.roomId || '') === String(chat.roomId || '') ||
+      (localCutoff && latestLiveTimestamp && latestLiveTimestamp <= localCutoff)
+    ) {
+      return normalizeChatReadState({
+        ...nextBase,
+        unreadCount: 0,
+        highlightCount: 0,
+      })
+    }
+
+    return normalizeChatReadState({
+      ...nextBase,
+      unreadCount: Math.max(Number(chat.unreadCount || 0), Number(live.unread || 0)),
+    })
+  })
+
+  updateSelectedChatFromList()
+}
+
+function stopPolling() {
+  if (refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
+  }
+}
+
+async function applyModuleContext() {
+  const context = store.moduleContext
+  if (!context || context.module !== 'whatsapp') return
+
+  const targetRoomId = String(
+    context.chatId || context.roomId || context.conversationId || ''
+  ).trim()
+  if (!targetRoomId) {
     setModuleContext(null)
-  }
-  
-  async function selectChat(chat) {
-    const previousUnread = Number(chat?.unread || 0)
-    selectedChat.value = chat
-    if (previousUnread > 0) {
-      chat.unread = 0
-    }
-    await loadMessages(chat)
-    if (previousUnread > 0) {
-      emitCommunicationPriorityRefresh('communication_read', {
-        sourceApp: 'whatsapp',
-        conversationId: chat.id,
-      })
-      refreshWhatsAppActions({ silent: true }).catch(() => {})
-    }
-  }
-  
-  async function loadMessages(chat) {
-    msgsLoading.value = true
-    messages.value    = []
-    try {
-      const { data } = await api.post('/api/whatsapp/messages', {
-        chatId: chat.id,
-        limit:  30,
-      })
-      messages.value = data.messages || []
-      await nextTick()
-      scrollToBottom()
-    } catch (err) {
-      console.error('Failed to load messages:', err)
-    } finally {
-      msgsLoading.value = false
-    }
+    return
   }
 
-  async function openWhatsAppActionConversation(state) {
-    let chat = chats.value.find((item) => String(item.id) === String(state.conversationId))
-    if (!chat) {
-      await loadChats()
-      chat = chats.value.find((item) => String(item.id) === String(state.conversationId))
-    }
-    if (chat) {
-      await selectChat(chat)
-    }
+  let chat = chats.value.find((entry) => currentRoomId(entry) === targetRoomId)
+  if (!chat) {
+    await loadChats({ silent: true })
+    chat = chats.value.find((entry) => currentRoomId(entry) === targetRoomId)
   }
 
-  async function draftWhatsAppActionConversation(state) {
-    await openWhatsAppActionConversation(state)
-    nextTick(() => replyInput.value?.focus())
+  if (chat) {
+    await selectChat(chat)
   }
 
-  async function completeWhatsAppAction(state) {
-    try {
-      await recordWhatsAppAction(state, 'approved')
-    } catch (err) {
-      console.error('Failed to complete WhatsApp action:', err.message)
-    }
+  setModuleContext(null)
+}
+
+async function openWhatsAppActionConversation(state) {
+  const targetRoomId = String(
+    state?.conversationId ||
+      state?.openContext?.chatId ||
+      state?.openContext?.roomId ||
+      ''
+  ).trim()
+  if (!targetRoomId) return
+
+  let chat = chats.value.find((entry) => currentRoomId(entry) === targetRoomId)
+  if (!chat) {
+    await loadChats({ silent: true })
+    chat = chats.value.find((entry) => currentRoomId(entry) === targetRoomId)
+  }
+  if (chat) await selectChat(chat)
+}
+
+async function draftWhatsAppActionConversation(state) {
+  await openWhatsAppActionConversation(state)
+  nextTick(() => composerEl.value?.focus())
+}
+
+async function completeWhatsAppAction(state) {
+  try {
+    await recordWhatsAppAction(state, 'approved')
+  } catch (error) {
+    console.error('Failed to complete WhatsApp action:', error.message)
+  }
+}
+
+async function snoozeWhatsAppAction(state) {
+  try {
+    await recordWhatsAppAction(state, 'snoozed', { snoozeMinutes: 60 })
+  } catch (error) {
+    console.error('Failed to snooze WhatsApp action:', error.message)
+  }
+}
+
+async function dismissWhatsAppAction(state) {
+  try {
+    await recordWhatsAppAction(state, 'dismissed')
+  } catch (error) {
+    console.error('Failed to dismiss WhatsApp action:', error.message)
+  }
+}
+
+function toggleProfilePanel() {
+  if (!isConnected.value) return
+  showProfilePanel.value = !showProfilePanel.value
+}
+
+function clearReply() {
+  replyTarget.value = null
+}
+
+function startReply(message) {
+  replyTarget.value = message
+  composerEl.value?.focus()
+}
+
+async function copyMessage(message) {
+  try {
+    await navigator.clipboard.writeText(
+      message.text || firstAttachment(message)?.fileName || ''
+    )
+    composerNotice.value = 'Message copied.'
+  } catch {
+    composerNotice.value = 'Copy is not available in this browser.'
+  }
+}
+
+function openAttachmentPicker() {
+  fileInputEl.value?.click()
+}
+
+function makeDraftId() {
+  return `draft-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function createDraftAttachment(file, source = 'file') {
+  const mimeType = file?.type || 'application/octet-stream'
+  const previewType = mimeType.startsWith('image/')
+    ? 'image'
+    : mimeType.startsWith('audio/')
+      ? 'audio'
+      : mimeType.startsWith('video/')
+        ? 'video'
+        : 'file'
+
+  return {
+    id: makeDraftId(),
+    source,
+    file,
+    fileName: file?.name || 'Attachment',
+    mimeType,
+    size: Number(file?.size || 0) || 0,
+    previewType,
+    previewUrl:
+      previewType === 'image' || previewType === 'audio' || previewType === 'video'
+        ? URL.createObjectURL(file)
+        : '',
+    previewLabel:
+      source === 'voice'
+        ? 'Voice'
+        : previewType === 'file'
+          ? 'File'
+          : previewType.toUpperCase(),
+  }
+}
+
+function revokeDraftAttachment(draft) {
+  if (draft?.previewUrl) URL.revokeObjectURL(draft.previewUrl)
+}
+
+function removeDraftAttachment(index) {
+  const next = [...draftAttachments.value]
+  const [removed] = next.splice(index, 1)
+  revokeDraftAttachment(removed)
+  draftAttachments.value = next
+}
+
+function clearDraftAttachments() {
+  draftAttachments.value.forEach(revokeDraftAttachment)
+  draftAttachments.value = []
+}
+
+function handleFilePick(event) {
+  const files = Array.from(event?.target?.files || [])
+  if (!files.length) return
+  draftAttachments.value = [
+    ...draftAttachments.value,
+    ...files.map((file) => createDraftAttachment(file, 'file')),
+  ]
+  if (event?.target) event.target.value = ''
+}
+
+// FIX 2: Always re-append the picker to the current DOM node when the panel opens.
+// The v-if destroys the DOM node on close, so we must re-attach every time.
+function ensureEmojiPicker() {
+  if (!emojiPickerEl.value) return
+
+  if (!emojiPicker) {
+    emojiPicker = new Picker({
+      data: emojiData,
+      theme: 'dark',
+      previewPosition: 'none',
+      navPosition: 'bottom',
+      searchPosition: 'sticky',
+      emojiButtonRadius: '14px',
+      emojiButtonSize: 34,
+      emojiSize: 20,
+      onEmojiSelect: (emoji) => insertEmoji(emoji?.native || ''),
+      onClickOutside: () => {
+        emojiPanelOpen.value = false
+      },
+    })
   }
 
-  async function snoozeWhatsAppAction(state) {
-    try {
-      await recordWhatsAppAction(state, 'snoozed', { snoozeMinutes: 60 })
-    } catch (err) {
-      console.error('Failed to snooze WhatsApp action:', err.message)
-    }
-  }
+  // Always clear and re-append so the picker attaches to the freshly rendered DOM node
+  emojiPickerEl.value.innerHTML = ''
+  emojiPickerEl.value.appendChild(emojiPicker)
+}
 
-  async function dismissWhatsAppAction(state) {
-    try {
-      await recordWhatsAppAction(state, 'dismissed')
-    } catch (err) {
-      console.error('Failed to dismiss WhatsApp action:', err.message)
-    }
+function toggleEmojiPanel() {
+  emojiPanelOpen.value = !emojiPanelOpen.value
+  if (emojiPanelOpen.value) gifPanelOpen.value = false
+}
+
+function toggleGifPanel() {
+  gifPanelOpen.value = !gifPanelOpen.value
+  if (gifPanelOpen.value) emojiPanelOpen.value = false
+}
+
+function insertEmoji(emoji) {
+  if (!emoji) return
+  composer.value = `${composer.value}${emoji}`
+  emojiPanelOpen.value = false
+  nextTick(() => composerEl.value?.focus())
+}
+
+function useGifPlaceholder(prompt) {
+  gifPanelOpen.value = false
+  composerNotice.value = `GIF picker scaffolded. Connect a GIF provider to send "${prompt}" as a real media result.`
+}
+
+function stopRecordingTimer() {
+  if (recordingTimer) {
+    clearInterval(recordingTimer)
+    recordingTimer = null
   }
-  
-  async function sendMessage() {
-    const text = replyText.value.trim()
-    if (!text || sending.value || !selectedChat.value) return
-  
-    sending.value = true
-    try {
-      await api.post('/api/whatsapp/send', {
-        to:      selectedChat.value.id,
-        message: text,
+}
+
+function releaseRecordingStream() {
+  if (recordingStream) {
+    recordingStream.getTracks().forEach((track) => track.stop())
+    recordingStream = null
+  }
+}
+
+function pickVoiceMimeType() {
+  if (typeof window === 'undefined' || typeof MediaRecorder === 'undefined') return ''
+  const candidates = [
+    'audio/ogg;codecs=opus',
+    'audio/webm;codecs=opus',
+    'audio/ogg',
+    'audio/webm',
+  ]
+  return candidates.find((type) => MediaRecorder.isTypeSupported?.(type)) || ''
+}
+
+async function startVoiceRecording() {
+  if (!canRecordVoice.value || recording.value) return
+
+  composerNotice.value = ''
+  try {
+    recordingStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    const preferredType = pickVoiceMimeType()
+    mediaRecorder = preferredType
+      ? new MediaRecorder(recordingStream, { mimeType: preferredType })
+      : new MediaRecorder(recordingStream)
+    recordingChunks = []
+    recordingMode = 'queue'
+
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data?.size) recordingChunks.push(event.data)
+    }
+
+    mediaRecorder.onstop = () => {
+      const mimeType = mediaRecorder?.mimeType || preferredType || 'audio/webm'
+      const shouldQueue = recordingMode === 'queue'
+      const blob = new Blob(recordingChunks, { type: mimeType })
+      recording.value = false
+      stopRecordingTimer()
+      releaseRecordingStream()
+      mediaRecorder = null
+      recordingChunks = []
+
+      if (!shouldQueue || !blob.size) return
+
+      const extension = mimeType.includes('ogg') ? 'ogg' : 'webm'
+      const file = new File([blob], `voice-note-${Date.now()}.${extension}`, {
+        type: mimeType,
       })
-      // Optimistically add message
-      messages.value.push({
-        id:        Date.now(),
-        from:      'You',
-        message:   text,
-        timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-        fromMe:    true,
-      })
-      replyText.value = ''
-      await nextTick()
-      scrollToBottom()
-      emitCommunicationPriorityRefresh('communication_replied', {
-        sourceApp: 'whatsapp',
-        conversationId: selectedChat.value.id,
-      })
-      refreshWhatsAppActions({ silent: true }).catch(() => {})
-    } catch (err) {
-      console.error('Send failed:', err)
-    } finally {
-      sending.value = false
+      draftAttachments.value = [
+        ...draftAttachments.value,
+        createDraftAttachment(file, 'voice'),
+      ]
+      composerNotice.value = /audio\/webm/i.test(mimeType)
+        ? 'Voice note ready. OrionAI will send WEBM as an audio attachment on WhatsApp.'
+        : 'Voice note ready to send.'
     }
+
+    mediaRecorder.start(250)
+    recording.value = true
+    recordingSeconds.value = 0
+    recordingTimer = window.setInterval(() => {
+      recordingSeconds.value += 1
+    }, 1000)
+  } catch (error) {
+    composerNotice.value =
+      error?.message || 'Microphone access is required to record voice messages.'
+    releaseRecordingStream()
   }
-  
-  function scrollToBottom() {
-    if (messagesEl.value) {
-      messagesEl.value.scrollTop = messagesEl.value.scrollHeight
+}
+
+function stopVoiceRecording() {
+  if (!mediaRecorder || mediaRecorder.state === 'inactive') return
+  recordingMode = 'queue'
+  mediaRecorder.stop()
+}
+
+function cancelVoiceRecording() {
+  if (!mediaRecorder || mediaRecorder.state === 'inactive') return
+  recordingMode = 'discard'
+  mediaRecorder.stop()
+}
+
+function toggleVoiceRecording() {
+  if (recording.value) {
+    stopVoiceRecording()
+    return
+  }
+  startVoiceRecording()
+}
+
+function formatRecordingTime(value = 0) {
+  const minutes = Math.floor(Number(value || 0) / 60)
+  const seconds = Number(value || 0) % 60
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+}
+
+function buildOptimisticMessage({
+  eventId,
+  roomId,
+  text = '',
+  attachment = null,
+  replyToEventId = null,
+  timestamp = Date.now(),
+}) {
+  const attachmentArray = attachment ? [attachment] : []
+  const replySource = replyToEventId
+    ? messages.value.find((message) => String(message.id) === String(replyToEventId))
+    : null
+
+  return {
+    id: String(eventId || `local-${timestamp}`),
+    eventId: String(eventId || `local-${timestamp}`),
+    roomId: String(roomId),
+    senderId: 'me',
+    senderName: 'You',
+    senderAvatarUrl: status.value.profile?.avatarUrl || '',
+    direction: 'outbound',
+    text: String(text || '').trim(),
+    timestamp: new Date(timestamp).toISOString(),
+    timeLabel: formatChatTime(timestamp),
+    attachments: attachmentArray,
+    media: attachment || null,
+    isVoice: attachment?.type === 'audio',
+    reactions: [],
+    replyPreview: replySource
+      ? {
+          eventId: replySource.id,
+          senderName: replySource.senderName || 'You',
+          text: replySource.text || firstAttachment(replySource)?.fileName || 'Attachment',
+        }
+      : null,
+    deleted: false,
+    fromMe: true,
+    deliveryState: 'sent',
+    deliveryLabel: 'Sent',
+    readByCount: 0,
+  }
+}
+
+function applyOptimisticChatState(message = {}) {
+  if (!message?.roomId) return
+  const roomId = String(message.roomId)
+  const timestamp = normalizeTimestamp(message.timestamp || Date.now())
+  const isoTimestamp = new Date(timestamp).toISOString()
+  const preview =
+    message.text ||
+    firstAttachment(message)?.fileName ||
+    (firstAttachment(message)?.type === 'image'
+      ? 'Sent an image'
+      : firstAttachment(message)?.type === 'video'
+        ? 'Sent a video'
+        : firstAttachment(message)?.type === 'audio'
+          ? 'Sent an audio message'
+          : 'Attachment')
+
+  chats.value = chats.value.map((chat) =>
+    chatsMatch(chat, selectedChat.value || { roomId })
+      ? normalizeChatReadState({
+          ...chat,
+          roomId,
+          id: roomId,
+          lastMessagePreview: preview,
+          lastMessageAt: isoTimestamp,
+          lastMessageTs: timestamp,
+          lastSender: 'You',
+          lastEventId: message.id,
+          latestMessageId: message.id,
+          bridgeStatus: 'portal',
+        })
+      : chat
+  )
+
+  if (selectedChat.value && chatsMatch(selectedChat.value, { roomId, ...selectedChat.value })) {
+    selectedChat.value = normalizeChatReadState({
+      ...selectedChat.value,
+      roomId,
+      id: roomId,
+      lastMessagePreview: preview,
+      lastMessageAt: isoTimestamp,
+      lastMessageTs: timestamp,
+      lastSender: 'You',
+      lastEventId: message.id,
+      latestMessageId: message.id,
+      bridgeStatus: 'portal',
+    })
+  }
+}
+
+function appendOptimisticMessages(nextMessages = []) {
+  const validMessages = (nextMessages || []).filter(Boolean)
+  if (!validMessages.length) return
+  messages.value = mergeMessages(messages.value, validMessages)
+  validMessages.forEach((message) => applyOptimisticChatState(message))
+}
+
+function buildAttachmentPayload(draft, contentUri = '') {
+  const mediaUrl = draft.previewUrl || buildMediaUrlFromMxc(contentUri)
+  return {
+    type: draft.previewType === 'file' ? 'file' : draft.previewType,
+    mxc: contentUri || '',
+    url: mediaUrl,
+    thumbnailUrl: '',
+    fileName: draft.fileName,
+    mimeType: draft.mimeType,
+    size: draft.size || 0,
+    duration: 0,
+  }
+}
+
+async function sendMessage() {
+  if (!selectedChat.value || sendDisabled.value) return
+
+  const roomId = currentRoomId(selectedChat.value)
+  const text = composer.value.trim()
+  const replyToEventId = replyTarget.value?.id || null
+  const optimisticMessages = []
+
+  sending.value = true
+  composerNotice.value = ''
+
+  try {
+    if (draftAttachments.value.length > 0) {
+      const drafts = [...draftAttachments.value]
+      for (let index = 0; index < drafts.length; index += 1) {
+        const draft = drafts[index]
+        const formData = new FormData()
+        formData.append('file', draft.file, draft.fileName)
+        if (index === 0 && text) formData.append('caption', text)
+        if (index === 0 && replyToEventId) formData.append('replyToEventId', replyToEventId)
+
+        const { data } = await api.post(
+          `/api/whatsapp/rooms/${encodeURIComponent(roomId)}/upload`,
+          formData,
+          { headers: { 'Content-Type': 'multipart/form-data' } }
+        )
+        const resolvedRoomId = String(data?.roomId || roomId)
+        if (selectedChat.value && resolvedRoomId !== currentRoomId(selectedChat.value)) {
+          selectedChat.value = normalizeChatReadState({
+            ...selectedChat.value,
+            roomId: resolvedRoomId,
+            id: resolvedRoomId,
+            bridgeStatus: 'portal',
+          })
+          replaceChatInList(selectedChat.value)
+        }
+
+        optimisticMessages.push(
+          buildOptimisticMessage({
+            eventId: data?.eventId,
+            roomId: resolvedRoomId,
+            attachment: buildAttachmentPayload(draft, data?.contentUri || ''),
+            replyToEventId,
+          })
+        )
+
+        if (index === 0 && text && data?.captionEventId) {
+          optimisticMessages.push(
+            buildOptimisticMessage({
+              eventId: data.captionEventId,
+              roomId: resolvedRoomId,
+              text,
+              replyToEventId,
+            })
+          )
+        }
+      }
+    } else {
+      const { data } = await api.post(`/api/whatsapp/rooms/${encodeURIComponent(roomId)}/send`, {
+        text,
+        replyToEventId: replyToEventId || undefined,
+      })
+      const resolvedRoomId = String(data?.roomId || roomId)
+      if (selectedChat.value && resolvedRoomId !== currentRoomId(selectedChat.value)) {
+        selectedChat.value = normalizeChatReadState({
+          ...selectedChat.value,
+          roomId: resolvedRoomId,
+          id: resolvedRoomId,
+          bridgeStatus: 'portal',
+        })
+        replaceChatInList(selectedChat.value)
+      }
+
+      optimisticMessages.push(
+        buildOptimisticMessage({
+          eventId: data?.eventId,
+          roomId: resolvedRoomId,
+          text,
+          replyToEventId,
+        })
+      )
     }
+
+    composer.value = ''
+    clearReply()
+    clearDraftAttachments()
+    emojiPanelOpen.value = false
+    gifPanelOpen.value = false
+    appendOptimisticMessages(optimisticMessages)
+
+    emitCommunicationPriorityRefresh('communication_replied', {
+      sourceApp: 'whatsapp',
+      conversationId: currentRoomId(selectedChat.value) || roomId,
+    })
+
+    await nextTick()
+    scrollToBottom()
+
+    Promise.all([
+      loadChats({ silent: true }),
+      loadSelectedConversation({ silent: true }),
+      refreshWhatsAppActions({ silent: true }),
+    ]).catch(() => {})
+
+    nextTick(() => {
+      composerEl.value?.focus()
+      autoResize({ target: composerEl.value })
+    })
+  } catch (error) {
+    composerNotice.value =
+      error?.response?.data?.error || error?.message || 'Unable to send the message right now.'
+  } finally {
+    sending.value = false
   }
-  
-  function autoResize(e) {
-    const el = e.target
-    el.style.height = 'auto'
-    el.style.height = Math.min(el.scrollHeight, 120) + 'px'
+}
+
+function toggleMessageSearch() {
+  searchInChatOpen.value = !searchInChatOpen.value
+  if (!searchInChatOpen.value) {
+    messageQuery.value = ''
+  } else {
+    nextTick(() => {
+      const input = document.querySelector('.wa-chat-search-input')
+      input?.focus()
+    })
   }
-  
-  function avatarInitials(name) {
-    if (!name) return '?'
-    const parts = name.trim().split(/\s+/)
-    return parts.length >= 2
-      ? (parts[0][0] + parts[1][0]).toUpperCase()
-      : name.slice(0, 2).toUpperCase()
+}
+
+function startVoiceCall() {
+  const phone = callPhoneNumber.value
+  if (!phone) {
+    composerNotice.value = 'Phone number is not available for this contact.'
+    return
   }
-  </script>
-  
-  <style scoped>
-  .wa-page {
-    display: flex;
-    height: 100%;
-    background:
-      radial-gradient(circle at 14% 10%, rgba(82, 212, 255, 0.08), transparent 24%),
-      linear-gradient(180deg, var(--bg-base-alt, var(--bg-base)), var(--bg-base));
-    overflow: hidden;
+
+  composerNotice.value = `Opening your system dialer for +${phone}.`
+  try {
+    window.location.href = `tel:+${phone}`
+  } catch {
+    composerNotice.value = 'Your browser could not open the system dialer.'
   }
-  
-  /* ── Sidebar ─────────────────────────────────────────────────────────────── */
-  .wa-sidebar {
-    width: 300px;
-    flex-shrink: 0;
-    border-right: 1px solid var(--border-subtle);
-    display: flex;
+}
+
+function startVideoCall() {
+  const phone = callPhoneNumber.value
+  if (!phone) {
+    composerNotice.value = 'Phone number is not available for this contact.'
+    return
+  }
+
+  composerNotice.value =
+    'mautrix-whatsapp does not expose in-app video calls yet. Opening the contact in WhatsApp instead.'
+  window.open(`https://wa.me/${phone}`, '_blank', 'noopener')
+}
+
+function openLightbox(attachment) {
+  if (!attachment?.url) return
+  lightbox.value = attachment
+}
+
+function closeLightbox() {
+  lightbox.value = null
+}
+
+function downloadAttachment(attachment) {
+  if (!attachment?.url) return
+  window.open(authMediaUrl(attachment.url), '_blank', 'noopener')
+}
+
+// FIX 2: Watch for emoji panel open and always re-attach picker to fresh DOM node
+watch(
+  () => unreadByApp.whatsapp?.items,
+  () => {
+    applyUnreadHints()
+  }
+)
+
+watch(
+  () => emojiPanelOpen.value,
+  async (open) => {
+    if (!open) return
+    await nextTick()
+    ensureEmojiPicker()
+  }
+)
+
+watch(
+  () => store.moduleContext,
+  async () => {
+    await applyModuleContext()
+  }
+)
+
+onMounted(async () => {
+  await refreshAll()
+  startPolling()
+})
+
+onUnmounted(() => {
+  stopPolling()
+  stopRecordingTimer()
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    recordingMode = 'discard'
+    mediaRecorder.stop()
+  }
+  releaseRecordingStream()
+  clearDraftAttachments()
+  if (emojiPickerEl.value) {
+    emojiPickerEl.value.innerHTML = ''
+  }
+  emojiPicker = null
+  showInfoPanel.value = false
+  showProfilePanel.value = false
+})
+</script>
+
+<style scoped>
+.wa-shell {
+  display: grid;
+  grid-template-columns: 360px minmax(0, 1fr);
+  height: 100%;
+  background:
+    radial-gradient(circle at 8% 10%, rgba(69, 211, 152, 0.14), transparent 22%),
+    radial-gradient(circle at 88% 12%, rgba(82, 212, 255, 0.12), transparent 24%),
+    linear-gradient(180deg, rgba(10, 16, 28, 0.96), rgba(6, 11, 21, 1));
+  overflow: hidden;
+}
+
+.wa-shell.is-collapsed {
+  grid-template-columns: 92px minmax(0, 1fr);
+}
+
+/* FIX 3: overflow: hidden ensures the sidebar respects the grid cell height
+   so flex children (chat list) can scroll properly */
+.wa-sidebar {
+  position: relative;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 14px 14px;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(7, 12, 22, 0.78);
+  backdrop-filter: blur(22px);
+  box-sizing: border-box;
+}
+
+.wa-sidebar.collapsed {
+  padding-inline: 10px;
+}
+
+.wa-sidebar-head,
+.wa-chat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.wa-brand,
+.wa-chat-head-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.wa-brand-btn,
+.wa-chat-head-main-btn {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wa-brand-btn:disabled {
+  cursor: default;
+}
+
+.wa-brand-icon,
+.wa-chat-head-avatar,
+.wa-chat-avatar,
+.wa-message-avatar,
+.wa-profile-avatar,
+.wa-info-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 16px;
+  background: linear-gradient(145deg, rgba(37, 211, 102, 0.24), rgba(9, 192, 156, 0.22));
+  border: 1px solid rgba(95, 255, 170, 0.22);
+  color: #dfffea;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.wa-chat-head-avatar,
+.wa-chat-avatar,
+.wa-message-avatar,
+.wa-info-avatar {
+  border-radius: 50%;
+}
+
+.wa-brand-avatar,
+.wa-chat-head-avatar img,
+.wa-chat-avatar img,
+.wa-message-avatar img,
+.wa-profile-avatar img,
+.wa-info-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.wa-avatar-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.wa-brand-copy,
+.wa-chat-head-copy,
+.wa-profile-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.wa-brand-copy strong,
+.wa-chat-head-copy strong,
+.wa-profile-copy strong,
+.wa-info-card strong {
+  color: var(--text-primary);
+  font-size: 15px;
+}
+
+.wa-brand-copy span,
+.wa-chat-head-copy span,
+.wa-profile-copy span,
+.wa-info-card span {
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wa-head-actions,
+.wa-chat-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wa-profile-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+.wa-info-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.wa-profile-popover {
+  position: absolute;
+  top: 76px;
+  left: 14px;
+  right: 14px;
+  z-index: 4;
+}
+
+.wa-profile-card,
+.wa-info-card,
+.wa-info-section,
+.wa-compose-top,
+.wa-chat-search,
+.wa-quick-panel,
+.wa-action-panel-wrap :deep(.comm-insights),
+.wa-action-panel-wrap :deep(.comm-panel) {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  backdrop-filter: blur(16px);
+}
+
+.wa-profile-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  background: rgba(10, 17, 28, 0.96);
+  border-color: rgba(69, 211, 152, 0.18);
+  box-shadow: 0 28px 48px rgba(3, 8, 20, 0.42);
+}
+
+.wa-profile-hero {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.wa-profile-avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 20px;
+}
+
+.wa-action-panel-wrap {
+  min-height: 0;
+}
+
+.wa-search-wrap {
+  position: relative;
+  padding-top: 2px;
+  flex-shrink: 0;
+}
+
+.wa-search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+}
+
+.wa-search,
+.wa-chat-search-input,
+.wa-compose-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+
+.wa-search,
+.wa-chat-search-input {
+  border-radius: 999px;
+  padding: 11px 14px 11px 38px;
+  font-size: 12px;
+}
+
+.wa-search:focus,
+.wa-chat-search-input:focus,
+.wa-compose-input:focus {
+  border-color: rgba(95, 255, 170, 0.36);
+  box-shadow: 0 0 0 4px rgba(69, 211, 152, 0.08);
+}
+
+.wa-filter-row {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+/* FIX 3: chat list must flex: 1 with min-height: 0 to scroll inside sidebar */
+.wa-chat-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 4px;
+}
+
+.wa-chat-list.compact {
+  align-items: center;
+  gap: 8px;
+}
+
+.wa-chat-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 18px;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+  flex-shrink: 0;
+}
+
+.wa-chat-row.compact {
+  grid-template-columns: 46px;
+  justify-content: center;
+  width: 56px;
+  padding: 4px 0;
+}
+
+.wa-chat-row:hover,
+.wa-chat-row.active {
+  background: linear-gradient(90deg, rgba(69, 211, 152, 0.12), rgba(82, 212, 255, 0.08));
+  box-shadow: inset 0 0 0 1px rgba(95, 255, 170, 0.12);
+}
+
+.wa-chat-copy {
+  min-width: 0;
+}
+
+.wa-chat-title-row,
+.wa-chat-preview-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.wa-chat-title-row {
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.wa-chat-title-row strong {
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wa-chat-title-row span,
+.wa-chat-kind {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.wa-chat-preview-row p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wa-chat-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.wa-chat-badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #29cf77;
+  color: #05230f;
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wa-chat-flag {
+  font-size: 10px;
+  color: #b4f0cb;
+  border: 1px solid rgba(95, 255, 170, 0.16);
+  border-radius: 999px;
+  padding: 2px 6px;
+}
+
+.wa-list-state,
+.wa-list-empty,
+.wa-state-panel,
+.wa-thread-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.wa-list-state,
+.wa-thread-empty {
+  flex-direction: column;
+}
+
+.wa-list-state {
+  flex: 1;
+  padding: 12px 0;
+  min-height: 0;
+}
+
+.wa-list-state.compact {
+  align-items: center;
+}
+
+.wa-list-empty {
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  padding: 28px 22px;
+  min-height: 0;
+}
+
+.wa-list-empty strong,
+.wa-state-copy strong,
+.wa-thread-empty strong {
+  color: var(--text-primary);
+  font-size: 17px;
+}
+
+.wa-list-empty p,
+.wa-state-copy p,
+.wa-thread-empty p,
+.wa-info-section p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.wa-empty-orb {
+  width: 76px;
+  height: 76px;
+  border-radius: 26px;
+  background: linear-gradient(145deg, rgba(69, 211, 152, 0.2), rgba(82, 212, 255, 0.12));
+  border: 1px solid rgba(95, 255, 170, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #dfffea;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.wa-chat-skeleton {
+  display: grid;
+  grid-template-columns: 42px 1fr;
+  gap: 12px;
+  padding: 12px 16px;
+  flex-shrink: 0;
+}
+
+.wa-chat-skeleton.compact {
+  grid-template-columns: 42px;
+  justify-content: center;
+}
+
+.wa-chat-skeleton-avatar,
+.wa-chat-skeleton-lines span,
+.wa-msg-skeleton span,
+.wa-state-lines span {
+  display: block;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.07));
+  background-size: 200% 100%;
+  animation: wa-shimmer 1.4s linear infinite;
+}
+
+.wa-chat-skeleton-avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 16px;
+}
+
+.wa-chat-skeleton-lines {
+  display: grid;
+  gap: 8px;
+  align-content: center;
+}
+
+.wa-chat-skeleton-lines span:first-child {
+  width: 68%;
+  height: 12px;
+  border-radius: 999px;
+}
+
+.wa-chat-skeleton-lines span:last-child {
+  width: 92%;
+  height: 10px;
+  border-radius: 999px;
+}
+
+.wa-main {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background:
+    linear-gradient(rgba(5, 11, 19, 0.86), rgba(5, 11, 19, 0.92)),
+    radial-gradient(circle at 50% 20%, rgba(69, 211, 152, 0.08), transparent 28%),
+    radial-gradient(circle at 70% 80%, rgba(82, 212, 255, 0.08), transparent 24%);
+}
+
+.wa-state-panel {
+  flex: 1;
+  padding: 34px;
+  min-height: 0;
+}
+
+.wa-state-hero {
+  display: grid;
+  grid-template-columns: minmax(280px, 420px) minmax(260px, 420px);
+  gap: 32px;
+  align-items: center;
+  justify-content: center;
+  min-height: 100%;
+}
+
+.wa-state-illustration {
+  position: relative;
+  min-height: 300px;
+}
+
+.wa-state-circle {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(10px);
+}
+
+.wa-state-circle--one {
+  width: 180px;
+  height: 180px;
+  background: rgba(69, 211, 152, 0.12);
+  top: 14px;
+  left: 18px;
+}
+
+.wa-state-circle--two {
+  width: 220px;
+  height: 220px;
+  background: rgba(82, 212, 255, 0.09);
+  right: 8px;
+  bottom: 10px;
+}
+
+.wa-state-card {
+  position: absolute;
+  inset: 48px 28px 28px 48px;
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(13, 20, 33, 0.84);
+  backdrop-filter: blur(20px);
+  padding: 22px;
+  display: grid;
+  gap: 18px;
+}
+
+.wa-state-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.wa-state-card-dot,
+.wa-recording-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #29cf77;
+  box-shadow: 0 0 0 8px rgba(41, 207, 119, 0.12);
+}
+
+.wa-state-lines {
+  display: grid;
+  gap: 12px;
+}
+
+.wa-state-lines span:nth-child(1) {
+  width: 84%;
+  height: 16px;
+  border-radius: 999px;
+}
+
+.wa-state-lines span:nth-child(2) {
+  width: 68%;
+  height: 16px;
+  border-radius: 999px;
+}
+
+.wa-state-lines span:nth-child(3) {
+  width: 92%;
+  height: 88px;
+  border-radius: 20px;
+}
+
+.wa-state-qr img {
+  width: 210px;
+  height: 210px;
+  padding: 14px;
+  background: white;
+  border-radius: 24px;
+}
+
+.wa-chat-head {
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.wa-chat-layout {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.wa-thread-panel {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.wa-load-earlier {
+  padding: 14px 18px 0;
+  display: flex;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* FIX 1: flex column enables the wa-thread-push spacer to work correctly,
+   pushing messages to the bottom when content is shorter than the viewport */
+.wa-thread-scroll {
+  flex: 1;
+  min-height: 0;
+  padding: 18px 24px 10px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* FIX 1: spacer that collapses when messages overflow, fills space when they don't */
+.wa-thread-push {
+  flex: 1;
+  min-height: 0;
+}
+
+.wa-thread-loading {
+  display: grid;
+  gap: 16px;
+}
+
+.wa-msg-skeleton {
+  display: flex;
+}
+
+.wa-msg-skeleton.is-out {
+  justify-content: flex-end;
+}
+
+.wa-msg-skeleton span {
+  width: min(320px, 62%);
+  height: 74px;
+  border-radius: 24px;
+}
+
+.wa-date-divider {
+  display: flex;
+  justify-content: center;
+  margin: 16px 0 12px;
+  flex-shrink: 0;
+}
+
+.wa-date-divider span {
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.wa-message-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  margin-bottom: 14px;
+  flex-shrink: 0;
+}
+
+.wa-message-row.from-me {
+  justify-content: flex-end;
+}
+
+.wa-message-avatar {
+  width: 34px;
+  height: 34px;
+  font-size: 11px;
+}
+
+.wa-message-stack {
+  max-width: min(64%, 560px);
+}
+
+.wa-message-actions {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.wa-message-row:hover .wa-message-actions {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.wa-bubble {
+  padding: 12px 14px 10px;
+  border-radius: 24px;
+  border-bottom-left-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+
+.wa-message-row.from-me .wa-bubble {
+  background: linear-gradient(145deg, rgba(69, 211, 152, 0.2), rgba(18, 181, 143, 0.16));
+  border-color: rgba(95, 255, 170, 0.18);
+  border-bottom-right-radius: 10px;
+  border-bottom-left-radius: 24px;
+}
+
+.wa-bubble.deleted {
+  opacity: 0.75;
+}
+
+.wa-message-sender {
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #97f3c3;
+}
+
+.wa-reply-preview {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.06);
+  border-left: 3px solid rgba(95, 255, 170, 0.42);
+  margin-bottom: 8px;
+}
+
+.wa-reply-preview strong {
+  font-size: 11px;
+}
+
+.wa-reply-preview span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.wa-media-card {
+  margin-bottom: 8px;
+}
+
+.wa-media-card--image img {
+  max-width: min(220px, 100%);
+  max-height: 280px;
+  display: block;
+  border-radius: 18px;
+  cursor: zoom-in;
+  object-fit: cover;
+}
+
+.wa-media-card--video video {
+  width: min(260px, 100%);
+  max-height: 260px;
+  border-radius: 18px;
+  display: block;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.wa-media-card--audio audio {
+  width: min(280px, 100%);
+}
+
+.wa-audio-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.wa-audio-wave {
+  width: 42px;
+  height: 12px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(95, 255, 170, 0.2), rgba(95, 255, 170, 0.9), rgba(95, 255, 170, 0.2));
+}
+
+.wa-file-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 12px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.wa-file-card strong {
+  display: block;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.wa-file-card span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.wa-message-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.wa-reaction-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.wa-reaction-pill {
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-secondary);
+}
+
+.wa-message-meta {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.wa-deleted-copy {
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: 13px;
+}
+
+.wa-thread-empty {
+  min-height: 220px;
+  flex-direction: column;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.wa-info-panel {
+  width: 320px;
+  flex-shrink: 0;
+  padding: 18px 18px 18px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.wa-info-card,
+.wa-info-section {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wa-info-card {
+  align-items: center;
+  text-align: center;
+}
+
+.wa-info-avatar {
+  width: 74px;
+  height: 74px;
+}
+
+.wa-info-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.wa-info-item {
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.wa-info-item span,
+.wa-info-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.wa-info-item strong {
+  color: var(--text-primary);
+  font-size: 13px;
+  word-break: break-word;
+}
+
+.wa-info-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.wa-compose-top {
+  margin-bottom: 12px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wa-compose-banner,
+.wa-composer-notice,
+.wa-upload-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.wa-compose-banner {
+  justify-content: space-between;
+}
+
+.wa-compose-banner-label {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.wa-compose-banner-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wa-compose-banner button,
+.wa-upload-chip button {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.wa-compose-banner--recording .wa-compose-banner-label {
+  color: #ffd7d7;
+}
+
+.wa-upload-strip {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+}
+
+.wa-upload-chip {
+  min-width: 220px;
+}
+
+.wa-upload-thumb {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.wa-upload-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.wa-composer-shell {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(7, 12, 22, 0.78);
+  backdrop-filter: blur(20px);
+  padding: 12px 18px 18px;
+  flex-shrink: 0;
+}
+
+.wa-composer-notice {
+  justify-content: space-between;
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+
+.wa-composer-notice button {
+  background: transparent;
+  border: 0;
+  color: #b4f0cb;
+}
+
+.wa-quick-panel {
+  margin-bottom: 12px;
+  padding: 12px;
+}
+
+.wa-emoji-mart :deep(em-emoji-picker) {
+  width: 100%;
+}
+
+.wa-panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+
+.wa-panel-head strong {
+  color: var(--text-primary);
+}
+
+.wa-gif-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.wa-gif-card {
+  min-width: 120px;
+  padding: 10px 12px;
+  border-radius: 18px;
+  text-align: left;
+}
+
+.wa-gif-card span {
+  display: block;
+  color: var(--text-primary);
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.wa-gif-card small {
+  color: var(--text-muted);
+}
+
+.wa-compose {
+  display: grid;
+  grid-template-columns: auto auto auto auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.wa-icon-btn,
+.wa-chip-btn,
+.wa-load-btn,
+.wa-compose-btn,
+.wa-compose-send,
+.wa-mini-btn,
+.wa-filter-chip,
+.wa-primary-btn,
+.wa-gif-card {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.wa-icon-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.wa-icon-btn--ghost {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.wa-icon-btn.active,
+.wa-icon-btn:hover:not(:disabled),
+.wa-chip-btn:hover,
+.wa-load-btn:hover,
+.wa-compose-btn:hover,
+.wa-compose-send:hover,
+.wa-mini-btn:hover,
+.wa-filter-chip:hover,
+.wa-primary-btn:hover,
+.wa-gif-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(95, 255, 170, 0.22);
+  background: rgba(69, 211, 152, 0.12);
+  color: var(--text-primary);
+}
+
+.wa-icon-btn:disabled,
+.wa-compose-btn:disabled,
+.wa-compose-send:disabled,
+.wa-filter-chip:disabled,
+.wa-load-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.wa-chip-btn,
+.wa-load-btn {
+  padding: 9px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.wa-filter-chip {
+  padding: 8px 12px;
+  border-radius: 999px;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.wa-filter-chip.active {
+  color: #e6fff1;
+  border-color: rgba(95, 255, 170, 0.34);
+  background: rgba(69, 211, 152, 0.14);
+}
+
+.wa-mini-btn {
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+}
+
+.wa-compose-btn,
+.wa-compose-send {
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wa-compose-btn.is-recording {
+  color: #ffe8e8;
+  border-color: rgba(255, 95, 116, 0.26);
+  background: rgba(255, 95, 116, 0.12);
+}
+
+.wa-compose-input {
+  min-height: 46px;
+  max-height: 150px;
+  resize: none;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  border-radius: 18px;
+  font: inherit;
+  line-height: 1.45;
+}
+
+.wa-compose-send {
+  background: linear-gradient(145deg, rgba(69, 211, 152, 0.9), rgba(22, 191, 155, 0.92));
+  color: #04210f;
+  border-color: rgba(95, 255, 170, 0.3);
+}
+
+.wa-primary-btn {
+  padding: 11px 16px;
+  border-radius: 14px;
+}
+
+.wa-hidden-input {
+  display: none;
+}
+
+.wa-spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.24);
+  border-top-color: #9cf4c4;
+  animation: wa-spin 0.8s linear infinite;
+}
+
+.wa-spinner--sm {
+  width: 12px;
+  height: 12px;
+}
+
+.wa-lightbox {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 8, 14, 0.88);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 40;
+}
+
+.wa-lightbox-card {
+  max-width: min(84vw, 920px);
+  max-height: 86vh;
+  padding: 14px;
+  border-radius: 28px;
+  background: rgba(11, 18, 29, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.wa-lightbox-card img {
+  max-width: 100%;
+  max-height: calc(86vh - 90px);
+  border-radius: 20px;
+  display: block;
+}
+
+.wa-lightbox-actions {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.wa-fade-enter-active,
+.wa-fade-leave-active {
+  transition: opacity 0.18s ease;
+}
+
+.wa-fade-enter-from,
+.wa-fade-leave-to {
+  opacity: 0;
+}
+
+@keyframes wa-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes wa-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@media (max-width: 1280px) {
+  .wa-info-panel {
+    width: 280px;
+  }
+}
+
+@media (max-width: 1180px) {
+  .wa-shell {
+    grid-template-columns: 320px minmax(0, 1fr);
+  }
+
+  .wa-shell.is-collapsed {
+    grid-template-columns: 88px minmax(0, 1fr);
+  }
+
+  .wa-state-hero {
+    grid-template-columns: 1fr;
+    justify-items: center;
+  }
+
+  .wa-message-stack {
+    max-width: min(76%, 520px);
+  }
+}
+
+@media (max-width: 980px) {
+  .wa-chat-layout {
     flex-direction: column;
-    background: rgba(8, 13, 28, 0.64);
-    backdrop-filter: blur(20px);
   }
-  
-  .wa-sidebar-head {
-    display: flex;
-    align-items: center;
-    padding: 16px 14px 10px;
-    border-bottom: 1px solid var(--border-subtle);
-    gap: 8px;
+
+  .wa-info-panel {
+    width: auto;
+    padding: 0 18px 14px;
   }
-  .wa-sidebar-title {
-    flex: 1;
-    font-size: 15px;
-    font-weight: 700;
-    color: var(--text-primary);
-    display: flex;
-    align-items: center;
-    gap: 8px;
+}
+
+@media (max-width: 860px) {
+  .wa-shell,
+  .wa-shell.is-collapsed {
+    grid-template-columns: 1fr;
   }
-  .wa-icon-btn {
-    background: rgba(255,255,255,.035);
-    border: 1px solid var(--border-default);
-    border-radius: 999px;
-    padding: 6px;
-    cursor: pointer;
-    color: var(--text-secondary);
-    display: flex; align-items: center; justify-content: center;
+
+  .wa-sidebar,
+  .wa-sidebar.collapsed {
+    min-height: 40vh;
+    height: auto;
+    border-right: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    padding-inline: 14px;
   }
-  .wa-icon-btn:hover { background: rgba(255,255,255,.06); color: var(--text-primary); border-color: var(--border-strong); }
-  
-  .wa-search-wrap { padding: 8px 12px; }
-  .wa-action-panel-wrap { padding: 0 12px 8px; }
-  .wa-sidebar :deep(.comm-insights) { background: var(--bg-base); }
-  .wa-sidebar :deep(.comm-panel) { background: var(--bg-base); }
-  .wa-search {
+
+  .wa-chat-row.compact {
+    grid-template-columns: 46px minmax(0, 1fr) auto;
     width: 100%;
-    background: rgba(255,255,255,.045);
-    border: 1px solid var(--border-default);
-    border-radius: 999px;
-    padding: 9px 12px;
-    color: var(--text-primary);
-    font-size: 12px;
-    outline: none;
-    box-sizing: border-box;
-    backdrop-filter: blur(14px);
+    padding: 10px 12px;
   }
-  .wa-search:focus { border-color: var(--border-strong); box-shadow: 0 0 0 4px rgba(82,212,255,.08); }
-  .wa-search::placeholder { color: var(--text-muted); }
-  
-  .wa-chat-list { flex: 1; overflow-y: auto; }
-  
-  .wa-chat-item {
+
+  .wa-chat-list.compact {
+    align-items: stretch;
+    gap: 2px;
+  }
+
+  .wa-brand-copy {
     display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 14px;
-    cursor: pointer;
-    transition: background 0.12s;
-    border-bottom: 1px solid rgba(255,255,255,0.03);
   }
-  .wa-chat-item:hover  { background: rgba(255,255,255,.05); }
-  .wa-chat-item.active { background: linear-gradient(135deg, rgba(82,212,255,.08), rgba(139,125,255,.08)); border-left: 3px solid var(--accent); }
-  
-  .wa-chat-avatar {
-    width: 38px; height: 38px;
-    border-radius: 50%;
-    background: linear-gradient(135deg, #25D366, #128C7E);
-    color: white;
-    font-size: 13px;
-    font-weight: 700;
-    display: flex; align-items: center; justify-content: center;
-    flex-shrink: 0;
+
+  .wa-search-wrap,
+  .wa-filter-row,
+  .wa-action-panel-wrap {
+    display: block;
   }
-  .wa-chat-avatar.is-group { background: linear-gradient(135deg, #6366f1, #8b5cf6); }
-  
-  .wa-chat-info { flex: 1; min-width: 0; }
-  .wa-chat-name-row {
-    display:flex;
-    align-items:center;
-    gap:8px;
+}
+
+@media (max-width: 640px) {
+  .wa-chat-head,
+  .wa-composer-shell,
+  .wa-thread-scroll {
+    padding-inline: 12px;
   }
-  .wa-chat-name {
-    font-size: 13px; font-weight: 600;
-    color: var(--text-primary);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+
+  .wa-thread-scroll {
+    padding-top: 14px;
   }
-  .wa-action-chip {
-    display:inline-flex; align-items:center; justify-content:center;
-    padding:3px 7px; border-radius:999px;
-    font-size:9px; font-weight:700;
-    background:rgba(148,163,184,.16);
-    color:var(--text-secondary);
+
+  .wa-compose {
+    grid-template-columns: auto auto auto minmax(0, 1fr);
   }
-  .wa-action-chip.state-waiting_on_your_reply { background:rgba(245,158,11,.14); color:#b45309; }
-  .wa-action-chip.state-needs_approval { background:rgba(239,68,68,.14); color:#b91c1c; }
-  .wa-action-chip.state-needs_follow_up { background:rgba(14,165,233,.14); color:#0369a1; }
-  .wa-action-chip.state-waiting_on_others { background:rgba(16,185,129,.14); color:#047857; }
-  .wa-chat-preview {
-    font-size: 11px; color: var(--text-muted);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    margin-top: 2px;
+
+  .wa-compose-input {
+    grid-column: 1 / -1;
+    order: 2;
   }
-  .wa-chat-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-  .wa-unread-badge {
-    background: #25D366; color: white;
-    font-size: 10px; font-weight: 700;
-    min-width: 18px; height: 18px;
-    border-radius: 9px;
-    display: flex; align-items: center; justify-content: center;
-    padding: 0 4px;
+
+  .wa-compose-send,
+  .wa-compose-btn:last-child {
+    order: 3;
   }
-  .wa-pin { font-size: 10px; }
-  
-  /* ── Main ────────────────────────────────────────────────────────────────── */
-  .wa-main {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
+
+  .wa-message-stack {
+    max-width: min(86%, 100%);
   }
-  
-  .wa-no-chat {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    color: var(--text-muted);
-  }
-  
-  .wa-chat-head {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 12px 16px;
-    border-bottom: 1px solid var(--border-subtle);
-    background: rgba(8, 13, 28, 0.46);
-    flex-shrink: 0;
-    backdrop-filter: blur(16px);
-  }
-  .wa-chat-head-avatar {
-    width: 36px; height: 36px;
-    border-radius: 50%;
-    background: linear-gradient(135deg, #25D366, #128C7E);
-    color: white; font-size: 13px; font-weight: 700;
-    display: flex; align-items: center; justify-content: center;
-  }
-  .wa-chat-head-info { flex: 1; }
-  .wa-chat-head-name { font-size: 14px; font-weight: 600; color: var(--text-primary); }
-  .wa-chat-head-sub  { font-size: 11px; color: var(--text-muted); }
-  
-  /* ── Messages ────────────────────────────────────────────────────────────── */
-  .wa-messages {
-    flex: 1;
-    overflow-y: auto;
-    padding: 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    background: transparent;
-  }
-  
-  .wa-msg { display: flex; }
-  .wa-msg-out { justify-content: flex-end; }
-  .wa-msg-in  { justify-content: flex-start; }
-  
-  .wa-msg-bubble {
-    max-width: 70%;
-    padding: 10px 13px;
-    border-radius: 18px;
-    font-size: 13px;
-    line-height: 1.4;
-    backdrop-filter: blur(14px);
-  }
-  .wa-msg-out .wa-msg-bubble {
-    background: #25D366;
-    color: white;
-    border-bottom-right-radius: 4px;
-  }
-  .wa-msg-in .wa-msg-bubble {
-    background: rgba(255,255,255,.05);
-    border: 1px solid var(--border-default);
-    color: var(--text-primary);
-    border-bottom-left-radius: 4px;
-  }
-  .wa-msg-sender { font-size: 10px; font-weight: 700; color: #25D366; margin-bottom: 3px; }
-  .wa-msg-text   { word-break: break-word; }
-  .wa-msg-time   { font-size: 10px; opacity: 0.6; margin-top: 3px; text-align: right; }
-  
-  .wa-no-msgs {
-    text-align: center; color: var(--text-muted);
-    font-size: 13px; margin: auto;
-  }
-  
-  /* ── Reply bar ───────────────────────────────────────────────────────────── */
-  .wa-reply-bar {
-    display: flex;
-    align-items: flex-end;
-    gap: 8px;
-    padding: 10px 18px 18px;
-    border-top: 1px solid var(--border-subtle);
-    background: rgba(8, 13, 28, 0.52);
-    backdrop-filter: blur(18px);
-  }
-  .wa-reply-input {
-    flex: 1;
-    background: rgba(255,255,255,.045);
-    border: 1px solid rgba(255, 255, 255, 0.09);
-    border-radius: 16px;
-    padding: 12px 14px;
-    color: var(--text-primary);
-    font-size: 13px;
-    outline: none;
-    resize: none;
-    min-height: 46px;
-    max-height: 160px;
-    line-height: 1.45;
-    box-sizing: border-box;
-    scrollbar-width: none;
-    backdrop-filter: blur(14px);
-    transition: border-color 0.15s, box-shadow 0.15s;
-  }
-  .wa-reply-input:focus { border-color: rgba(59, 130, 246, 0.26); box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.08); }
-  .wa-reply-input::placeholder { color: var(--text-muted); }
-  .wa-send-btn {
-    width: 44px; height: 44px;
-    border-radius: 16px;
-    background: linear-gradient(135deg, #3b82f6, #0ea5e9);
-    border: 1px solid rgba(125, 211, 252, 0.22);
-    color: white;
-    cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    flex-shrink: 0;
-    transition: transform 0.15s, box-shadow 0.15s, opacity 0.15s;
-  }
-  .wa-send-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 16px 32px rgba(14, 165, 233, 0.22); }
-  .wa-send-btn:disabled { opacity: 0.55; cursor: not-allowed; }
-  
-  /* ── Loading / states ────────────────────────────────────────────────────── */
-  .wa-loading {
-    display: flex; align-items: center; gap: 8px;
-    padding: 20px; color: var(--text-muted); font-size: 13px;
-  }
-  .wa-spinner {
-    width: 16px; height: 16px;
-    border: 2px solid rgba(255,255,255,0.2);
-    border-top-color: #25D366;
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-  }
-  .wa-spinner-sm {
-    width: 12px; height: 12px;
-    border: 2px solid rgba(255,255,255,0.4);
-    border-top-color: white;
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  
-  .wa-not-connected {
-    flex: 1; display: flex; flex-direction: column;
-    align-items: center; justify-content: center;
-    text-align: center; padding: 20px;
-    color: var(--text-primary); font-size: 13px;
-  }
-  .wa-connect-btn {
-    background: #25D366; color: white;
-    border: none; border-radius: 8px;
-    padding: 8px 16px; font-size: 13px;
-    font-weight: 600; cursor: pointer;
-  }
-  .wa-empty-chats {
-    text-align: center; padding: 20px;
-    color: var(--text-muted); font-size: 13px;
-  }
-  </style>
+}
+</style>

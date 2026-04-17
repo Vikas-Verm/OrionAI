@@ -22,12 +22,35 @@ function getSignalConnectionState(integration = {}) {
   };
 }
 
+function getWhatsAppConnectionState(integration = {}) {
+  const matrix = integration?.matrix || {};
+  const legacy = integration?.whatsapp || {};
+  const hasSession = Boolean(matrix.accessToken && matrix.homeserverUrl && matrix.mxid);
+  const loginState = String(matrix.loginState || "").trim().toLowerCase();
+
+  return {
+    hasSession,
+    loginState: loginState || (legacy.connectedAt ? "connected" : "disconnected"),
+    isConnected: loginState
+      ? loginState === "connected" && hasSession
+      : Boolean(legacy.connected),
+  };
+}
+
 function isConnectedIntegration(integration = {}) {
   const type = integration?.type;
   if (!type) return false;
 
   if (type === "gmail") {
     return hasGoogleConnection(integration.gmail);
+  }
+
+  if (type === "google_docs") {
+    return hasGoogleConnection(integration.googleDocs);
+  }
+
+  if (type === "google_sheets") {
+    return hasGoogleConnection(integration.googleSheets);
   }
 
   if (type === "google_calendar") {
@@ -47,7 +70,7 @@ function isConnectedIntegration(integration = {}) {
   }
 
   if (type === "whatsapp") {
-    return Boolean(integration.whatsapp?.connected);
+    return getWhatsAppConnectionState(integration).isConnected;
   }
 
   if (type === "jira") {
@@ -78,4 +101,5 @@ function isConnectedIntegration(integration = {}) {
 module.exports = {
   isConnectedIntegration,
   getSignalConnectionState,
+  getWhatsAppConnectionState,
 };

@@ -528,48 +528,90 @@ function normalizeSignalConversation(room, messages = [], me = {}) {
 }
 
 function normalizeWhatsAppConversation(chat, messages = []) {
-  const normalizedMessages = messages.map((message) => ({
-    id: message.id._serialized,
-    timestamp: toTimestamp(message.timestamp),
-    text: normalizeText(message.body || ""),
-    previewText: normalizeText(message.body || ""),
-    direction: message.fromMe ? "outbound" : "inbound",
-    senderType:
-      message.type === "chat"
-        ? "human"
-        : chat.isReadOnly
-          ? "system"
-          : "unknown",
-    senderId: message.from || "",
-    senderName: message.fromMe ? "You" : message._data?.notifyName || chat.name,
-    mentionedCurrentUser: false,
-    addressedToCurrentUser: !chat.isGroup,
-    hasAttachments: message.type !== "chat",
-  }));
+  const isMatrixBackedChat = Boolean(chat?.roomId || chat?.title || chat?.lastMessagePreview);
+
+  const normalizedMessages = messages.map((message) => {
+    if (isMatrixBackedChat) {
+      const attachments = Array.isArray(message.attachments)
+        ? message.attachments
+        : [];
+      const attachmentLabel =
+        attachments[0]?.fileName ||
+        attachments[0]?.type ||
+        "";
+      const text = normalizeText(message.text || attachmentLabel);
+      const direction =
+        message.direction || (message.fromMe ? "outbound" : "inbound");
+
+      return {
+        id: message.id || message.eventId,
+        timestamp: toTimestamp(message.timestamp),
+        text,
+        previewText: text,
+        direction,
+        senderType: chat.isGroup ? "unknown" : "human",
+        senderId: message.senderId || "",
+        senderName:
+          message.senderName ||
+          (direction === "outbound" ? "You" : chat.title || chat.name),
+        mentionedCurrentUser: false,
+        addressedToCurrentUser: !chat.isGroup,
+        hasAttachments: attachments.length > 0,
+      };
+    }
+
+    return {
+      id: message.id._serialized,
+      timestamp: toTimestamp(message.timestamp),
+      text: normalizeText(message.body || ""),
+      previewText: normalizeText(message.body || ""),
+      direction: message.fromMe ? "outbound" : "inbound",
+      senderType:
+        message.type === "chat"
+          ? "human"
+          : chat.isReadOnly
+            ? "system"
+            : "unknown",
+      senderId: message.from || "",
+      senderName: message.fromMe ? "You" : message._data?.notifyName || chat.name,
+      mentionedCurrentUser: false,
+      addressedToCurrentUser: !chat.isGroup,
+      hasAttachments: message.type !== "chat",
+    };
+  });
 
   return {
     sourceType: "whatsapp",
-    conversationId: chat.id._serialized,
+    conversationId: isMatrixBackedChat ? String(chat.roomId || chat.id) : chat.id._serialized,
     threadId: null,
-    conversationTitle: chat.name,
-    participantLabel: chat.name,
+    conversationTitle: chat.title || chat.name,
+    participantLabel: chat.title || chat.name,
     previewText:
-      normalizeText(chat.lastMessage?.body || "") ||
+      normalizeText(
+        chat.lastMessagePreview ||
+          chat.lastMessage ||
+          chat.lastMessage?.body ||
+          ""
+      ) ||
       normalizedMessages[normalizedMessages.length - 1]?.text ||
       "",
     sourceMetadata: {
       isDirect: !chat.isGroup,
       isGroup: Boolean(chat.isGroup),
       isBroadcast: Boolean(chat.isReadOnly),
-      unreadCount: Number(chat.unreadCount || 0),
-      participantLabel: chat.name,
+      unreadCount: Number(chat.unreadCount || chat.unread || 0),
+      participantLabel: chat.title || chat.name,
     },
     platformMetadata: {
       isGroup: Boolean(chat.isGroup),
-      unreadCount: Number(chat.unreadCount || 0),
+      unreadCount: Number(chat.unreadCount || chat.unread || 0),
+      roomId: isMatrixBackedChat ? String(chat.roomId || chat.id) : undefined,
     },
     openContext: {
-      chatId: chat.id._serialized,
+      chatId: isMatrixBackedChat
+        ? String(chat.roomId || chat.id)
+        : chat.id._serialized,
+      roomId: isMatrixBackedChat ? String(chat.roomId || chat.id) : undefined,
     },
     messages: normalizedMessages,
   };

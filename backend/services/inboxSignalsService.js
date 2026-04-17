@@ -3,7 +3,10 @@
 const Integration = require("../models/Integration");
 const { chatCompleteNoSystem } = require("./llmService");
 const { getCommunicationNotificationSignal } = require("./communicationActionService");
-const { getSignalConnectionState } = require("./integrationConnectionState");
+const {
+  getSignalConnectionState,
+  getWhatsAppConnectionState,
+} = require("./integrationConnectionState");
 const {
   getGmailAttentionSignal,
   getCalendarUpcomingSignal,
@@ -248,7 +251,7 @@ async function checkWhatsApp(userId) {
       type: "whatsapp",
       enabled: true,
     });
-    if (!integration?.whatsapp?.connected) return null;
+    if (!getWhatsAppConnectionState(integration).isConnected) return null;
 
     const { whatsappGetUnread } = require("./tools/toolWhatsapp");
     const result = await whatsappGetUnread({}, { userId });

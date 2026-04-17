@@ -4,7 +4,9 @@ const { WebSocketServer, WebSocket } = require("ws");
 const jwt = require("jsonwebtoken");
 const Integration = require("../models/Integration");
 const { chatCompleteNoSystem } = require("./llmService");
-const { getCommunicationNotificationSignal } = require("./communicationActionService");
+const {
+  getCommunicationNotificationSignal,
+} = require("./communicationActionService");
 const { getSignalConnectionState } = require("./integrationConnectionState");
 const {
   getGmailClient,
@@ -113,18 +115,34 @@ function init(httpServer) {
 // ─────────────────────────────────────────────────────────────────────────────
 // POLL USER
 // ─────────────────────────────────────────────────────────────────────────────
-async function pollUser(userId, isFirstRun = false) {
+async function pollUser(userId, isFirstRun = false, options = {}) {
   if (!connections.has(userId)) return;
 
+  const {
+    forceGmail = false, // use true from Gmail webhook / manual refresh
+    forceAi = false, // optional: force AI summary generation
+  } = options;
+
+  const prevCounts = lastCounts.get(userId) || {};
+  const prevSnapshot = (pollUser._lastSnapshot ||= new Map());
+
+  // Gmail should NOT be checked on every 15s poll.
+  // Only check it:
+  // 1) on first run
+  // 2) when explicitly forced (gmail webhook / manual refresh)
+  const shouldCheckGmail = isFirstRun || forceGmail;
+
+  const tasks = [
+    shouldCheckGmail ? checkGmail(userId, isFirstRun) : Promise.resolve(null),
+    checkCalendar(userId, isFirstRun),
+    checkTelegram(userId, isFirstRun),
+    checkSignal(userId, isFirstRun),
+    checkSlack(userId, isFirstRun),
+    checkWhatsApp(userId),
+  ];
+
   const [gmailRes, calendarRes, telegramRes, signalRes, slackRes, whatsappRes] =
-    await Promise.allSettled([
-      checkGmail(userId, isFirstRun),
-      checkCalendar(userId, isFirstRun),
-      checkTelegram(userId, isFirstRun),
-      checkSignal(userId, isFirstRun),
-      checkSlack(userId, isFirstRun),
-      checkWhatsApp(userId),
-    ]);
+    await Promise.allSettled(tasks);
 
   const checks = {
     gmail: gmailRes.status === "fulfilled" ? gmailRes.value : null,
@@ -137,7 +155,6 @@ async function pollUser(userId, isFirstRun = false) {
   };
 
   const updates = [];
-  const prevCounts = lastCounts.get(userId) || {};
   const currCounts = {};
 
   for (const [app, result] of Object.entries(checks)) {
@@ -148,17 +165,44 @@ async function pollUser(userId, isFirstRun = false) {
     const isNew = !isFirstRun && result._isNew === true;
     const newCount = isNew ? result._newCount || 1 : 0;
 
+    const visibleItems = result.items?.slice(0, 3) || [];
+
+    // Build a lightweight snapshot so we only broadcast when UI-visible data changed
+    const nextSnapshot = JSON.stringify({
+      count: result.count || 0,
+      summary: result.summary || null,
+      items: visibleItems.map((item) => ({
+        id: item.latestMessageId || item.id || item.chatId || null,
+        unread: item.unread || 0,
+        preview: item.preview || item.subject || item.name || "",
+        latestMessageAt: item.latestMessageAt || null,
+      })),
+      highSignalCount: result.highSignalCount || 0,
+    });
+
+    const snapshotKey = `${userId}:${app}`;
+    const previousSnapshot = prevSnapshot.get(snapshotKey);
+
+    const hasVisibleChange =
+      isFirstRun || previousSnapshot !== nextSnapshot || isNew;
+
+    if (!hasVisibleChange) {
+      continue;
+    }
+
+    prevSnapshot.set(snapshotKey, nextSnapshot);
+
     const ai =
       result.allowAi === false
         ? null
-        : (isNew || isFirstRun) && result.items?.length
-        ? await aiProcess(app, result.items).catch(() => null)
+        : (forceAi || isNew || isFirstRun) && visibleItems.length
+        ? await aiProcess(app, visibleItems).catch(() => null)
         : null;
 
     updates.push({
       app,
       count: result.count,
-      items: result.items?.slice(0, 3) || [],
+      items: visibleItems,
       summary: result.summary || null,
       ai,
       isNew,
@@ -208,6 +252,22 @@ async function refreshUserSignals(userId) {
 // ─────────────────────────────────────────────────────────────────────────────
 async function checkGmail(userId, isFirstRun) {
   try {
+    const integration = await Integration.findOne({
+      userId,
+      type: "gmail",
+      enabled: true,
+    }).lean();
+
+    if (!integration?.gmail?.accessToken) return null;
+
+    const grantedScopes =
+      integration.gmail?.grantedScopes || integration.gmail?.scopes || [];
+
+    if (!hasAnyGmailScope(grantedScopes)) {
+      // Do not log every 15s as an error. This is a disabled capability state.
+      return null;
+    }
+
     let attention = null;
     try {
       const communicationSignal = await getCommunicationNotificationSignal(
@@ -222,13 +282,19 @@ async function checkGmail(userId, isFirstRun) {
     if (!attention) {
       const client = await getGmailClient(userId);
       if (!client) return null;
-      attention = await getGmailAttentionFromClient(client.gmail, client.integration, {
-        previewLimit: 5,
-      });
+      attention = await getGmailAttentionFromClient(
+        client.gmail,
+        client.integration,
+        { previewLimit: 5 }
+      );
     }
 
     if (!attention) return null;
-    const currentItems = (attention?.items || attention?.previews || []).slice(0, 5);
+
+    const currentItems = (attention?.items || attention?.previews || []).slice(
+      0,
+      5
+    );
     const currentIds = new Set(
       currentItems
         .map((thread) => thread.latestMessageId || thread.id)
@@ -238,12 +304,6 @@ async function checkGmail(userId, isFirstRun) {
     const newIds = [...currentIds].filter((id) => !prevIds.has(id));
 
     lastGmailMsgIds.set(userId, currentIds);
-
-    if (!isFirstRun) {
-      console.log(
-        `[Gmail] ${userId} — active reply-worthy: ${currentItems.length}, new: ${newIds.length}`
-      );
-    }
 
     const newEligibleThreads = currentItems.filter((thread) =>
       newIds.includes(thread.latestMessageId || thread.id)
@@ -260,13 +320,6 @@ async function checkGmail(userId, isFirstRun) {
     }));
 
     const hasNew = !isFirstRun && newEligibleThreads.length > 0;
-    if (hasNew) {
-      console.log(
-        `📧 Gmail NEW for ${userId}: ${newEligibleThreads.length} — ${newEligibleThreads
-          .map((i) => i.subject)
-          .join(" | ")}`
-      );
-    }
 
     return {
       count: attention.count,
@@ -274,13 +327,20 @@ async function checkGmail(userId, isFirstRun) {
       items,
       _isNew: hasNew,
       _newCount: newEligibleThreads.length,
-      highSignalCount: newEligibleThreads.filter((item) => item.highConfidence).length,
+      highSignalCount: newEligibleThreads.filter((item) => item.highConfidence)
+        .length,
     };
   } catch (err) {
-    if (err?.code === "GMAIL_RECONNECT_REQUIRED") {
-      console.warn(`[Gmail] reconnect required for ${userId}`);
+    const msg = String(err?.message || "");
+
+    if (
+      err?.code === "GMAIL_RECONNECT_REQUIRED" ||
+      msg.includes("insufficient authentication scopes")
+    ) {
+      // optionally mark integration degraded / reconnect_required
       return null;
     }
+
     console.error(`[Gmail] error for ${userId}:`, err.message);
     return null;
   }
@@ -347,9 +407,19 @@ async function checkTelegram(userId, isFirstRun) {
           : null;
 
         return {
-          id: chat.chatId || chat.id || chat.username || chat.chatName || chat.name,
+          id:
+            chat.chatId ||
+            chat.id ||
+            chat.username ||
+            chat.chatName ||
+            chat.name,
           chatId: chat.chatId || chat.id || null,
-          senderKey: chat.chatId || chat.id || chat.username || chat.chatName || chat.name,
+          senderKey:
+            chat.chatId ||
+            chat.id ||
+            chat.username ||
+            chat.chatName ||
+            chat.name,
           name: chat.chatName || chat.name,
           unread: chat.unreadCount || chat.unread || 0,
           preview: latestMessage?.text || chat.lastMessage || "",
@@ -419,7 +489,9 @@ async function checkSignal(userId, isFirstRun) {
       summary: result?.summary || null,
       _isNew: isNew,
       _newCount: isNew ? count - (prevCount || 0) : 0,
-      highSignalCount: rooms.filter((room) => Number(room.highlightCount || 0) > 0).length,
+      highSignalCount: rooms.filter(
+        (room) => Number(room.highlightCount || 0) > 0
+      ).length,
     };
   } catch {
     return null;
@@ -585,7 +657,11 @@ async function startTelegramListener(userId) {
         const from =
           sender?.firstName || sender?.title || sender?.username || "Unknown";
         const senderKey = String(
-          sender?.id || sender?.username || sender?.phone || sender?.title || from
+          sender?.id ||
+            sender?.username ||
+            sender?.phone ||
+            sender?.title ||
+            from
         );
         const text = (message.text || "").trim();
         const preview = text || "Sent a media message";
@@ -614,7 +690,9 @@ async function startTelegramListener(userId) {
             {
               app: "telegram",
               count: next,
-              items: [{ id: senderKey, senderKey, name: from, preview, unread: 1 }],
+              items: [
+                { id: senderKey, senderKey, name: from, preview, unread: 1 },
+              ],
               summary: realtimeSummary,
               ai,
               isNew: true,
@@ -719,7 +797,7 @@ async function handleGmailWebhook(req, res) {
 
     // Trigger immediate poll — this will compare message IDs and fire notification
     console.log(`[Gmail Webhook] Triggering immediate poll for ${userId}`);
-    await pollUser(userId, false);
+    await pollUser(userId, false, { forceGmail: true });
   } catch (err) {
     console.error("[Gmail Webhook] Error:", err.message);
   }
@@ -883,6 +961,16 @@ async function aiProcess(app, items) {
   }
 }
 
+function hasAnyGmailScope(scopes = []) {
+  const set = new Set((scopes || []).filter(Boolean));
+  return (
+    set.has("https://mail.google.com/") ||
+    set.has("https://www.googleapis.com/auth/gmail.readonly") ||
+    set.has("https://www.googleapis.com/auth/gmail.modify") ||
+    set.has("https://www.googleapis.com/auth/gmail.compose") ||
+    set.has("https://www.googleapis.com/auth/gmail.metadata")
+  );
+}
 module.exports = {
   init,
   pushToUser,

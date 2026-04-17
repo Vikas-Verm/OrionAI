@@ -23,6 +23,12 @@ const signalRoutes = require("./routes/signalRoutes");
 
 const { gmailOAuthCallback } = require("./controllers/gmailOauthController");
 const {
+  googleDocsOAuthCallback,
+} = require("./controllers/googleDocsOauthController");
+const {
+  googleSheetsOAuthCallback,
+} = require("./controllers/googleSheetsOauthController");
+const {
   googleCalendarOAuthCallback,
 } = require("./controllers/googleCalenderOauthController");
 const {
@@ -39,6 +45,8 @@ const googleAuthRoutes = require("./routes/googleAuthRoutes");
 const healthRoutes = require("./routes/healthRoutes");
 const briefingRoutes = require("./routes/briefingRoutes");
 const communicationRoutes = require("./routes/communicationRoutes");
+const googleDocsRoutes = require("./routes/googleDocsRoutes");
+const googleSheetsRoutes = require("./routes/googleSheetsRoutes");
 const {
   initErrorMonitoring,
   attachErrorMonitoringContext,
@@ -57,7 +65,8 @@ app.use(
   })
 );
 
-app.use(express.json());
+app.use(express.json({ limit: "25mb" }));
+app.use(express.urlencoded({ extended: true, limit: "25mb" }));
 attachErrorMonitoringContext(app);
 
 // ── Public ────────────────────────────────────────────────────────────────────
@@ -66,6 +75,8 @@ app.get("/health", (req, res) => res.json({ status: "ok" }));
 
 // ── OAuth callbacks (no auth — external services redirect here) ───────────────
 app.get("/api/integrations/gmail/oauth/callback", gmailOAuthCallback);
+app.get("/api/integrations/google-docs/oauth/callback", googleDocsOAuthCallback);
+app.get("/api/integrations/google-sheets/oauth/callback", googleSheetsOAuthCallback);
 app.get(
   "/api/integrations/google-calendar/oauth/callback",
   googleCalendarOAuthCallback
@@ -89,6 +100,8 @@ app.use("/api/gmail", gmailModuleRoutes);
 app.use("/api/jira", jiraModuleRoutes);
 app.use("/api/calendar", calendarModuleRoutes);
 app.use("/api/slack", slackModuleRoutes);
+app.use("/api/google-docs", authenticate, googleDocsRoutes);
+app.use("/api/google-sheets", authenticate, googleSheetsRoutes);
 app.use("/api/signal", signalRoutes);
 app.post("/api/webhooks/gmail", handleGmailWebhook);
 app.post("/api/webhooks/slack", handleSlackWebhook);

@@ -187,7 +187,7 @@
         <strong>{{ status.connected ? 'Select a conversation' : 'Signal is waiting for setup' }}</strong>
         <p>
           {{ status.connected
-            ? 'Choose a room from the left to open your Signal timeline, upload files, and manage replies.'
+            ? 'Choose a chat from the left to open your Signal timeline, upload files, and manage replies.'
             : 'Once connected, notifications, urgent WorkspaceBriefing items, and the full Signal workspace will appear here.' }}
         </p>
       </div>

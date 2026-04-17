@@ -6,12 +6,18 @@ const PriorityFeedAction = require("../models/PriorityFeedAction");
 const { getGmailClient } = require("./workspaceSignalsService");
 const { chatCompleteNoSystem } = require("./llmService");
 const tg = require("./tools/toolTelegramMTProto");
-const { getOrCreateClient } = require("./tools/toolWhatsapp");
 const {
   listSignalRooms,
   getSignalRoomTimeline,
 } = require("./signalMatrixService");
-const { getSignalConnectionState } = require("./integrationConnectionState");
+const {
+  listWhatsAppChats,
+  getWhatsAppRoomTimeline,
+} = require("./whatsappMatrixService");
+const {
+  getSignalConnectionState,
+  getWhatsAppConnectionState,
+} = require("./integrationConnectionState");
 const {
   ACTION_STATES,
   ACTION_STATE_META,
@@ -678,17 +684,17 @@ function maybeLogStateDebug(states = [], options = {}) {
 
   if (!debugEnabled || !Array.isArray(states) || states.length === 0) return;
 
-  console.debug(
-    "[conversation-state]",
-    states.map((state) => state.debug || {
-      source: state.sourceType,
-      conversationId: state.conversationId,
-      computedState: state.state,
-      currentActor: state.currentActor,
-      reason: state.actionReason,
-      confidence: state.confidence,
-    })
-  );
+  // console.debug(
+  //   "[conversation-state]",
+  //   states.map((state) => state.debug || {
+  //     source: state.sourceType,
+  //     conversationId: state.conversationId,
+  //     computedState: state.state,
+  //     currentActor: state.currentActor,
+  //     reason: state.actionReason,
+  //     confidence: state.confidence,
+  //   })
+  // );
 }
 
 function summarizeSource(sourceType, summary) {
@@ -1044,16 +1050,20 @@ async function fetchWhatsAppStates(userId, options = {}) {
     type: "whatsapp",
     enabled: true,
   });
-  if (!integration?.whatsapp?.connected) return [];
+  const whatsappState = getWhatsAppConnectionState(integration);
+  if (!whatsappState.isConnected) return [];
 
-  const entry = await getOrCreateClient(userId).catch(() => null);
-  if (!entry?.client || entry.status !== "connected") return [];
-
-  const chats = await entry.client.getChats();
+  const chats = await listWhatsAppChats(userId, { limit: 80 }).catch(() => []);
   const candidates = chats
-    .filter((chat) => !chat.isArchived)
+    .filter(
+      (chat) =>
+        !chat.isArchived &&
+        (!chat.isGroup || Number(chat.unreadCount || 0) > 0 || !options.unreadOnly)
+    )
     .sort((a, b) => {
-      if (Boolean(b.isGroup) !== Boolean(a.isGroup)) return Number(a.isGroup) - Number(b.isGroup);
+      if (Boolean(b.isGroup) !== Boolean(a.isGroup)) {
+        return Number(a.isGroup) - Number(b.isGroup);
+      }
       return Number(b.unreadCount || 0) - Number(a.unreadCount || 0);
     })
     .slice(0, SOURCE_THRESHOLDS.whatsapp.maxConversations);
@@ -1061,12 +1071,12 @@ async function fetchWhatsAppStates(userId, options = {}) {
   const conversations = await Promise.all(
     candidates.map(async (chat) => {
       try {
-        const messages = await chat.fetchMessages({
+        const timeline = await getWhatsAppRoomTimeline(userId, chat.roomId || chat.id, {
           limit: SOURCE_THRESHOLDS.whatsapp.messageLimit,
         });
         return conversationSourceAdapters.normalizeWhatsAppConversation(
           chat,
-          messages
+          timeline.messages || []
         );
       } catch {
         return null;
