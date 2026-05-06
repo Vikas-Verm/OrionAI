@@ -79,6 +79,15 @@ function summarizeNumericColumns(rows = []) {
   return summaries;
 }
 
+function inferSheetDomain(headers = []) {
+  const text = headers.join(" ").toLowerCase();
+  if (/invoice|payment|due|paid|client|customer/.test(text)) return "invoices and payments";
+  if (/budget|spend|expense|cost|remaining|balance/.test(text)) return "budget tracking";
+  if (/status|owner|priority|stage|task/.test(text)) return "project tracking";
+  if (/date|month|week|year|forecast|trend/.test(text)) return "time-based reporting";
+  return "";
+}
+
 function buildSheetAiContext(payload = {}) {
   const workbookTitle = String(payload.workbookTitle || "Untitled spreadsheet");
   const activeSheet = payload.activeSheet || {};
@@ -87,17 +96,29 @@ function buildSheetAiContext(payload = {}) {
   const charts = Array.isArray(activeSheet.charts) ? activeSheet.charts : [];
   const rangeRows = extractRangeRows(activeSheet, selection);
   const sheetPreview = extractRangeRows(activeSheet, null, 24);
+  const previewRows = rangeRows.length ? rangeRows : sheetPreview;
+  const headerLabels = (previewRows[0] || [])
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  const isEmptySheet = !sheetPreview.some((row) =>
+    row.some((value) => String(value || "").trim())
+  );
 
   return {
     workbookTitle,
     activeSheetTitle: String(activeSheet.title || "Sheet1"),
+    isEmptySheet,
+    headerLabels,
+    inferredDomain: inferSheetDomain(headerLabels),
+    previewRowCount: previewRows.length,
+    previewColumnCount: Math.max(...previewRows.map((row) => row.length), 0),
     activeRange: payload.activeRangeLabel || "",
     activeCell: payload.activeCellLabel || "",
     activeFormula: String(activeCell?.formula || ""),
     activeCellDisplay: cellDisplay(activeCell),
     selectionTable: rangeRows.length ? toMarkdownTable(rangeRows) : "",
     sheetPreviewTable: sheetPreview.length ? toMarkdownTable(sheetPreview) : "",
-    numericSummary: summarizeNumericColumns(rangeRows.length ? rangeRows : sheetPreview),
+    numericSummary: summarizeNumericColumns(previewRows),
     chartSummary: charts
       .slice(0, 8)
       .map((chart) => `${chart.title || "Chart"} (${chart.type || "chart"})`)

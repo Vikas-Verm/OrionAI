@@ -45,16 +45,31 @@
           <span class="gst-tool-button-caret">▾</span>
         </button>
 
-        <button
+        <div
           ref="sizeTriggerRef"
-          class="gst-tool-select gst-tool-button gst-tool-select--compact"
-          type="button"
-          :disabled="disabled"
-          @click.stop="togglePicker('size')"
+          class="gst-size-combo"
+          :class="{ disabled }"
         >
-          <span>{{ selectedFontSizeLabel }}</span>
-          <span class="gst-tool-button-caret">▾</span>
-        </button>
+          <input
+            v-model="sizeDraft"
+            class="gst-size-input"
+            type="text"
+            inputmode="decimal"
+            :disabled="disabled"
+            aria-label="Font size"
+            @keydown.enter.prevent="commitFontSize"
+            @blur="commitFontSize"
+          />
+          <button
+            class="gst-size-caret"
+            type="button"
+            :disabled="disabled"
+            aria-label="Choose font size"
+            @click.stop="togglePicker('size')"
+          >
+            ▾
+          </button>
+        </div>
       </div>
 
       <div class="gst-toolbar-divider"></div>
@@ -145,6 +160,9 @@
         </button>
         <button class="gst-tool-btn gst-tool-btn--icon" type="button" :disabled="disabled" title="Insert link" @click="emitAction('insert_link')">
           🔗
+        </button>
+        <button class="gst-tool-btn" type="button" :disabled="disabled" title="Insert comment" @click="emitAction('insert_comment')">
+          Comment
         </button>
         <button class="gst-tool-btn" type="button" title="Filter" @click="emitAction('open_filter')">
           Filter
@@ -270,7 +288,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 const props = defineProps({
   disabled: {
@@ -305,6 +323,7 @@ const borderTriggerRef = ref(null);
 const pickerMenuRef = ref(null);
 const moreMenuOpen = ref(false);
 const activePicker = ref("");
+const sizeDraft = ref("");
 const menuPosition = ref({ top: 0, left: 0 });
 const pickerPosition = ref({ top: 0, left: 0 });
 
@@ -328,7 +347,7 @@ const fontFamilyOptions = [
   { label: "Courier New", value: "Courier New" },
 ];
 
-const fontSizeOptions = [8, 9, 10, 11, 12, 13, 14, 16, 18, 20, 24, 30, 36].map((value) => ({
+const fontSizeOptions = [8, 9, 10, 10.5, 11, 12, 13, 14, 16, 17.5, 18, 20, 24, 30, 36].map((value) => ({
   label: String(value),
   value,
 }));
@@ -347,6 +366,13 @@ const verticalAlignmentOptions = [
 
 const borderOptions = [
   { label: "All borders", value: "all" },
+  { label: "Outer borders", value: "outer" },
+  { label: "Inner borders", value: "inner" },
+  { label: "Top border", value: "top" },
+  { label: "Right border", value: "right" },
+  { label: "Bottom border", value: "bottom" },
+  { label: "Left border", value: "left" },
+  { label: "Clear borders", value: "none" },
 ];
 
 const currentFontFamily = computed(() => String(props.format?.fontFamily || "Arial"));
@@ -363,7 +389,7 @@ const selectedFontFamilyLabel = computed(() => {
   );
   return match?.label || currentFontFamily.value || "Arial";
 });
-const selectedFontSizeLabel = computed(() => String(currentFontSize.value || 10));
+const selectedFontSizeLabel = computed(() => formatFontSize(currentFontSize.value || 10));
 const selectedHorizontalAlignmentLabel = computed(() => {
   const match = horizontalAlignmentOptions.find(
     (option) => option.value === currentHorizontalAlignment.value
@@ -455,6 +481,7 @@ function selectFontFamily(option) {
 }
 
 function selectFontSize(option) {
+  sizeDraft.value = formatFontSize(option.value);
   emitAction("set_font_size", option.value);
 }
 
@@ -470,6 +497,23 @@ function selectBorder(option) {
   emitAction("set_border", option.value);
 }
 
+function formatFontSize(value = 10) {
+  const numeric = Number(value || 10);
+  if (!Number.isFinite(numeric) || numeric <= 0) return "10";
+  return Number.isInteger(numeric) ? String(numeric) : numeric.toFixed(1).replace(/\.0$/, "");
+}
+
+function commitFontSize() {
+  const parsed = Number.parseFloat(String(sizeDraft.value || "").trim());
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    sizeDraft.value = selectedFontSizeLabel.value;
+    return;
+  }
+  const normalized = Math.max(1, Number(parsed.toFixed(1)));
+  sizeDraft.value = formatFontSize(normalized);
+  emitAction("set_font_size", normalized);
+}
+
 function emitMenuAction(type) {
   emitAction(type);
 }
@@ -478,7 +522,8 @@ function handleOutsideClick(event) {
   if (
     !event.target.closest(".gst-toolbar-menu-wrap") &&
     !event.target.closest(".gst-toolbar-menu") &&
-    !event.target.closest(".gst-tool-button")
+    !event.target.closest(".gst-tool-button") &&
+    !event.target.closest(".gst-size-combo")
   ) {
     moreMenuOpen.value = false;
     activePicker.value = "";
@@ -495,6 +540,7 @@ onMounted(() => {
   window.addEventListener("resize", handleViewportUpdate);
   window.addEventListener("scroll", handleViewportUpdate, true);
   toolbarRef.value?.addEventListener("scroll", handleViewportUpdate, { passive: true });
+  sizeDraft.value = selectedFontSizeLabel.value;
 });
 
 onBeforeUnmount(() => {
@@ -503,6 +549,14 @@ onBeforeUnmount(() => {
   window.removeEventListener("scroll", handleViewportUpdate, true);
   toolbarRef.value?.removeEventListener("scroll", handleViewportUpdate);
 });
+
+watch(
+  () => currentFontSize.value,
+  (value) => {
+    sizeDraft.value = formatFontSize(value);
+  },
+  { immediate: true }
+);
 </script>
 
 <style scoped>
@@ -614,6 +668,55 @@ onBeforeUnmount(() => {
 
 .gst-tool-select--compact {
   min-width: 58px;
+}
+
+.gst-size-combo {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  transition: background 0.16s ease, border-color 0.16s ease;
+}
+
+.gst-size-combo:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(176, 201, 255, 0.08);
+}
+
+.gst-size-combo.disabled {
+  opacity: 0.42;
+}
+
+.gst-size-input {
+  width: 54px;
+  min-height: 28px;
+  border: 0;
+  background: transparent;
+  color: rgba(232, 239, 255, 0.78);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0 8px;
+  outline: none;
+  text-align: center;
+}
+
+.gst-size-caret {
+  min-width: 24px;
+  min-height: 28px;
+  border: 0;
+  border-left: 1px solid rgba(176, 201, 255, 0.08);
+  border-radius: 0 10px 10px 0;
+  background: transparent;
+  color: rgba(232, 239, 255, 0.72);
+  cursor: pointer;
+  padding: 0 6px;
+}
+
+.gst-size-caret:disabled {
+  cursor: default;
 }
 
 .gst-color-chip {

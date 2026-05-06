@@ -57,6 +57,7 @@
                 :rowspan="rowSpan(rowIndex, columnIndex)"
                 :colspan="columnSpan(rowIndex, columnIndex)"
                 :style="cellStyle(rowIndex, columnIndex)"
+                :title="cellNote(rowIndex, columnIndex)"
                 @mousedown.prevent="onCellMouseDown(rowIndex, columnIndex, $event)"
                 @mouseenter="onCellMouseEnter(rowIndex, columnIndex)"
                 @dblclick.stop="emit('begin-edit', { row: rowIndex, column: columnIndex })"
@@ -64,15 +65,22 @@
                 <input
                   v-if="isEditingCell(rowIndex, columnIndex)"
                   class="gsg-editor"
-                  :value="editingValue"
-                  @input="emit('update-edit', $event.target.value)"
-                  @blur="emit('commit-edit', { row: rowIndex, column: columnIndex })"
-                  @keydown.enter.prevent="emit('commit-edit', { row: rowIndex, column: columnIndex, move: 'down' })"
-                  @keydown.tab.prevent="emit('commit-edit', { row: rowIndex, column: columnIndex, move: 'right' })"
+                  :value="localEditingValue"
+                  @input="handleEditorInput"
+                  @blur="emitEditorCommit({ row: rowIndex, column: columnIndex })"
+                  @keydown.enter.prevent="emitEditorCommit({ row: rowIndex, column: columnIndex, move: 'down' })"
+                  @keydown.tab.prevent="emitEditorCommit({ row: rowIndex, column: columnIndex, move: 'right' })"
                   @keydown.esc.prevent="emit('cancel-edit')"
                   :ref="setEditorRef"
                 />
-                <span v-else class="gsg-cell-text">{{ displayValue(rowIndex, columnIndex) }}</span>
+                <span
+                  v-if="!isEditingCell(rowIndex, columnIndex) && cellHasNote(rowIndex, columnIndex)"
+                  class="gsg-note-corner"
+                  aria-hidden="true"
+                ></span>
+                <span v-if="!isEditingCell(rowIndex, columnIndex)" class="gsg-cell-text">
+                  {{ displayValue(rowIndex, columnIndex) }}
+                </span>
               </td>
             </template>
           </tr>
@@ -86,7 +94,6 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import {
   buildCellLabel,
-  findMergeForCell,
   getCell,
   normalizeSelection,
 } from "../../services/googleSheetsWorkbook";
@@ -138,6 +145,7 @@ const emit = defineEmits([
 
 const selecting = ref(false);
 const editorRef = ref(null);
+const localEditingValue = ref("");
 const MIN_VISIBLE_ROWS = 24;
 const MIN_VISIBLE_COLUMNS = 10;
 
@@ -148,7 +156,7 @@ const rowIndices = computed(() =>
       length: Math.max(
         MIN_VISIBLE_ROWS,
         Number(props.sheet?.loadedRowCount || 0),
-        Number(props.sheet?.rowCount || 0)
+        Number(normalizedSelection.value.focusRow || 0) + 18
       ),
     },
     (_, index) => index
@@ -160,13 +168,28 @@ const columnIndices = computed(() =>
       length: Math.max(
         MIN_VISIBLE_COLUMNS,
         Number(props.sheet?.loadedColumnCount || 0),
-        Number(props.sheet?.columnCount || 0)
+        Number(normalizedSelection.value.focusColumn || 0) + 8
       ),
     },
     (_, index) => index
   )
 );
 const zoomScale = computed(() => Math.max(0.5, Math.min(1.5, Number(props.zoom || 100) / 100)));
+const mergeLookup = computed(() => {
+  const byCell = new Map();
+  for (const merge of props.sheet?.merges || []) {
+    const startRow = Number(merge.startRow || 0);
+    const endRow = Number(merge.endRow || startRow + 1);
+    const startColumn = Number(merge.startColumn || 0);
+    const endColumn = Number(merge.endColumn || startColumn + 1);
+    for (let rowIndex = startRow; rowIndex < endRow; rowIndex += 1) {
+      for (let columnIndex = startColumn; columnIndex < endColumn; columnIndex += 1) {
+        byCell.set(`${rowIndex}:${columnIndex}`, merge);
+      }
+    }
+  }
+  return byCell;
+});
 
 const gridVars = computed(() => ({
   "--gsg-font-size": `${13 * zoomScale.value}px`,
@@ -177,15 +200,15 @@ function columnLabel(index) {
 }
 
 function columnWidth(index) {
-  return Math.max(64, Number(props.sheet?.columnWidths?.[index] || 120) * zoomScale.value);
+  return Math.max(48, Number(props.sheet?.columnWidths?.[index] || 100) * zoomScale.value);
 }
 
 function rowHeight(index) {
-  return Math.max(28, Number(props.sheet?.rowHeights?.[index] || 32) * zoomScale.value);
+  return Math.max(21, Number(props.sheet?.rowHeights?.[index] || 21) * zoomScale.value);
 }
 
 function activeCellFor(rowIndex, columnIndex) {
-  const merge = findMergeForCell(props.sheet, rowIndex, columnIndex);
+  const merge = mergeForCell(rowIndex, columnIndex);
   if (!merge) return { row: rowIndex, column: columnIndex };
   return {
     row: merge.startRow,
@@ -201,7 +224,7 @@ function isEditingCell(rowIndex, columnIndex) {
 }
 
 function cellBounds(rowIndex, columnIndex) {
-  const merge = findMergeForCell(props.sheet, rowIndex, columnIndex);
+  const merge = mergeForCell(rowIndex, columnIndex);
   if (merge && merge.startRow === rowIndex && merge.startColumn === columnIndex) {
     return merge;
   }
@@ -228,7 +251,7 @@ function cellStyle(rowIndex, columnIndex) {
   const cell = getCell(props.sheet, rowIndex, columnIndex);
   const format = cell?.format || {};
   const bounds = cellBounds(rowIndex, columnIndex);
-  const merge = findMergeForCell(props.sheet, rowIndex, columnIndex);
+  const merge = mergeForCell(rowIndex, columnIndex);
   const selected =
     bounds.endRow > normalizedSelection.value.startRow &&
     bounds.startRow < normalizedSelection.value.endRow &&
@@ -299,24 +322,49 @@ function cellClasses(rowIndex, columnIndex) {
   return {
     selected: isSelected(rowIndex, columnIndex),
     focus: isFocusCell(rowIndex, columnIndex),
+    "has-note": cellHasNote(rowIndex, columnIndex),
   };
 }
 
 function shouldRenderCell(rowIndex, columnIndex) {
-  const merge = findMergeForCell(props.sheet, rowIndex, columnIndex);
+  const merge = mergeForCell(rowIndex, columnIndex);
   return !merge || (merge.startRow === rowIndex && merge.startColumn === columnIndex);
 }
 
 function rowSpan(rowIndex, columnIndex) {
-  const merge = findMergeForCell(props.sheet, rowIndex, columnIndex);
+  const merge = mergeForCell(rowIndex, columnIndex);
   if (!merge || merge.startRow !== rowIndex || merge.startColumn !== columnIndex) return 1;
   return Math.max(1, Number(merge.endRow || rowIndex + 1) - rowIndex);
 }
 
 function columnSpan(rowIndex, columnIndex) {
-  const merge = findMergeForCell(props.sheet, rowIndex, columnIndex);
+  const merge = mergeForCell(rowIndex, columnIndex);
   if (!merge || merge.startRow !== rowIndex || merge.startColumn !== columnIndex) return 1;
   return Math.max(1, Number(merge.endColumn || columnIndex + 1) - columnIndex);
+}
+
+function mergeForCell(rowIndex, columnIndex) {
+  return mergeLookup.value.get(`${rowIndex}:${columnIndex}`) || null;
+}
+
+function cellHasNote(rowIndex, columnIndex) {
+  return Boolean(String(getCell(props.sheet, rowIndex, columnIndex)?.note || "").trim());
+}
+
+function cellNote(rowIndex, columnIndex) {
+  return String(getCell(props.sheet, rowIndex, columnIndex)?.note || "");
+}
+
+function handleEditorInput(event) {
+  localEditingValue.value = event.target.value;
+}
+
+function emitEditorCommit(payload = {}) {
+  emit("update-edit", localEditingValue.value);
+  emit("commit-edit", {
+    ...payload,
+    value: localEditingValue.value,
+  });
 }
 
 function stopSelecting() {
@@ -381,9 +429,10 @@ function setEditorRef(element) {
 }
 
 watch(
-  () => props.editingCell,
-  async (value) => {
-    if (!value) return;
+  () => [props.editingCell?.row, props.editingCell?.column, props.editingValue],
+  async ([rowIndex, columnIndex, value]) => {
+    if (rowIndex == null || columnIndex == null) return;
+    localEditingValue.value = String(value || "");
     await nextTick();
     editorRef.value?.focus?.();
     editorRef.value?.select?.();
@@ -524,6 +573,18 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
+.gsg-note-corner {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 0;
+  height: 0;
+  border-top: 10px solid #f59e0b;
+  border-left: 10px solid transparent;
+  pointer-events: none;
+  z-index: 1;
+}
+
 .gsg-cell-text {
   display: inline-flex;
   align-items: center;
@@ -537,7 +598,7 @@ onBeforeUnmount(() => {
 
 .gsg-editor {
   width: 100%;
-  min-height: 30px;
+  min-height: 20px;
   border: 0;
   outline: none;
   background: transparent;

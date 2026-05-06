@@ -2,6 +2,9 @@ function safeClone(value) {
   return value ? JSON.parse(JSON.stringify(value)) : value;
 }
 
+const DEFAULT_ROW_HEIGHT = 21;
+const DEFAULT_COLUMN_WIDTH = 100;
+
 export function columnIndexToLetter(index = 0) {
   let value = Number(index || 0);
   if (!Number.isFinite(value) || value < 0) return "A";
@@ -132,26 +135,52 @@ function blankCell() {
   };
 }
 
+function mutableRowsFor(sheet = {}) {
+  if (!sheet.__mutableRows) {
+    Object.defineProperty(sheet, "__mutableRows", {
+      value: new Set(),
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  }
+  return sheet.__mutableRows;
+}
+
+function ensureRowMutable(sheet = {}, rowIndex = 0) {
+  const rows = mutableRowsFor(sheet);
+  const currentRow = Array.isArray(sheet.cells?.[rowIndex]) ? sheet.cells[rowIndex] : [];
+  if (!rows.has(rowIndex)) {
+    sheet.cells[rowIndex] = currentRow.slice();
+    rows.add(rowIndex);
+  }
+  return sheet.cells[rowIndex];
+}
+
 function ensureGrid(sheet = {}, rowIndex = 0, columnIndex = 0) {
   const targetRows = Math.max(Number(sheet.loadedRowCount || 0), rowIndex + 1);
   const targetColumns = Math.max(Number(sheet.loadedColumnCount || 0), columnIndex + 1);
 
+  sheet.cells = Array.isArray(sheet.cells) ? sheet.cells : [];
+  sheet.rowHeights = Array.isArray(sheet.rowHeights) ? sheet.rowHeights : [];
+  sheet.columnWidths = Array.isArray(sheet.columnWidths) ? sheet.columnWidths : [];
+  sheet.hiddenRows = Array.isArray(sheet.hiddenRows) ? sheet.hiddenRows : [];
+
   while ((sheet.cells?.length || 0) < targetRows) {
-    sheet.cells = sheet.cells || [];
     sheet.cells.push(Array.from({ length: targetColumns }, () => blankCell()));
-    sheet.rowHeights = sheet.rowHeights || [];
-    sheet.rowHeights.push(32);
+    sheet.rowHeights.push(DEFAULT_ROW_HEIGHT);
+    sheet.hiddenRows.push(false);
   }
 
-  sheet.cells = sheet.cells || [];
-  sheet.rowHeights = sheet.rowHeights || [];
-  sheet.columnWidths = sheet.columnWidths || [];
+  while (sheet.rowHeights.length < targetRows) sheet.rowHeights.push(DEFAULT_ROW_HEIGHT);
+  while (sheet.hiddenRows.length < targetRows) sheet.hiddenRows.push(false);
+  while (sheet.columnWidths.length < targetColumns) sheet.columnWidths.push(DEFAULT_COLUMN_WIDTH);
 
-  while (sheet.columnWidths.length < targetColumns) sheet.columnWidths.push(120);
-
-  sheet.cells.forEach((row) => {
-    while (row.length < targetColumns) {
-      row.push(blankCell());
+  sheet.cells.forEach((row, rowIndexValue) => {
+    if ((row?.length || 0) >= targetColumns) return;
+    const nextRow = ensureRowMutable(sheet, rowIndexValue);
+    while (nextRow.length < targetColumns) {
+      nextRow.push(blankCell());
     }
   });
 
@@ -168,6 +197,10 @@ function applyCellValue(cell = {}, value = "") {
   cell.formula = input.startsWith("=") ? input : "";
   cell.display = input;
   cell.effectiveValue = input;
+}
+
+function applyCellNote(cell = {}, note = "") {
+  cell.note = note == null ? "" : String(note);
 }
 
 function applyCellFormat(cell = {}, format = {}) {
@@ -309,14 +342,51 @@ function copySheet(sheet = {}) {
 }
 
 export function applyOperationsLocally(workbook = null, operations = []) {
-  const next = safeClone(workbook);
+  const next = workbook
+    ? {
+        ...workbook,
+        sheets: Array.isArray(workbook.sheets) ? workbook.sheets.slice() : [],
+      }
+    : null;
   if (!next) return next;
+
+  const mutableSheets = new Map();
+  const getMutableSheet = (sheetId = null) => {
+    const index = next.sheets.findIndex(
+      (sheet) => Number(sheet.sheetId) === Number(sheetId)
+    );
+    if (index === -1) return null;
+    if (!mutableSheets.has(index)) {
+      const current = next.sheets[index] || {};
+      const cloned = {
+        ...current,
+        cells: Array.isArray(current.cells) ? current.cells.slice() : [],
+        rowHeights: Array.isArray(current.rowHeights) ? current.rowHeights.slice() : [],
+        columnWidths: Array.isArray(current.columnWidths)
+          ? current.columnWidths.slice()
+          : [],
+        hiddenRows: Array.isArray(current.hiddenRows) ? current.hiddenRows.slice() : [],
+        merges: Array.isArray(current.merges) ? current.merges.slice() : [],
+        charts: Array.isArray(current.charts) ? current.charts.slice() : [],
+        basicFilter: current.basicFilter ? safeClone(current.basicFilter) : null,
+      };
+      next.sheets[index] = cloned;
+      mutableSheets.set(index, cloned);
+    }
+    return mutableSheets.get(index);
+  };
 
   for (const operation of operations || []) {
     const type = String(operation.type || "").trim();
+    const targetSheetId =
+      operation.sheetId || operation.range?.sheetId || next.activeSheetId;
     const sheet =
-      getSheetById(next, operation.sheetId || operation.range?.sheetId || next.activeSheetId) ||
-      getActiveSheet(next);
+      type === "add_sheet"
+        ? null
+        : getMutableSheet(targetSheetId) ||
+          getMutableSheet(next.activeSheetId) ||
+          getSheetById(next, targetSheetId) ||
+          getActiveSheet(next);
     if (!sheet && type !== "add_sheet") continue;
 
     if (type === "update_cells") {
@@ -332,10 +402,14 @@ export function applyOperationsLocally(workbook = null, operations = []) {
 
       (operation.rows || []).forEach((row, rowOffset) => {
         (row || []).forEach((value, columnOffset) => {
-          applyCellValue(
-            sheet.cells[startRow + rowOffset][startColumn + columnOffset],
-            value
-          );
+          const rowIndex = startRow + rowOffset;
+          const columnIndex = startColumn + columnOffset;
+          const targetRow = ensureRowMutable(sheet, rowIndex);
+          targetRow[columnIndex] = {
+            ...blankCell(),
+            ...(targetRow[columnIndex] || {}),
+          };
+          applyCellValue(targetRow[columnIndex], value);
         });
       });
       continue;
@@ -345,7 +419,12 @@ export function applyOperationsLocally(workbook = null, operations = []) {
       for (let rowIndex = operation.range.startRow; rowIndex < operation.range.endRow; rowIndex += 1) {
         for (let columnIndex = operation.range.startColumn; columnIndex < operation.range.endColumn; columnIndex += 1) {
           ensureGrid(sheet, rowIndex, columnIndex);
-          applyCellValue(sheet.cells[rowIndex][columnIndex], "");
+          const targetRow = ensureRowMutable(sheet, rowIndex);
+          targetRow[columnIndex] = {
+            ...blankCell(),
+            ...(targetRow[columnIndex] || {}),
+          };
+          applyCellValue(targetRow[columnIndex], "");
         }
       }
       continue;
@@ -355,7 +434,27 @@ export function applyOperationsLocally(workbook = null, operations = []) {
       for (let rowIndex = operation.range.startRow; rowIndex < operation.range.endRow; rowIndex += 1) {
         for (let columnIndex = operation.range.startColumn; columnIndex < operation.range.endColumn; columnIndex += 1) {
           ensureGrid(sheet, rowIndex, columnIndex);
-          applyCellFormat(sheet.cells[rowIndex][columnIndex], operation.format || {});
+          const targetRow = ensureRowMutable(sheet, rowIndex);
+          targetRow[columnIndex] = {
+            ...blankCell(),
+            ...(targetRow[columnIndex] || {}),
+          };
+          applyCellFormat(targetRow[columnIndex], operation.format || {});
+        }
+      }
+      continue;
+    }
+
+    if (type === "set_note") {
+      for (let rowIndex = operation.range.startRow; rowIndex < operation.range.endRow; rowIndex += 1) {
+        for (let columnIndex = operation.range.startColumn; columnIndex < operation.range.endColumn; columnIndex += 1) {
+          ensureGrid(sheet, rowIndex, columnIndex);
+          const targetRow = ensureRowMutable(sheet, rowIndex);
+          targetRow[columnIndex] = {
+            ...blankCell(),
+            ...(targetRow[columnIndex] || {}),
+          };
+          applyCellNote(targetRow[columnIndex], operation.note || "");
         }
       }
       continue;
@@ -365,7 +464,12 @@ export function applyOperationsLocally(workbook = null, operations = []) {
       for (let rowIndex = operation.range.startRow; rowIndex < operation.range.endRow; rowIndex += 1) {
         for (let columnIndex = operation.range.startColumn; columnIndex < operation.range.endColumn; columnIndex += 1) {
           ensureGrid(sheet, rowIndex, columnIndex);
-          sheet.cells[rowIndex][columnIndex].format = blankCell().format;
+          const targetRow = ensureRowMutable(sheet, rowIndex);
+          targetRow[columnIndex] = {
+            ...blankCell(),
+            ...(targetRow[columnIndex] || {}),
+            format: blankCell().format,
+          };
         }
       }
       continue;
@@ -377,7 +481,11 @@ export function applyOperationsLocally(workbook = null, operations = []) {
           ? sheet.rowHeights
           : sheet.columnWidths;
       while (sizes.length < Number(operation.endIndex || 0)) {
-        sizes.push(String(operation.dimension || "").toUpperCase() === "ROWS" ? 32 : 120);
+        sizes.push(
+          String(operation.dimension || "").toUpperCase() === "ROWS"
+            ? DEFAULT_ROW_HEIGHT
+            : DEFAULT_COLUMN_WIDTH
+        );
       }
       for (let index = Number(operation.startIndex || 0); index < Number(operation.endIndex || operation.startIndex || 1); index += 1) {
         sizes[index] = Number(operation.pixelSize || sizes[index] || 120);
@@ -409,25 +517,56 @@ export function applyOperationsLocally(workbook = null, operations = []) {
       continue;
     }
 
+    if (type === "set_basic_filter") {
+      sheet.basicFilter = safeClone(
+        operation.filter || {
+          range: {
+            sheetId: Number(sheet.sheetId || 0),
+            startRow: Number(operation.range?.startRow || 0),
+            endRow: Number(operation.range?.endRow || 0),
+            startColumn: Number(operation.range?.startColumn || 0),
+            endColumn: Number(operation.range?.endColumn || 0),
+          },
+        }
+      );
+      continue;
+    }
+
+    if (type === "clear_basic_filter") {
+      sheet.basicFilter = null;
+      continue;
+    }
+
     if (type === "add_sheet") {
+      const rowCount = Number(operation.rowCount || 1000);
+      const columnCount = Number(operation.columnCount || 26);
+      const loadedRowCount = Number(
+        operation.loadedRowCount || Math.max(80, Math.min(rowCount, 160))
+      );
+      const loadedColumnCount = Number(
+        operation.loadedColumnCount || Math.max(18, Math.min(columnCount, 26))
+      );
       const newSheet = {
         sheetId: Date.now() + Math.floor(Math.random() * 1000),
         title: operation.title || "Sheet",
         index: next.sheets.length,
         hidden: false,
-        rowCount: Number(operation.rowCount || 200),
-        columnCount: Number(operation.columnCount || 26),
+        rowCount,
+        columnCount,
         frozenRowCount: 0,
         frozenColumnCount: 0,
         tabColor: "",
         basicFilter: null,
-        loadedRowCount: Number(operation.rowCount || 80),
-        loadedColumnCount: Number(operation.columnCount || 18),
-        rowHeights: Array.from({ length: Number(operation.rowCount || 80) }, () => 32),
-        columnWidths: Array.from({ length: Number(operation.columnCount || 18) }, () => 120),
-        hiddenRows: Array.from({ length: Number(operation.rowCount || 80) }, () => false),
-        cells: Array.from({ length: Number(operation.rowCount || 80) }, () =>
-          Array.from({ length: Number(operation.columnCount || 18) }, () => blankCell())
+        loadedRowCount,
+        loadedColumnCount,
+        rowHeights: Array.from({ length: loadedRowCount }, () => DEFAULT_ROW_HEIGHT),
+        columnWidths: Array.from(
+          { length: loadedColumnCount },
+          () => DEFAULT_COLUMN_WIDTH
+        ),
+        hiddenRows: Array.from({ length: loadedRowCount }, () => false),
+        cells: Array.from({ length: loadedRowCount }, () =>
+          Array.from({ length: loadedColumnCount }, () => blankCell())
         ),
         merges: [],
         charts: [],

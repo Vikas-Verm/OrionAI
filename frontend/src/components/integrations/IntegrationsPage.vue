@@ -148,7 +148,7 @@
                         </template>
 
                         <!-- NOTION -->
-                        <template v-else-if="card.type === 'notion'">
+                        <!-- <template v-else-if="card.type === 'notion'">
                             <div class="int-field-group">
                                 <label class="int-label">
                                     Internal Integration Token
@@ -189,7 +189,7 @@
                                     <li>Copy the database ID from the URL (32 chars after the last /)</li>
                                 </ol>
                             </div>
-                        </template>
+                        </template> -->
 
                         <!-- JIRA -->
                         <template v-else-if="card.type === 'jira'">
@@ -350,7 +350,7 @@
                         </template>
 
                         <!-- RAZORPAY -->
-                        <template v-else-if="card.type === 'razorpay'">
+                        <!-- <template v-else-if="card.type === 'razorpay'">
                             <div class="int-field-row">
                                 <div class="int-field-group">
                                     <label class="int-label">Key ID</label>
@@ -412,7 +412,7 @@
                                     <li>Keep the connected key scoped to the business account you want OrionAI to operate on.</li>
                                 </ol>
                             </div>
-                        </template>
+                        </template> -->
 
                         <!-- GMAIL -->
                         <template v-else-if="card.type === 'gmail'">
@@ -1008,19 +1008,19 @@ const cards = [
     color: '#4A154B',
     img:   'https://upload.wikimedia.org/wikipedia/commons/thumb/d/d5/Slack_icon_2019.svg/2048px-Slack_icon_2019.svg.png',
   },
-  {
-    type:  'notion',
-    name:  'Notion',
-    desc:  'Create pages and update databases',
-    color: '#000000',
-    img:   'https://upload.wikimedia.org/wikipedia/commons/4/45/Notion_app_logo.png',
-  },
+//   {
+//     type:  'notion',
+//     name:  'Notion',
+//     desc:  'Create pages and update databases',
+//     color: '#000000',
+//     img:   'https://upload.wikimedia.org/wikipedia/commons/4/45/Notion_app_logo.png',
+//   },
   {
     type:  'jira',
     name:  'Jira',
     desc:  'Create and track issues automatically',
-    color: '#0052CC',
-    emoji: '🎫',
+    color: '#FFFFFF',
+    img: 'https://w7.pngwing.com/pngs/992/738/png-transparent-jira-hd-logo-thumbnail.png',
   },
   {
     type:  'gmail',
@@ -1034,29 +1034,29 @@ const cards = [
     name:  'Google Docs',
     desc:  'Edit Google Docs in a native OrionAI workspace',
     color: '#4285F4',
-    img:   'https://ssl.gstatic.com/docs/doclist/images/mediatype/icon_1_document_x16.png',
+    img:   'https://upload.wikimedia.org/wikipedia/commons/thumb/0/01/Google_Docs_logo_%282014-2020%29.svg/1920px-Google_Docs_logo_%282014-2020%29.svg.png',
   },
   {
     type:  'google_sheets',
     name:  'Google Sheets',
     desc:  'Use a native OrionAI spreadsheet workspace for Google Sheets',
-    color: '#34A853',
-    img:   '/google-sheets-logo.svg',
+    color: '#FFFFFF',
+    img:   'https://e7.pngegg.com/pngimages/1011/42/png-clipart-g-suite-google-docs-google-sheets-software-suite-google-rectangle-logo-thumbnail.png',
   },
   {
     type:  'database',
     name:  'Database',
     desc:  'Connect PostgreSQL, MySQL, MongoDB or SQLite',
-    color: '#0ea5e9',
-    emoji: '🗄️',
+    color: '#FFFFFF',
+    img: 'https://e7.pngegg.com/pngimages/931/769/png-clipart-database-icon-database-free-blue-background-blue-angle.png',
   },
-  {
-    type:  'razorpay',
-    name:  'Razorpay',
-    desc:  'Query payouts and trigger payment workflows',
-    color: '#072654',
-    emoji: '₹',
-  },
+//   {
+//     type:  'razorpay',
+//     name:  'Razorpay',
+//     desc:  'Query payouts and trigger payment workflows',
+//     color: '#072654',
+//     emoji: '₹',
+//   },
   {
     type:  'webhook',
     name:  'Custom Webhook',
@@ -1076,38 +1076,38 @@ const cards = [
     name:  'Telegram',
     desc:  'Read and send messages via your Telegram account',
     color: '#FFFFFF',
-    img:   'https://upload.wikimedia.org/wikipedia/commons/thumb/8/82/Telegram_logo.svg/2048px-Telegram_logo.svg.png',
+    img:   'https://cdn.worldvectorlogo.com/logos/telegram-1.svg',
   },
   {
     type:  'signal',
     name:  'Signal',
     desc:  'Connect Signal securely inside OrionAI',
-    color: '#3b82f6',
-    emoji: '🛡️',
+    color: '#FFFFFF',
+    img: 'https://static.vecteezy.com/system/resources/previews/068/842/068/non_2x/signal-icon-logo-signal-app-transparent-background-free-png.png',
   },
   {
     type:  'whatsapp',
     name:  'WhatsApp',
     desc:  'Connect WhatsApp securely in OrionAI',
-    color: '#25D366',
-    emoji: '💬',
+    color: '#FFFFFF',
+    img: 'https://e7.pngegg.com/pngimages/551/579/png-clipart-whats-app-logo-whatsapp-logo-whatsapp-cdr-leaf-thumbnail.png',
   },
 ]
 
 const INITIAL_FORMS = {
-    notion:  { apiToken: '', databaseId: '' },
+    // notion:  { apiToken: '', databaseId: '' },
     jira:    { domain: '', email: '', apiToken: '', projectKey: '' },
     database:{ vendor: 'postgres', connectionString: '', filePath: '', ssl: false, defaultSchema: 'public', readOnly: true },
-    razorpay:{ keyId: '', keySecret: '', accountNumber: '', webhookSecret: '' },
+    // razorpay:{ keyId: '', keySecret: '', accountNumber: '', webhookSecret: '' },
     signal:  {},
     webhook: { url: '', method: 'POST', secret: '' },
 }
 
 const forms = reactive({
-    notion:  { ...INITIAL_FORMS.notion },
+    // notion:  { ...INITIAL_FORMS.notion },
     jira:    { ...INITIAL_FORMS.jira },
     database:{ ...INITIAL_FORMS.database },
-    razorpay:{ ...INITIAL_FORMS.razorpay },
+    // razorpay:{ ...INITIAL_FORMS.razorpay },
     signal:  { ...INITIAL_FORMS.signal },
     webhook: { ...INITIAL_FORMS.webhook },
 })
@@ -1882,10 +1882,10 @@ async function removeIntegration(type) {
     background: linear-gradient(180deg, #eef4ff, #dbeafe) !important;
     border-color: rgba(66,133,244,0.18);
 }
-.int-card-icon--razorpay {
+/* .int-card-icon--razorpay {
     background: linear-gradient(180deg, #1f4fd1, #12307f) !important;
     border-color: rgba(31,79,209,0.28);
-}
+} */
 .int-logo { width: 26px; height: 26px; object-fit: contain; border-radius: 4px; }
 .int-card-icon--gmail .int-logo { width: 29px; height: 29px; }
 .int-card-icon--google_docs .int-logo { width: 28px; height: 28px; }
@@ -1893,11 +1893,11 @@ async function removeIntegration(type) {
     display: block;
     color: #fff;
 }
-.int-brand-icon--razorpay {
+/* .int-brand-icon--razorpay {
     width: 22px;
     height: 22px;
     filter: drop-shadow(0 1px 2px rgba(3, 7, 18, 0.22));
-}
+} */
 .int-emoji { font-size: 22px; }
 .int-card-info { flex: 1; min-width: 0; }
 .int-card-name { font-size: 15px; font-weight: 700; color: var(--text-primary); margin-bottom: 4px; }
