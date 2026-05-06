@@ -445,7 +445,7 @@
     <div v-if="showCompose" class="gm-compose-overlay" @click.self="showCompose=false">
       <div class="gm-compose-modal">
         <div class="gm-cm-titlebar">
-          <span>New Message</span>
+          <span>New Email</span>
           <div style="display:flex;gap:6px">
             <button class="gm-cm-btn" @click="showCompose=false">—</button>
             <button class="gm-cm-btn gm-cm-close" @click="showCompose=false">✕</button>

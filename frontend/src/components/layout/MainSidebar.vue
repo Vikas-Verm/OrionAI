@@ -151,6 +151,7 @@
       <!-- Header -->
       <div class="int-header" @click="intOpen = !intOpen">
         <span class="int-label">Connected Apps</span>
+        <span v-if="hasErrorApps" class="int-error-dot" title="Some apps need attention"></span>
         <span v-if="totalUnread > 0" class="int-total-pill">{{ formatCount(totalUnread) }}</span>
         <svg class="int-chevron" :class="{ open: intOpen }" width="12" height="12" viewBox="0 0 24 24" fill="none"
           stroke="currentColor" stroke-width="2.5">
@@ -207,7 +208,7 @@
                   <line x1="12" y1="17" x2="12.01" y2="17" />
                 </svg>
                 <span>{{ app.label }} disconnected</span>
-                <button @click="emit('openIntegrations')">Fix →</button>
+                <button @click="emit('openIntegrations', app.apiType)">Fix →</button>
               </div>
               <div v-for="app in filteredConnectedApps" :key="app.id" class="int-row" :style="activeView === app.id
                 ? { background: app.color + '18', borderColor: app.color + '30' }
@@ -445,6 +446,10 @@ const filteredConnectedApps = computed(() => {
 
 const totalUnread = computed(() =>
   connectedApps.value.reduce((s, a) => s + a.unread, 0)
+)
+
+const hasErrorApps = computed(() =>
+  connectedApps.value.some(a => getStatus(a.apiType) === 'error')
 )
 
 const filteredFirstSummary = computed(() => {
@@ -1808,5 +1813,15 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
 
 .reconnect-banner button:hover {
   background: rgba(255, 107, 127, 0.12);
+}
+
+.int-error-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--danger);
+  flex-shrink: 0;
+  box-shadow: 0 0 8px rgba(255, 107, 127, 0.6);
+  animation: health-pulse 2s infinite;
 }
 </style>

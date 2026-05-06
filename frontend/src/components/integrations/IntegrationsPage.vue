@@ -18,9 +18,15 @@
                     <p class="int-subtitle">Connect OrionAI to your business tools</p>
                 </div>
             </div>
-            <div class="int-header-badge">
-                <span class="badge-dot"></span>
-                {{ connectedCount }} connected
+            <div class="int-header-badges">
+                <div v-if="errorCount > 0" class="int-header-badge int-header-badge--error">
+                    <span class="badge-dot-warn"></span>
+                    {{ errorCount }} need{{ errorCount === 1 ? 's' : '' }} attention
+                </div>
+                <div class="int-header-badge">
+                    <span class="badge-dot"></span>
+                    {{ connectedCount }} connected
+                </div>
             </div>
         </div>
 
@@ -49,7 +55,8 @@
         <!-- Grid -->
         <div class="int-grid">
             <div v-for="card in filteredCards" :key="card.type"
-                :class="['int-card', getStatus(card.type), expandedType === card.type ? 'expanded' : '']"
+                :id="'int-card-' + card.type"
+                :class="['int-card', getStatus(card.type), expandedType === card.type ? 'expanded' : '', getHealthStatus(card.type) === 'error' ? 'health-error' : '']"
                 @click="toggleExpand(card.type)">
 
                 <!-- Card top -->
@@ -966,7 +973,14 @@ import { ref, computed, onMounted, reactive, nextTick, watch } from 'vue'
 import { onUnmounted } from 'vue'
 import api from '../../services/api'
 import { store } from '../../stores/app'
+import { useIntegrationHealth } from '../../composables/useIntegrationHealth'
 const emit = defineEmits(['close', 'connected', 'openModule'])
+
+const props = defineProps({
+    focusType: { type: String, default: null },
+})
+
+const { getStatus: getHealthStatus } = useIntegrationHealth()
 
 const search       = ref('')
 const expandedType = ref(null)
@@ -1106,6 +1120,7 @@ const filteredCards  = computed(() =>
 const SIGNAL_PENDING_STATES = new Set(['creating_account', 'logging_in', 'pending_qr'])
 const WHATSAPP_PENDING_STATES = new Set(['creating_account', 'logging_in', 'pending_qr'])
 const connectedCount = computed(() => cards.filter(card => getStatus(card.type) === 'connected').length)
+const errorCount = computed(() => cards.filter(card => !card.comingSoon && getHealthStatus(card.type) === 'error').length)
 const signalCardState = computed(() => getStatus('signal'))
 const whatsappCardState = computed(() => getStatus('whatsapp'))
 const showSignalQrModal = computed(() =>
@@ -1293,6 +1308,16 @@ async function toggleExpand(type) {
     applyAutofillGuards()
 }
 
+async function scrollToCard(type) {
+    if (!type || cards.find(c => c.type === type)?.comingSoon) return
+    expandedType.value = type
+    testResults[type]  = null
+    await nextTick()
+    applyAutofillGuards()
+    const el = document.getElementById(`int-card-${type}`)
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+
 function extractEmail(int) {
     if (!int) return null
     if (int.type === 'gmail')            return int.gmail?.userEmail || null
@@ -1402,6 +1427,7 @@ async function loadIntegrations() {
 onMounted(async () => {
     try { await loadIntegrations() } catch (e) { console.error('Failed to load integrations:', e) }
     setTimeout(applyAutofillGuards, 100)
+    if (props.focusType) setTimeout(() => scrollToCard(props.focusType), 150)
 })
 
 watch(
@@ -1788,12 +1814,28 @@ async function removeIntegration(type) {
 .int-back-btn:hover { background: rgba(255, 255, 255, 0.07); color: var(--text-primary); transform: translateY(-1px); }
 .int-title { font-size: 30px; font-weight: 700; color: var(--text-primary); margin: 0 0 6px; letter-spacing: -0.03em; }
 .int-subtitle { font-size: 14px; color: var(--text-secondary); margin: 0; }
+.int-header-badges { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .int-header-badge {
     display: flex; align-items: center; gap: 7px;
     font-size: 12px; color: var(--success);
     background: rgba(3, 248, 117, 0.045); border: 1px solid var(--border-default);
     padding: 9px 14px; border-radius: 999px;
     backdrop-filter: blur(16px);
+}
+.int-header-badge--error {
+    color: var(--danger);
+    background: rgba(255, 107, 127, 0.07);
+    border-color: rgba(255, 107, 127, 0.22);
+}
+.badge-dot-warn {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--danger); display: inline-block;
+    box-shadow: 0 0 8px rgba(255, 107, 127, 0.6);
+    animation: warn-pulse 2s infinite;
+}
+@keyframes warn-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
 }
 .int-search-wrap { position: relative; margin-bottom: 28px; max-width: 420px; }
 .int-search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-muted); }
@@ -1817,6 +1859,12 @@ async function removeIntegration(type) {
     border-color: rgba(47, 211, 157, 0.26);
     background:
         linear-gradient(135deg, rgba(47, 211, 157, 0.08), transparent 40%),
+        var(--surface-glass-strong);
+}
+.int-card.health-error {
+    border-color: rgba(255, 107, 127, 0.3);
+    background:
+        linear-gradient(135deg, rgba(255, 107, 127, 0.06), transparent 40%),
         var(--surface-glass-strong);
 }
 .int-card.expanded { border-color: rgba(82, 212, 255, 0.24); box-shadow: 0 0 0 1px rgba(82, 212, 255, 0.12), var(--shadow-md); }
