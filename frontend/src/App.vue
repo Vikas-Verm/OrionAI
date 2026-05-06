@@ -50,7 +50,7 @@
       <div class="main">
 
         <!-- ── Integration settings (inside main, sidebar stays visible) ── -->
-        <IntegrationsPage v-if="showingIntegrations" :key="`integrations-${store.user?.username || 'anon'}`" @close="showingIntegrations = false; activeModule = null"
+        <IntegrationsPage v-if="showingIntegrations" :key="`integrations-${store.user?.username || 'anon'}`" :focusType="integrationsFocusType" @close="showingIntegrations = false; activeModule = null; integrationsFocusType = null"
           @connected="sidebarRef?.refreshConnected?.($event)" @openModule="onOpenModuleFromSettings" />
 
         <!-- ── Module pages (inside main, sidebar stays visible) ── -->
@@ -170,6 +170,7 @@ const { start, stop, unreadNotifCount, hasUrgent } = useWebSocket()
 const sidebarRef = ref(null)
 const sidebarCollapsed = ref(false)
 const showingIntegrations = ref(false)
+const integrationsFocusType = ref(null)
 const activeModule = ref(null)   // null | 'telegram' | 'gmail' | 'slack' | 'jira' | 'calendar'
 const messageListRef = ref(null)
 const inputAreaRef = ref(null)
@@ -256,7 +257,8 @@ function openSidebar() {
 }
 
 // ── Navigation ────────────────────────────────────────────
-function onOpenIntegrations() {
+function onOpenIntegrations(focusType) {
+  integrationsFocusType.value = focusType || null
   showingIntegrations.value = true
   setModuleContext(null)
   activeModule.value = null
