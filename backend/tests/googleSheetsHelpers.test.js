@@ -43,6 +43,7 @@ test("A1 helpers convert indices and ranges consistently", () => {
   assert.equal(quoteSheetTitle("Budget 2026"), "'Budget 2026'");
   assert.equal(quoteSheetTitle("'Budget 2026'"), "'Budget 2026'");
   assert.equal(quoteSheetTitle("Bob's Sheet"), "'Bob''s Sheet'");
+  assert.equal(quoteSheetTitle(" Sheet With Space "), "' Sheet With Space '");
 });
 
 test("Chart helpers create chart specs for supported chart types", () => {
@@ -107,8 +108,32 @@ test("AI context builder summarizes the active selection and sheet preview", () 
 
   assert.equal(context.workbookTitle, "Marketing Budget");
   assert.equal(context.activeSheetTitle, "Summary");
+  assert.equal(context.isEmptySheet, false);
   assert.match(context.selectionTable, /Category/);
   assert.match(context.selectionTable, /Ads/);
   assert.match(context.chartSummary, /Budget vs Spend/);
   assert.ok(context.numericSummary.length >= 2);
+});
+
+test("AI context builder marks empty sheets and exposes empty-sheet hints", () => {
+  const context = buildSheetAiContext({
+    workbookTitle: "Blank Workbook",
+    activeSheet: {
+      title: "Sheet1",
+      charts: [],
+      cells: Array.from({ length: 4 }, () =>
+        Array.from({ length: 4 }, () => ({ display: "" }))
+      ),
+    },
+    selection: {
+      startRow: 0,
+      endRow: 1,
+      startColumn: 0,
+      endColumn: 1,
+    },
+  });
+
+  assert.equal(context.isEmptySheet, true);
+  assert.equal(context.headerLabels.length, 0);
+  assert.equal(context.inferredDomain, "");
 });

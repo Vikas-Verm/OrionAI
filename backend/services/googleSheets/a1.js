@@ -28,7 +28,7 @@ function columnLetterToIndex(label = "") {
 }
 
 function quoteSheetTitle(title = "") {
-  let value = String(title || "").trim();
+  let value = String(title ?? "");
   if (!value) return "Sheet1";
   if (value.startsWith("'") && value.endsWith("'")) {
     value = value.slice(1, -1).replace(/''/g, "'");

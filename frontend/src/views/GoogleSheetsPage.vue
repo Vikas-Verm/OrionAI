@@ -192,24 +192,53 @@
               </div>
 
               <div class="gs-tabsbar">
-                <div class="gs-tabsbar-left">
+                <div class="gs-tabsbar-fixed">
                   <button class="gs-tab-plain" type="button" @click="addSheet">＋</button>
-                  <button
+                  <div class="gs-menu-wrap">
+                    <button
+                      class="gs-tab-plain"
+                      type="button"
+                      title="Show all sheets"
+                      @click.stop="sheetListOpen = !sheetListOpen"
+                    >
+                      ☰
+                    </button>
+                    <div v-if="sheetListOpen" class="gs-popover gs-popover--tablist">
+                      <button
+                        v-for="sheet in currentWorkbook?.sheets || []"
+                        :key="`sheet-list-${sheet.sheetId}`"
+                        type="button"
+                        @click="switchSheet(sheet.sheetId)"
+                      >
+                        {{ sheet.title }}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="gs-tabsbar-left">
+                  <div
                     v-for="sheet in currentWorkbook?.sheets || []"
                     :key="sheet.sheetId"
-                    class="gs-sheet-tab"
-                    :class="{ active: sheet.sheetId === currentWorkbook?.activeSheetId }"
-                    type="button"
-                    @click="switchSheet(sheet.sheetId)"
+                    class="gs-sheet-tab-wrap"
                   >
-                    <span>{{ sheet.title }}</span>
-                    <span
+                    <button
+                      class="gs-sheet-tab"
+                      :class="{ active: sheet.sheetId === currentWorkbook?.activeSheetId }"
+                      type="button"
+                      @click="switchSheet(sheet.sheetId)"
+                    >
+                      <span>{{ sheet.title }}</span>
+                    </button>
+                    <button
                       v-if="sheet.sheetId === currentWorkbook?.activeSheetId"
                       class="gs-sheet-tab-caret"
+                      type="button"
+                      aria-label="Open sheet menu"
                       @click.stop="sheetMenuSheetId = sheet.sheetId === sheetMenuSheetId ? null : sheet.sheetId"
                     >
                       ▾
-                    </span>
+                    </button>
                     <div
                       v-if="sheetMenuSheetId === sheet.sheetId"
                       class="gs-popover gs-popover--tab"
@@ -225,7 +254,7 @@
                         Delete sheet
                       </button>
                     </div>
-                  </button>
+                  </div>
                 </div>
 
                 <div class="gs-tabsbar-right">
@@ -367,6 +396,9 @@
         <div v-if="filterDialogOpen" class="gs-modal-backdrop" @click.self="filterDialogOpen = false">
           <div class="gs-modal">
             <div class="gs-modal-title">Filter current sheet</div>
+            <div class="gs-modal-note">
+              {{ currentSheet?.basicFilter ? "Filter is enabled for this sheet." : "Applying a filter will turn on sheet filtering first." }}
+            </div>
             <label class="gs-field">
               <span>Column</span>
               <select v-model.number="filterDraft.columnIndex" class="gs-modal-input">
@@ -493,6 +525,7 @@ const deleteFileDialogOpen = ref(false);
 const findDialogOpen = ref(false);
 const filterDialogOpen = ref(false);
 const sheetMenuSheetId = ref(null);
+const sheetListOpen = ref(false);
 const showFormulaBar = ref(true);
 const showGridlines = ref(true);
 const titleDraft = ref("");
@@ -675,6 +708,7 @@ const menuItems = computed(() => ({
     { label: "Chart", action: "open_chart", disabled: !currentPermissions.value.canEdit },
     { label: "New sheet", action: "add_sheet", disabled: !currentPermissions.value.canEdit },
     { label: "Link in active cell", action: "insert_link", disabled: !currentPermissions.value.canEdit },
+    { label: "Comment in active cell", action: "insert_comment", disabled: !currentPermissions.value.canEdit },
   ],
   Format: [
     { label: "Bold", action: "toggle_bold", disabled: !currentPermissions.value.canEdit },
@@ -759,6 +793,16 @@ function buildRangeFromSelection() {
   };
 }
 
+function buildActiveCellRange() {
+  return {
+    sheetId: Number(currentSheet.value?.sheetId || 0),
+    startRow: normalizedSelection.value.focusRow,
+    endRow: normalizedSelection.value.focusRow + 1,
+    startColumn: normalizedSelection.value.focusColumn,
+    endColumn: normalizedSelection.value.focusColumn + 1,
+  };
+}
+
 function clampSelection(nextSelection) {
   const rowLimit = Math.max(0, Number(currentSheet.value?.loadedRowCount || 1) - 1);
   const columnLimit = Math.max(0, Number(currentSheet.value?.loadedColumnCount || 1) - 1);
@@ -807,14 +851,6 @@ async function applySingleCellValue(row, column, value, move = "") {
   };
   const previousRows = extractRangeMatrix(currentSheet.value, range, "input");
   const nextRows = [[value]];
-  const pending = runOperations(
-    [buildUpdateCellsOperation(sheetId, range, nextRows)],
-    {
-      undo: [buildUpdateCellsOperation(sheetId, range, previousRows)],
-      redo: [buildUpdateCellsOperation(sheetId, range, nextRows)],
-    },
-    { optimistic: true }
-  );
 
   if (move === "down") {
     setSelection({
@@ -843,7 +879,14 @@ async function applySingleCellValue(row, column, value, move = "") {
       ),
     });
   }
-  return pending;
+  return runOperations(
+    [buildUpdateCellsOperation(sheetId, range, nextRows)],
+    {
+      undo: [buildUpdateCellsOperation(sheetId, range, previousRows)],
+      redo: [buildUpdateCellsOperation(sheetId, range, nextRows)],
+    },
+    { optimistic: true }
+  );
 }
 
 async function commitCellEdit(payload = {}) {
@@ -851,7 +894,7 @@ async function commitCellEdit(payload = {}) {
   const target = {
     row: Number(editingCell.value.row || 0),
     column: Number(editingCell.value.column || 0),
-    value: editingValue.value,
+    value: payload.value ?? editingValue.value,
   };
   editingCell.value = null;
   editingValue.value = "";
@@ -1271,10 +1314,10 @@ function quartile(values = [], percentile = 0.25) {
 
 function buildAssistantSuggestions() {
   const fallback = [
-    "Create a table",
-    "Summarize this sheet",
-    "Format this sheet professionally",
-    "Generate a chart for this range",
+    "Create a clean table for this sheet",
+    "Suggest useful columns for this spreadsheet",
+    "Build an invoice and payments tracker",
+    "Set up starter formulas for this sheet",
   ];
 
   const sheet = currentSheet.value;
@@ -1289,6 +1332,7 @@ function buildAssistantSuggestions() {
   const suggestions = [];
   const hasBudgetColumns = findColumns(headers, ["budget", "spend", "spent", "remaining", "balance"]).length >= 2;
   const hasMonthColumns = headers.some((header) => /^(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)/i.test(header));
+  const hasInvoiceColumns = headers.some((header) => /invoice|payment|due|paid|amount|client|customer/i.test(header));
   const selectionIsRange =
     normalizedSelection.value.endRow - normalizedSelection.value.startRow > 1 ||
     normalizedSelection.value.endColumn - normalizedSelection.value.startColumn > 1;
@@ -1307,6 +1351,13 @@ function buildAssistantSuggestions() {
   }
   if (headers.some((header) => /budget|spend|planned|actual/i.test(header))) {
     suggestions.push("Create a monthly summary sheet");
+  }
+  if (hasInvoiceColumns) {
+    suggestions.push("Summarize overdue invoices and recent payments");
+    suggestions.push("Highlight unpaid invoices by due date");
+  }
+  if (headers.some((header) => /status|owner|priority|stage/i.test(header))) {
+    suggestions.push("Group the sheet by status and show the biggest blockers");
   }
   suggestions.push("Clean duplicate rows");
   suggestions.push("Format this sheet professionally");
@@ -1674,7 +1725,35 @@ async function removeDuplicates() {
   return true;
 }
 
-function applyFilter() {
+async function ensureBasicFilter() {
+  if (currentSheet.value?.basicFilter) return true;
+  const range = activeTableRange();
+  if (!range) return false;
+  await runOperations(
+    [
+      {
+        type: "set_basic_filter",
+        sheetId: range.sheetId,
+        range,
+        filter: {
+          range,
+        },
+      },
+    ],
+    null,
+    { optimistic: true }
+  );
+  return true;
+}
+
+function syncFilterDraftFromCurrent() {
+  filterDraft.columnIndex = Number(currentFilter.value?.columnIndex || 0);
+  filterDraft.operator = currentFilter.value?.operator || "contains";
+  filterDraft.value = currentFilter.value?.value || "";
+}
+
+async function applyFilter() {
+  if (!(await ensureBasicFilter())) return;
   filtersBySheet[currentWorkbook.value?.activeSheetId || ""] = {
     columnIndex: Number(filterDraft.columnIndex || 0),
     operator: filterDraft.operator,
@@ -1683,8 +1762,22 @@ function applyFilter() {
   filterDialogOpen.value = false;
 }
 
-function clearFilter() {
+async function clearFilter() {
   delete filtersBySheet[currentWorkbook.value?.activeSheetId || ""];
+  const range = activeTableRange();
+  if (currentSheet.value?.basicFilter && range) {
+    await runOperations(
+      [
+        {
+          type: "clear_basic_filter",
+          sheetId: range.sheetId,
+          range,
+        },
+      ],
+      null,
+      { optimistic: true }
+    );
+  }
   filterDialogOpen.value = false;
 }
 
@@ -1768,6 +1861,82 @@ async function insertLinkInActiveCell() {
     normalizedSelection.value.focusColumn,
     `=HYPERLINK("${url.replace(/"/g, '""')}", "${label.replace(/"/g, '""')}")`
   );
+}
+
+async function insertCommentInActiveCell() {
+  if (!currentPermissions.value.canEdit) return;
+  const range = buildActiveCellRange();
+  const existingNote = String(currentCell.value?.note || "");
+  const note = window.prompt("Add a comment for the active cell:", existingNote);
+  if (note == null) return;
+  await runOperations(
+    [
+      {
+        type: "set_note",
+        sheetId: range.sheetId,
+        range,
+        note,
+      },
+    ],
+    {
+      undo: [
+        {
+          type: "set_note",
+          sheetId: range.sheetId,
+          range,
+          note: existingNote,
+        },
+      ],
+      redo: [
+        {
+          type: "set_note",
+          sheetId: range.sheetId,
+          range,
+          note,
+        },
+      ],
+    },
+    { optimistic: true }
+  );
+}
+
+function borderPatchFor(type = "all") {
+  const solid = { style: "SOLID", color: "#000000" };
+  const clear = {};
+  if (type === "top") return { top: solid };
+  if (type === "right") return { right: solid };
+  if (type === "bottom") return { bottom: solid };
+  if (type === "left") return { left: solid };
+  if (type === "outer") {
+    return {
+      top: solid,
+      right: solid,
+      bottom: solid,
+      left: solid,
+    };
+  }
+  if (type === "inner") {
+    return {
+      top: solid,
+      right: solid,
+      bottom: solid,
+      left: solid,
+    };
+  }
+  if (type === "none") {
+    return {
+      top: clear,
+      right: clear,
+      bottom: clear,
+      left: clear,
+    };
+  }
+  return {
+    top: solid,
+    right: solid,
+    bottom: solid,
+    left: solid,
+  };
 }
 
 function closeChartDialog() {
@@ -1891,6 +2060,7 @@ async function confirmDeleteFile() {
 async function switchSheet(sheetId) {
   if (!currentWorkbook.value?.spreadsheetId || Number(sheetId) === Number(currentWorkbook.value?.activeSheetId)) {
     sheetMenuSheetId.value = null;
+    sheetListOpen.value = false;
     return;
   }
   try {
@@ -1902,6 +2072,7 @@ async function switchSheet(sheetId) {
       error.response?.data?.error || error.message || "Failed to switch sheet.";
   } finally {
     sheetMenuSheetId.value = null;
+    sheetListOpen.value = false;
   }
 }
 
@@ -1910,8 +2081,10 @@ async function addSheet() {
     {
       type: "add_sheet",
       title: `Sheet ${Number(currentWorkbook.value?.sheets?.length || 1) + 1}`,
-      rowCount: 160,
-      columnCount: 20,
+      rowCount: 1000,
+      columnCount: 26,
+      loadedRowCount: 120,
+      loadedColumnCount: 26,
     },
   ]);
 }
@@ -1988,7 +2161,9 @@ function buildSheetsRuntime() {
     addRemainingFormulas,
     createTotalsRow,
     sortActiveRange: sortSelection,
-    openFilterDialog: () => {
+    openFilterDialog: async () => {
+      await ensureBasicFilter();
+      syncFilterDraftFromCurrent();
       filterDialogOpen.value = true;
       return true;
     },
@@ -2155,6 +2330,7 @@ function printCurrentSpreadsheet() {
 async function handleMenuAction(action) {
   activeMenu.value = "";
   moreMenuOpen.value = false;
+  sheetListOpen.value = false;
 
   switch (action) {
     case "new_file":
@@ -2287,6 +2463,9 @@ async function handleMenuAction(action) {
     case "insert_link":
       await insertLinkInActiveCell();
       break;
+    case "insert_comment":
+      await insertCommentInActiveCell();
+      break;
     case "toggle_bold":
       await applyUniformFormat({ bold: !currentCellFormat.value?.bold });
       break;
@@ -2324,6 +2503,8 @@ async function handleMenuAction(action) {
       await sortSelection("desc");
       break;
     case "open_filter":
+      await ensureBasicFilter();
+      syncFilterDraftFromCurrent();
       filterDialogOpen.value = true;
       break;
     case "remove_duplicates":
@@ -2387,12 +2568,7 @@ async function handleToolbarAction(payload = {}) {
       return;
     case "set_border":
       await applyUniformFormat({
-        borders: {
-          top: { style: "SOLID", color: "#cbd5e1" },
-          right: { style: "SOLID", color: "#cbd5e1" },
-          bottom: { style: "SOLID", color: "#cbd5e1" },
-          left: { style: "SOLID", color: "#cbd5e1" },
-        },
+        borders: borderPatchFor(payload.value),
       });
       return;
     case "toggle_merge":
@@ -2410,7 +2586,12 @@ async function handleToolbarAction(payload = {}) {
     case "insert_link":
       await insertLinkInActiveCell();
       return;
+    case "insert_comment":
+      await insertCommentInActiveCell();
+      return;
     case "open_filter":
+      await ensureBasicFilter();
+      syncFilterDraftFromCurrent();
       filterDialogOpen.value = true;
       return;
     case "open_chart":
@@ -2526,11 +2707,13 @@ function handleOutsideClick(event) {
   if (
     !event.target.closest(".gs-menu-wrap") &&
     !event.target.closest(".gs-popover") &&
-    !event.target.closest(".gs-sheet-tab")
+    !event.target.closest(".gs-sheet-tab") &&
+    !event.target.closest(".gs-sheet-tab-wrap")
   ) {
     activeMenu.value = "";
     moreMenuOpen.value = false;
     sheetMenuSheetId.value = null;
+    sheetListOpen.value = false;
   }
 }
 
@@ -2545,6 +2728,7 @@ watch(
     }
     syncDraftsToSelection();
     sheetMenuSheetId.value = null;
+    sheetListOpen.value = false;
   }
 );
 
@@ -2870,7 +3054,18 @@ onBeforeUnmount(() => {
 }
 
 .gs-popover--tab {
-  top: calc(100% + 6px);
+  top: auto;
+  bottom: calc(100% + 8px);
+  left: auto;
+  right: 0;
+}
+
+.gs-popover--tablist {
+  min-width: 220px;
+  max-height: 280px;
+  overflow: auto;
+  top: auto;
+  bottom: calc(100% + 8px);
 }
 
 .gs-popover button {
@@ -2976,19 +3171,21 @@ onBeforeUnmount(() => {
 }
 
 .gs-tabsbar,
+.gs-tabsbar-fixed,
 .gs-tabsbar-left,
 .gs-tabsbar-right {
   display: flex;
   align-items: center;
 }
 
-.gs-tabsbar {
-  justify-content: space-between;
-}
-
+.gs-tabsbar-fixed,
 .gs-tabsbar-left,
 .gs-tabsbar-right {
   gap: 8px;
+}
+
+.gs-tabsbar-fixed {
+  flex-shrink: 0;
 }
 
 .gs-tabsbar-left {
@@ -3005,6 +3202,14 @@ onBeforeUnmount(() => {
 }
 
 .gs-tabsbar-right {
+  flex-shrink: 0;
+}
+
+.gs-sheet-tab-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   flex-shrink: 0;
 }
 
@@ -3073,6 +3278,13 @@ onBeforeUnmount(() => {
 }
 
 .gs-sheet-tab-caret {
+  width: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  border: 1px solid rgba(176, 201, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  color: rgba(228, 236, 250, 0.82);
   cursor: pointer;
   opacity: 0.82;
 }

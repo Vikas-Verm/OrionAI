@@ -28,12 +28,21 @@ function buildSheetsPrompt({ action = "chat", question = "", context = {} }) {
       "Forecast the next 3 periods if the data supports it, stating assumptions clearly and avoiding overclaiming.",
   };
 
+  const sheetModeInstruction = context.isEmptySheet
+    ? "The active sheet is empty or nearly empty. Help the user design a useful spreadsheet structure, starter headers, formulas, and next setup steps instead of pretending data already exists."
+    : "The active sheet has data. Ground every answer in the actual headers, preview rows, formulas, and numeric summary provided.";
+
   return [
     "You are OrionAI's Google Sheets copilot.",
     "Use only the provided active spreadsheet context. Do not answer as if you were working on Google Docs, Slides, or a generic app.",
     instructionMap[action] || instructionMap.chat,
+    sheetModeInstruction,
     `Workbook: ${context.workbookTitle || "Untitled spreadsheet"}`,
     `Active sheet: ${context.activeSheetTitle || "Sheet1"}`,
+    context.inferredDomain ? `Likely sheet domain: ${context.inferredDomain}` : "",
+    context.headerLabels?.length
+      ? `Detected headers: ${context.headerLabels.join(", ")}`
+      : "",
     context.activeRange ? `Active range: ${context.activeRange}` : "",
     context.activeCell ? `Active cell: ${context.activeCell}` : "",
     context.activeFormula ? `Active formula: ${context.activeFormula}` : "",

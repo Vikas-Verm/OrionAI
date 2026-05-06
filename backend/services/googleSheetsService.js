@@ -5,9 +5,7 @@ const Integration = require("../models/Integration");
 const { getOAuthConfig } = require("./googleOAuthConfig");
 const {
   buildGridRange,
-  columnIndexToLetter,
   gridRangeToA1,
-  parseA1Range,
   quoteSheetTitle,
 } = require("./googleSheets/a1");
 const {
@@ -29,6 +27,8 @@ const DEFAULT_VIEWPORT_ROWS = 180;
 const DEFAULT_VIEWPORT_COLUMNS = 24;
 const MAX_VIEWPORT_ROWS = 420;
 const MAX_VIEWPORT_COLUMNS = 52;
+const DEFAULT_ROW_HEIGHT = 21;
+const DEFAULT_COLUMN_WIDTH = 100;
 
 function normalizeColor(color = {}) {
   const rgb = color?.rgbColor || color || {};
@@ -157,10 +157,10 @@ function normalizeSheetData(activeSheet = {}, metaSheet = {}) {
   );
 
   const rowHeights = Array.from({ length: rowCount }, (_, index) =>
-    Number(data.rowMetadata?.[index]?.pixelSize || 32)
+    Number(data.rowMetadata?.[index]?.pixelSize || DEFAULT_ROW_HEIGHT)
   );
   const columnWidths = Array.from({ length: columnCount }, (_, index) =>
-    Number(data.columnMetadata?.[index]?.pixelSize || 120)
+    Number(data.columnMetadata?.[index]?.pixelSize || DEFAULT_COLUMN_WIDTH)
   );
   const hiddenRows = Array.from({ length: rowCount }, (_, index) =>
     Boolean(
@@ -330,52 +330,26 @@ async function getActiveSheetMetadata(sheetsApi, spreadsheetId, requestedSheetId
   };
 }
 
-async function getViewportRange(sheetsApi, spreadsheetId, activeMeta = {}) {
-  const title = activeMeta.properties?.title || "Sheet1";
-  let usedRows = 0;
-  let usedColumns = 0;
-
-  try {
-    const response = await sheetsApi.spreadsheets.values.get({
-      spreadsheetId,
-      range: quoteSheetTitle(title),
-      majorDimension: "ROWS",
-    });
-    const parsed = parseA1Range(response.data.range || "");
-    usedRows = Math.max(usedRows, Number(parsed?.endRow || 0));
-    usedColumns = Math.max(usedColumns, Number(parsed?.endColumn || 0));
-    const rows = Array.isArray(response.data.values) ? response.data.values : [];
-    usedRows = Math.max(usedRows, rows.length);
-    usedColumns = Math.max(
-      usedColumns,
-      rows.reduce(
-        (max, row) => Math.max(max, Array.isArray(row) ? row.length : 0),
-        0
-      )
-    );
-  } catch (error) {
-    console.warn("Google Sheets used range lookup failed:", error.message);
-  }
-
+function buildViewportGridRange(activeMeta = {}) {
   const grid = activeMeta.properties?.gridProperties || {};
   const viewportRows = Math.min(
-    Math.max(usedRows + 40, grid.frozenRowCount || 0, DEFAULT_VIEWPORT_ROWS),
+    Math.max(DEFAULT_VIEWPORT_ROWS, grid.frozenRowCount || 0),
     Math.max(DEFAULT_VIEWPORT_ROWS, Number(grid.rowCount || MAX_VIEWPORT_ROWS)),
     MAX_VIEWPORT_ROWS
   );
   const viewportColumns = Math.min(
-    Math.max(
-      usedColumns + 10,
-      grid.frozenColumnCount || 0,
-      DEFAULT_VIEWPORT_COLUMNS
-    ),
+    Math.max(DEFAULT_VIEWPORT_COLUMNS, grid.frozenColumnCount || 0),
     Math.max(DEFAULT_VIEWPORT_COLUMNS, Number(grid.columnCount || MAX_VIEWPORT_COLUMNS)),
     MAX_VIEWPORT_COLUMNS
   );
 
-  return `${quoteSheetTitle(title)}!A1:${columnIndexToLetter(
-    viewportColumns - 1
-  )}${viewportRows}`;
+  return {
+    sheetId: Number(activeMeta.properties?.sheetId || 0),
+    startRowIndex: 0,
+    endRowIndex: viewportRows,
+    startColumnIndex: 0,
+    endColumnIndex: viewportColumns,
+  };
 }
 
 async function getSpreadsheetWorkspace(userId, spreadsheetId, options = {}) {
@@ -389,11 +363,17 @@ async function getSpreadsheetWorkspace(userId, spreadsheetId, options = {}) {
     ),
   ]);
 
-  const viewportRange = await getViewportRange(sheets, spreadsheetId, activeMeta);
-  const detailResponse = await sheets.spreadsheets.get({
+  const viewportRange = buildViewportGridRange(activeMeta);
+  const detailResponse = await sheets.spreadsheets.getByDataFilter({
     spreadsheetId,
-    includeGridData: true,
-    ranges: [viewportRange],
+    requestBody: {
+      includeGridData: true,
+      dataFilters: [
+        {
+          gridRange: viewportRange,
+        },
+      ],
+    },
   });
 
   const detailWorkbook = detailResponse.data || {};
@@ -795,6 +775,19 @@ async function applySpreadsheetOperations(userId, spreadsheetId, payload = {}) {
       continue;
     }
 
+    if (type === "set_note") {
+      requests.push({
+        repeatCell: {
+          range: buildGridRange(operation.range || {}),
+          cell: {
+            note: String(operation.note || ""),
+          },
+          fields: "note",
+        },
+      });
+      continue;
+    }
+
     if (type === "clear_formatting") {
       requests.push({
         repeatCell: {
@@ -861,6 +854,28 @@ async function applySpreadsheetOperations(userId, spreadsheetId, payload = {}) {
       continue;
     }
 
+    if (type === "set_basic_filter") {
+      requests.push({
+        setBasicFilter: {
+          filter: {
+            range: buildGridRange(
+              operation.filter?.range || operation.range || {}
+            ),
+          },
+        },
+      });
+      continue;
+    }
+
+    if (type === "clear_basic_filter") {
+      requests.push({
+        clearBasicFilter: {
+          sheetId: Number(operation.sheetId || nextActiveSheetId || 0),
+        },
+      });
+      continue;
+    }
+
     if (type === "add_sheet") {
       const title = resolveNextSheetTitle(
         Array.from(existingTitles),
@@ -873,7 +888,7 @@ async function applySpreadsheetOperations(userId, spreadsheetId, payload = {}) {
           properties: {
             title,
             gridProperties: {
-              rowCount: Number(operation.rowCount || 200),
+              rowCount: Number(operation.rowCount || 1000),
               columnCount: Number(operation.columnCount || 26),
             },
           },
