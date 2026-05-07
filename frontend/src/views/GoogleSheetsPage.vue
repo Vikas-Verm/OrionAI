@@ -199,7 +199,7 @@
                       class="gs-tab-plain"
                       type="button"
                       title="Show all sheets"
-                      @click.stop="sheetListOpen = !sheetListOpen"
+                      @click.stop="sheetMenuSheetId = null; sheetListOpen = !sheetListOpen"
                     >
                       ☰
                     </button>
@@ -216,7 +216,7 @@
                   </div>
                 </div>
 
-                <div class="gs-tabsbar-left">
+                <div class="gs-tabsbar-left" @scroll.passive="syncOpenSheetMenuPosition">
                   <div
                     v-for="sheet in currentWorkbook?.sheets || []"
                     :key="sheet.sheetId"
@@ -232,30 +232,34 @@
                     </button>
                     <button
                       v-if="sheet.sheetId === currentWorkbook?.activeSheetId"
+                      :ref="setSheetMenuTriggerRef"
                       class="gs-sheet-tab-caret"
                       type="button"
                       aria-label="Open sheet menu"
-                      @click.stop="sheetMenuSheetId = sheet.sheetId === sheetMenuSheetId ? null : sheet.sheetId"
+                      @click.stop="toggleSheetMenu(sheet.sheetId, $event)"
                     >
                       ▾
                     </button>
-                    <div
-                      v-if="sheetMenuSheetId === sheet.sheetId"
-                      class="gs-popover gs-popover--tab"
-                    >
-                      <button type="button" @click="renameSheet(sheet)">Rename sheet</button>
-                      <button type="button" @click="duplicateSheet(sheet)">Duplicate sheet</button>
-                      <button
-                        type="button"
-                        :disabled="(currentWorkbook?.sheets?.length || 0) <= 1"
-                        class="danger"
-                        @click="deleteSheet(sheet)"
-                      >
-                        Delete sheet
-                      </button>
-                    </div>
                   </div>
                 </div>
+                <Teleport to="body">
+                  <div
+                    v-if="sheetMenuSheet"
+                    class="gs-popover gs-popover--floating-tab"
+                    :style="sheetMenuStyle"
+                  >
+                    <button type="button" @click="renameSheet(sheetMenuSheet)">Rename sheet</button>
+                    <button type="button" @click="duplicateSheet(sheetMenuSheet)">Duplicate sheet</button>
+                    <button
+                      type="button"
+                      :disabled="(currentWorkbook?.sheets?.length || 0) <= 1"
+                      class="danger"
+                      @click="deleteSheet(sheetMenuSheet)"
+                    >
+                      Delete sheet
+                    </button>
+                  </div>
+                </Teleport>
 
                 <div class="gs-tabsbar-right">
                   <span>Count: {{ selectionMetrics.count }}</span>
@@ -429,6 +433,42 @@
           </div>
         </div>
 
+        <div v-if="renameSheetDialogOpen" class="gs-modal-backdrop" @click.self="closeRenameSheetDialog">
+          <div class="gs-modal">
+            <div class="gs-modal-title">Rename sheet</div>
+            <div class="gs-modal-copy">
+              Update the name for {{ sheetActionTarget?.title || "this sheet" }}.
+            </div>
+            <label class="gs-field">
+              <span>Sheet name</span>
+              <input
+                ref="renameSheetInputRef"
+                v-model="renameSheetDraft"
+                class="gs-modal-input"
+                type="text"
+                @keydown.enter.prevent="submitRenameSheetDialog"
+              />
+            </label>
+            <div class="gs-modal-actions">
+              <button class="gs-modal-btn ghost" type="button" @click="closeRenameSheetDialog">Cancel</button>
+              <button class="gs-modal-btn" type="button" @click="submitRenameSheetDialog">Save</button>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="deleteSheetDialogOpen" class="gs-modal-backdrop" @click.self="closeDeleteSheetDialog">
+          <div class="gs-modal">
+            <div class="gs-modal-title">Delete sheet?</div>
+            <div class="gs-modal-copy">
+              Delete {{ sheetActionTarget?.title || "this sheet" }} from this spreadsheet?
+            </div>
+            <div class="gs-modal-actions">
+              <button class="gs-modal-btn ghost" type="button" @click="closeDeleteSheetDialog">Cancel</button>
+              <button class="gs-modal-btn danger" type="button" @click="confirmDeleteSheetDialog">Delete</button>
+            </div>
+          </div>
+        </div>
+
         <div v-if="deleteFileDialogOpen" class="gs-modal-backdrop" @click.self="deleteFileDialogOpen = false">
           <div class="gs-modal">
             <div class="gs-modal-title">Delete spreadsheet?</div>
@@ -449,6 +489,7 @@
 <script setup>
 import {
   computed,
+  nextTick,
   onBeforeUnmount,
   onMounted,
   reactive,
@@ -522,9 +563,19 @@ const shareEmail = ref("");
 const shareNotice = ref("");
 const chartDialogOpen = ref(false);
 const deleteFileDialogOpen = ref(false);
+const renameSheetDialogOpen = ref(false);
+const deleteSheetDialogOpen = ref(false);
 const findDialogOpen = ref(false);
 const filterDialogOpen = ref(false);
 const sheetMenuSheetId = ref(null);
+const sheetMenuTriggerRef = ref(null);
+const sheetMenuPosition = ref({
+  top: 0,
+  right: 0,
+});
+const renameSheetInputRef = ref(null);
+const sheetActionTarget = ref(null);
+const renameSheetDraft = ref("");
 const sheetListOpen = ref(false);
 const showFormulaBar = ref(true);
 const showGridlines = ref(true);
@@ -630,6 +681,15 @@ const displaySheet = computed(() =>
       }
     : null
 );
+const sheetMenuSheet = computed(() =>
+  (currentWorkbook.value?.sheets || []).find(
+    (sheet) => isSameSheetId(sheet.sheetId, sheetMenuSheetId.value)
+  ) || null
+);
+const sheetMenuStyle = computed(() => ({
+  top: `${sheetMenuPosition.value.top}px`,
+  right: `${sheetMenuPosition.value.right}px`,
+}));
 const resolvedCharts = computed(() =>
   (currentSheet.value?.charts || [])
     .map((chart) => ({
@@ -658,6 +718,16 @@ const driveSaveLabel = computed(() => {
   if (saveState.value === "dirty") return "Changes not synced yet";
   return "Ready in Drive";
 });
+
+function isSameSheetId(left, right) {
+  if (left == null || right == null) return false;
+  const leftNumber = Number(left);
+  const rightNumber = Number(right);
+  if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) {
+    return leftNumber === rightNumber;
+  }
+  return String(left) === String(right);
+}
 
 function formatSpreadsheetTimestamp(value) {
   if (!value) return "Recently updated";
@@ -2089,14 +2159,70 @@ async function addSheet() {
   ]);
 }
 
-async function renameSheet(sheet) {
+function setSheetMenuTriggerRef(element) {
+  sheetMenuTriggerRef.value = element || null;
+}
+
+function closeSheetMenu() {
   sheetMenuSheetId.value = null;
-  const title = window.prompt("Rename sheet", sheet.title);
-  if (!title || title === sheet.title) return;
+}
+
+function closeRenameSheetDialog() {
+  renameSheetDialogOpen.value = false;
+  sheetActionTarget.value = null;
+  renameSheetDraft.value = "";
+}
+
+function closeDeleteSheetDialog() {
+  deleteSheetDialogOpen.value = false;
+  sheetActionTarget.value = null;
+}
+
+function syncOpenSheetMenuPosition(sourceEl = null) {
+  const anchorEl = sourceEl?.getBoundingClientRect ? sourceEl : sheetMenuTriggerRef.value;
+  if (!sheetMenuSheetId.value || !anchorEl?.getBoundingClientRect) return;
+  const rect = anchorEl.getBoundingClientRect();
+  sheetMenuPosition.value = {
+    top: Math.max(rect.top - 8, 12),
+    right: Math.max(window.innerWidth - rect.right, 12),
+  };
+}
+
+async function toggleSheetMenu(sheetId, event) {
+  if (isSameSheetId(sheetMenuSheetId.value, sheetId)) {
+    closeSheetMenu();
+    return;
+  }
+  sheetListOpen.value = false;
+  sheetMenuSheetId.value = sheetId;
+  syncOpenSheetMenuPosition(event?.currentTarget);
+  await nextTick();
+  syncOpenSheetMenuPosition();
+}
+
+async function renameSheet(sheet) {
+  closeSheetMenu();
+  deleteSheetDialogOpen.value = false;
+  sheetActionTarget.value = {
+    sheetId: sheet.sheetId,
+    title: sheet.title,
+  };
+  renameSheetDraft.value = sheet.title || "";
+  renameSheetDialogOpen.value = true;
+  await nextTick();
+  renameSheetInputRef.value?.focus?.();
+  renameSheetInputRef.value?.select?.();
+}
+
+async function submitRenameSheetDialog() {
+  const target = sheetActionTarget.value;
+  const title = renameSheetDraft.value;
+  closeRenameSheetDialog();
+  if (!target || !title || title === target.title) return;
   await runOperations([
     {
       type: "rename_sheet",
-      sheetId: sheet.sheetId,
+      sheetId: target.sheetId,
       title,
     },
   ]);
@@ -2114,14 +2240,24 @@ async function duplicateSheet(sheet) {
 }
 
 async function deleteSheet(sheet) {
-  sheetMenuSheetId.value = null;
+  closeSheetMenu();
+  renameSheetDialogOpen.value = false;
   if ((currentWorkbook.value?.sheets?.length || 0) <= 1) return;
-  const confirmed = window.confirm(`Delete sheet "${sheet.title}"?`);
-  if (!confirmed) return;
+  sheetActionTarget.value = {
+    sheetId: sheet.sheetId,
+    title: sheet.title,
+  };
+  deleteSheetDialogOpen.value = true;
+}
+
+async function confirmDeleteSheetDialog() {
+  const target = sheetActionTarget.value;
+  closeDeleteSheetDialog();
+  if (!target) return;
   await runOperations([
     {
       type: "delete_sheet",
-      sheetId: sheet.sheetId,
+      sheetId: target.sheetId,
     },
   ]);
 }
@@ -2704,16 +2840,35 @@ async function boot() {
 }
 
 function handleOutsideClick(event) {
-  if (
-    !event.target.closest(".gs-menu-wrap") &&
-    !event.target.closest(".gs-popover") &&
-    !event.target.closest(".gs-sheet-tab") &&
-    !event.target.closest(".gs-sheet-tab-wrap")
-  ) {
+  const target =
+    event?.target instanceof Element ? event.target : event?.target?.parentElement || null;
+
+  if (!target) {
     activeMenu.value = "";
     moreMenuOpen.value = false;
-    sheetMenuSheetId.value = null;
     sheetListOpen.value = false;
+    return;
+  }
+
+  if (!target.closest(".gs-menu-wrap") && !target.closest(".gs-popover")) {
+    activeMenu.value = "";
+    moreMenuOpen.value = false;
+    sheetListOpen.value = false;
+  }
+}
+
+function handleSheetMenuPointerDown(event) {
+  const path = typeof event?.composedPath === "function" ? event.composedPath() : [];
+  const target =
+    path.find((node) => node instanceof Element) ||
+    (event?.target instanceof Element ? event.target : null);
+
+  if (
+    !target ||
+    (!target.closest(".gs-sheet-tab-caret") &&
+      !target.closest(".gs-popover--floating-tab"))
+  ) {
+    closeSheetMenu();
   }
 }
 
@@ -2729,6 +2884,8 @@ watch(
     syncDraftsToSelection();
     sheetMenuSheetId.value = null;
     sheetListOpen.value = false;
+    closeRenameSheetDialog();
+    closeDeleteSheetDialog();
   }
 );
 
@@ -2752,11 +2909,15 @@ watch(
 
 onMounted(async () => {
   document.addEventListener("click", handleOutsideClick);
+  document.addEventListener("pointerdown", handleSheetMenuPointerDown, true);
+  window.addEventListener("resize", syncOpenSheetMenuPosition);
   await boot();
 });
 
 onBeforeUnmount(() => {
   document.removeEventListener("click", handleOutsideClick);
+  document.removeEventListener("pointerdown", handleSheetMenuPointerDown, true);
+  window.removeEventListener("resize", syncOpenSheetMenuPosition);
 });
 </script>
 
@@ -3053,19 +3214,24 @@ onBeforeUnmount(() => {
   right: 0;
 }
 
-.gs-popover--tab {
-  top: auto;
-  bottom: calc(100% + 8px);
-  left: auto;
-  right: 0;
-}
-
 .gs-popover--tablist {
   min-width: 220px;
   max-height: 280px;
   overflow: auto;
   top: auto;
   bottom: calc(100% + 8px);
+}
+
+.gs-popover--floating-tab {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: auto;
+  bottom: auto;
+  transform: translateY(-100%);
+  transform-origin: bottom right;
+  max-width: min(220px, calc(100vw - 24px));
+  z-index: 999;
 }
 
 .gs-popover button {
