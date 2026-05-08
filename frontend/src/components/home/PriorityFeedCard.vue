@@ -235,8 +235,10 @@ const emit = defineEmits([
   'approve',
   'dismiss',
   'snooze',
+  'reclassify',
   'run-action',
   'run-secondary-action',
+  'card-opened',
 ])
 
 const { isOpen: expanded, open: openExpanded, close: closeExpanded, toggle: toggleExpanded } = useDisclosure(false)
@@ -437,6 +439,10 @@ watch(
   },
   { immediate: true }
 )
+
+watch(expanded, (open) => {
+  if (open) emit('card-opened', props.item)
+})
 
 onMounted(() => {
   if (liveMessageTimestamp.value && !relativeTimer) {

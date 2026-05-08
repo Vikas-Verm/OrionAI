@@ -33,6 +33,11 @@ const {
 } = require("./conversationStateEngine");
 const { SOURCE_THRESHOLDS } = require("./communicationActionConfig");
 const conversationSourceAdapters = require("./conversationSourceAdapters");
+const {
+  buildCanonicalConversationKey,
+  getQuickActionsForState,
+  QUICK_ACTIONS,
+} = require("./conversationActionStateMachine");
 
 const APP_META = {
   gmail: { label: "Gmail", icon: "📧", module: "gmail" },
@@ -1230,9 +1235,14 @@ function stripInternalStateFields(state) {
     recentMessages,
     state?.sourceMetadata?.unreadCount || state?.platformMetadata?.unreadCount || 0
   );
+  const canonicalConversationKey =
+    buildCanonicalConversationKey(state.sourceType, state.conversationId) ||
+    null;
 
   return {
     ...rest,
+    conversationKey: canonicalConversationKey,
+    quickActions: getQuickActionsForState(state.state || rest.state),
     recentMessages,
     latestInboundBurst,
     latestInboundBurstCount: latestInboundBurst.length,
@@ -1428,8 +1438,14 @@ function mapActionStateToPriorityItem(state) {
       ? "Open conversation"
       : "Draft reply";
 
+  const canonicalConversationKey =
+    buildCanonicalConversationKey(state.sourceType, state.conversationId) ||
+    state.id;
+  const quickActions = getQuickActionsForState(state.state);
+
   return {
     id: state.id,
+    conversationKey: canonicalConversationKey,
     title: state.conversationTitle,
     category: "communication",
     state: state.state,
@@ -1464,6 +1480,7 @@ function mapActionStateToPriorityItem(state) {
         ? new Date(state.latestInboundTimestamp).toISOString()
         : null,
       conversationId: state.conversationId,
+      conversationKey: canonicalConversationKey,
       threadId: state.threadId || null,
       confidence: state.confidence,
       confidenceBand: state.confidenceBand,
@@ -1482,6 +1499,7 @@ function mapActionStateToPriorityItem(state) {
       actionState: state.actionState,
       state: state.state,
       openContext: state.openContext || {},
+      quickActions,
       debug: state.debug || null,
       prioritySource: state.prioritySource || "rules",
       priorityReason: state.priorityReason || "",
@@ -1507,8 +1525,15 @@ function buildNotificationSignalFromStates(result = null, sourceType = "gmail") 
       ? result.states
       : [];
   const items = states.slice(0, 3).map((state) => ({
-    id: state.conversationId || state.id,
+    id:
+      buildCanonicalConversationKey(state.sourceType, state.conversationId) ||
+      state.id ||
+      state.conversationId ||
+      null,
     conversationId: state.conversationId || null,
+    conversationKey:
+      buildCanonicalConversationKey(state.sourceType, state.conversationId) ||
+      null,
     threadId: state.threadId || state.openContext?.threadId || null,
     chatId: state.openContext?.chatId || null,
     roomId: state.openContext?.roomId || null,
@@ -1563,6 +1588,7 @@ async function getCommunicationPriorityItems(userId, options = {}) {
 module.exports = {
   ACTION_STATES,
   ACTION_STATE_META,
+  QUICK_ACTIONS,
   getCommunicationActionStates,
   getCommunicationNotificationSignal,
   buildCommunicationPriorityItems,
