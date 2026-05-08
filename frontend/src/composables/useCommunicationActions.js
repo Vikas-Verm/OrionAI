@@ -3,6 +3,44 @@ import api from '../services/api'
 
 const HIDDEN_BADGE_STATES = new Set(['no_action_needed', 'resolved', 'waiting_on_others'])
 
+const QUICK_ACTION_ALIASES = {
+  approve: 'handled',
+  approved: 'handled',
+  handle: 'handled',
+  handled: 'handled',
+  done: 'handled',
+  mark_done: 'handled',
+  edited_approved: 'handled',
+  dismiss: 'dismissed',
+  dismissed: 'dismissed',
+  snooze: 'snoozed',
+  snoozed: 'snoozed',
+  reclassify: 'reclassified',
+  reclassified: 'reclassified',
+}
+
+function normalizeQuickAction(value = '') {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_')
+  return QUICK_ACTION_ALIASES[normalized] || normalized
+}
+
+function buildCanonicalItemId(item, source) {
+  if (!item) return ''
+  if (item.id && String(item.id).startsWith('comm:')) return String(item.id)
+  if (item.conversationKey) return String(item.conversationKey)
+  if (item.meta?.conversationKey) return String(item.meta.conversationKey)
+
+  const sourceApp = String(item.sourceApp || source || '').toLowerCase()
+  const conversationId = String(
+    item.conversationId || item.meta?.conversationId || ''
+  )
+  if (sourceApp && conversationId) return `comm:${sourceApp}:${conversationId}`
+  return String(item.id || '')
+}
+
 export function emitCommunicationPriorityRefresh(reason, extras = {}) {
   document.dispatchEvent(new CustomEvent('orion:priority-refresh-needed', {
     detail: {
@@ -70,20 +108,59 @@ export function useCommunicationActions(source) {
   }
 
   async function recordAction(item, action, extras = {}) {
+    const canonicalAction = normalizeQuickAction(action)
+    const itemId = buildCanonicalItemId(item, source)
     await api.post('/api/briefing/priority-feed/actions', {
-      itemId: item.id,
+      itemId,
       sourceApp: item.sourceApp || source,
       title: item.conversationTitle || item.title,
-      action,
+      action: canonicalAction,
       actionLabel: item.actionStateLabel || item.actionReason || '',
+      fromActionState: item.actionState || item.meta?.actionState || '',
       ...extras,
     })
 
     emitCommunicationPriorityRefresh('communication_action_recorded', {
       sourceApp: item.sourceApp || source,
-      conversationId: item.conversationId,
+      conversationId: item.conversationId || item.meta?.conversationId,
+      action: canonicalAction,
     })
     await refresh({ silent: true })
+  }
+
+  function markHandled(item) {
+    return recordAction(item, 'handled')
+  }
+
+  function dismissItem(item) {
+    return recordAction(item, 'dismissed')
+  }
+
+  function snoozeItem(item, minutes) {
+    return recordAction(item, 'snoozed', { snoozeMinutes: minutes })
+  }
+
+  function reclassifyItem(item, targetActionState, reason = '') {
+    return recordAction(item, 'reclassified', {
+      targetActionState,
+      reason,
+    })
+  }
+
+  async function recordOpen(item, origin = 'card') {
+    try {
+      await api.post('/api/briefing/priority-feed/telemetry', {
+        kind: 'open',
+        itemId: buildCanonicalItemId(item, source),
+        sourceApp: item.sourceApp || source,
+        conversationId: item.conversationId || item.meta?.conversationId,
+        threadId: item.meta?.threadId || item.threadId || '',
+        origin,
+      })
+    } catch (err) {
+      // telemetry must never block UX
+      console.debug('communication open telemetry failed:', err.message)
+    }
   }
 
   return {
@@ -98,5 +175,10 @@ export function useCommunicationActions(source) {
     stateByConversationId,
     refresh,
     recordAction,
+    markHandled,
+    dismissItem,
+    snoozeItem,
+    reclassifyItem,
+    recordOpen,
   }
 }

@@ -6,6 +6,9 @@ const {
   recordPriorityFeedAction,
 } = require("../services/priorityFeedService");
 const { chatCompleteNoSystem } = require("../services/llmService");
+const {
+  recordTelemetryEvent,
+} = require("../services/communicationTelemetryService");
 
 function normalizeReplyText(value = "") {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -120,9 +123,21 @@ async function postPriorityFeedDraftReply(req, res) {
   }
 }
 
+async function postPriorityFeedTelemetry(req, res) {
+  try {
+    const userId = req.user?.username;
+    const event = await recordTelemetryEvent(userId, req.body || {});
+    res.json({ success: true, event });
+  } catch (err) {
+    console.error("Priority feed telemetry error:", err.message);
+    res.status(400).json({ error: err.message || "Could not record telemetry" });
+  }
+}
+
 module.exports = {
   getBriefing,
   getHome,
   postPriorityFeedAction,
   postPriorityFeedDraftReply,
+  postPriorityFeedTelemetry,
 };
