@@ -35,3 +35,8 @@ temp/
 
 backend/data/gmail_cache/*.db
 *.db
+# Added by code-review-graph
+.code-review-graph/
+.claude/
+.mcp.json
+CLAUDE.md
