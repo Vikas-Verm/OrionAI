@@ -131,7 +131,12 @@ function buildGmailThreadHaystack(thread) {
       getHeader(headers, "Reply-To"),
       getHeader(headers, "Content-Class"),
       getHeader(headers, "List-Unsubscribe"),
-      message?.snippet || ""
+      message?.snippet || "",
+      // The snippet caps at ~100 chars and often misses bulk-email markers
+      // like "unsubscribe" that live further down the body. Pull the
+      // normalized body so newsletter / cold-outreach detection works on
+      // the full message, not just the salutation preview.
+      getNormalizedGmailMessageText(message, thread?.snippet || "")
     );
 
     walkPayloadParts(message?.payload, (part) => {

@@ -1,9 +1,19 @@
 <template>
-  <article class="priority-card" :class="[`priority-${priorityTone}`, expanded && 'priority-card-expanded']">
+  <article
+    class="priority-card"
+    :class="[
+      `priority-${priorityTone}`,
+      expanded && 'priority-card-expanded',
+      isUnread && 'priority-card-unread',
+    ]"
+  >
     <div class="priority-card-top" :aria-expanded="expanded" @click="toggleExpanded">
       <div class="priority-card-meta">
         <span class="priority-source priority-source-icon" :title="item.sourceLabel">
           <span>{{ item.sourceIcon }}</span>
+        </span>
+        <span v-if="isUnread" class="priority-unread-badge" :title="`${unreadCount} unread`">
+          {{ unreadCount > 9 ? '9+' : unreadCount }}
         </span>
         <span v-if="showPriorityBadge" class="priority-level" :class="`level-${priorityTone}`">{{ item.priority }}</span>
         <button
@@ -257,6 +267,20 @@ const snoozeOptions = [
 ]
 
 const priorityTone = computed(() => String(props.item.priority || 'low').toLowerCase())
+const unreadCount = computed(() => {
+  const candidates = [
+    props.item?.meta?.sourceMetadata?.unreadCount,
+    props.item?.meta?.platformMetadata?.unreadCount,
+    props.item?.meta?.unread,
+    props.item?.unread,
+  ]
+  for (const value of candidates) {
+    const numeric = Number(value)
+    if (Number.isFinite(numeric) && numeric > 0) return numeric
+  }
+  return 0
+})
+const isUnread = computed(() => unreadCount.value > 0)
 const showPriorityBadge = computed(() =>
   props.item?.category !== 'meetings' && sourceApp.value !== 'google_calendar'
 )
@@ -614,6 +638,32 @@ function joinGoogleMeet() {
 .priority-card-expanded {
   border-color: rgba(82, 212, 255, 0.24);
   box-shadow: 0 28px 72px rgba(82, 212, 255, 0.12);
+}
+
+.priority-card-unread {
+  border-color: rgba(82, 212, 255, 0.32);
+  box-shadow: 0 0 0 1px rgba(82, 212, 255, 0.18), 0 28px 64px rgba(2, 6, 23, 0.22);
+}
+
+.priority-card-unread .priority-card-headline h4 {
+  color: #f8fbff;
+  font-weight: 700;
+}
+
+.priority-unread-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #52d4ff, #8b7dff);
+  color: #0b1224;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  box-shadow: 0 0 0 2px rgba(82, 212, 255, 0.18);
 }
 
 .priority-high {

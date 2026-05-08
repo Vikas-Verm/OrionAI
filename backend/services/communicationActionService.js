@@ -443,6 +443,16 @@ function applyWorkspaceDecisionToState(state, decision) {
   );
   if (!actionState) return state;
 
+  // Never let the LLM downgrade a high-signal item. If we somehow ended up
+  // with a decision for one (cache from before the bypass landed, or a
+  // future code path that calls this directly), keep the rules verdict.
+  const isDowngrade =
+    actionState === ACTION_STATES.RESOLVED ||
+    actionState === ACTION_STATES.NO_ACTION_NEEDED;
+  if (isDowngrade && isHighSignalState(state)) {
+    return state;
+  }
+
   const conversationState = toConversationState(actionState);
   const eligibility = buildSurfaceEligibility(conversationState);
   const nextPriority = normalizePriorityLabel(
@@ -495,9 +505,55 @@ function applyWorkspaceDecisionToState(state, decision) {
   };
 }
 
+// High-signal items: the rules-based classifier strongly believes these
+// require attention. The workspace LLM has a known bias to downgrade
+// items toward "resolved/no_action_needed" when uncertain — for these
+// items the LLM should NOT get a vote. Triggers:
+//   - latest inbound is recent (≤ 60 minutes), AND
+//   - one of: classifier confidenceBand "high", an explicit @-mention,
+//     an urgency keyword, or a direct DM with an unanswered question.
+function isHighSignalState(state = {}) {
+  if (!state) return false;
+  if (
+    state.actionState !== ACTION_STATES.WAITING_ON_YOUR_REPLY &&
+    state.actionState !== ACTION_STATES.NEEDS_APPROVAL
+  ) {
+    return false;
+  }
+
+  const latestInboundTs =
+    Number(state.latestInboundTimestamp) ||
+    Number(state.latestMessageTimestamp) ||
+    0;
+  if (!latestInboundTs) return false;
+  const ageMinutes = (Date.now() - latestInboundTs) / 60000;
+  if (ageMinutes > 60) return false;
+
+  const debug = state.debug || {};
+  const intentSignals = Array.isArray(debug.intentSignals)
+    ? debug.intentSignals
+    : [];
+
+  const hasUrgency =
+    intentSignals.includes("urgency") ||
+    intentSignals.includes("semantic_urgency");
+  const hasMention = Boolean(state.hasMentionOfCurrentUser);
+  const isDirectAsk = Boolean(
+    state.sourceMetadata?.isDirect &&
+      (state.hasDirectQuestion || state.hasApprovalIntent)
+  );
+  const highConfidence = state.confidenceBand === "high";
+
+  return hasUrgency || hasMention || (isDirectAsk && highConfidence);
+}
+
 async function applyWorkspaceDecisions(states = [], options = {}) {
   const candidates = sortStates(
-    states.filter((state) => WORKSPACE_ACTIONABLE_STATES.has(state?.actionState))
+    states.filter(
+      (state) =>
+        WORKSPACE_ACTIONABLE_STATES.has(state?.actionState) &&
+        !isHighSignalState(state)
+    )
   ).slice(0, options.workspaceStateLimit || 18);
 
   if (!candidates.length || !shouldEnableWorkspaceInterpreter(options)) {
@@ -800,10 +856,83 @@ function filterSuppressedStates(states = [], latestActionsByItem = new Map()) {
     const latestAction = latestActionsByItem.get(state.id);
     if (!latestAction) return true;
     if (isReactivatedSinceAction(state, latestAction)) return true;
+    // Reclassify keeps the item visible so the override can be applied later.
+    // Without this branch, a reclassified item would silently disappear because
+    // the historical fall-through treats every non-snooze action as suppress.
+    if (latestAction.action === "reclassified") return true;
     if (latestAction.action === "snoozed") {
       return !latestAction.snoozedUntil || new Date(latestAction.snoozedUntil).getTime() <= now;
     }
     return false;
+  });
+}
+
+function applyReclassifyToState(state, latestAction) {
+  if (!state || !latestAction) return state;
+  const targetActionState = normalizeActionStateValue(
+    latestAction.toActionState,
+    ""
+  );
+  if (!targetActionState) return state;
+
+  const conversationState = toConversationState(targetActionState);
+  const eligibility = buildSurfaceEligibility(conversationState);
+  const stateLabel =
+    ACTION_STATE_META[targetActionState]?.label || state.actionStateLabel;
+  const reason =
+    String(latestAction.reason || "").trim() ||
+    `Reclassified by user as ${stateLabel}.`;
+
+  return {
+    ...state,
+    state: conversationState,
+    stateLabel,
+    actionState: targetActionState,
+    actionStateLabel: stateLabel,
+    eligibleForInsights: eligibility.insights,
+    eligibleForBriefing: eligibility.briefing,
+    eligibleForPriorityFeed: eligibility.priorityFeed,
+    surfaceEligibility: eligibility,
+    surfaceEligible: eligibility.insights,
+    actionReason: reason,
+    reason,
+    prioritySource: "user_reclassify",
+    priorityReason: reason,
+    meta: {
+      ...(state.meta || {}),
+      actionState: targetActionState,
+      state: conversationState,
+      reclassifiedByUser: true,
+      reclassifiedAt: latestAction.createdAt
+        ? new Date(latestAction.createdAt).toISOString()
+        : null,
+      prioritySource: "user_reclassify",
+      priorityReason: reason,
+    },
+    ...(state.debug
+      ? {
+          debug: {
+            ...state.debug,
+            userReclassifyActionState: targetActionState,
+            userReclassifyReason: reason,
+            userReclassifySource: "user",
+          },
+        }
+      : {}),
+  };
+}
+
+function applyUserReclassifications(states = [], latestActionsByItem = new Map()) {
+  if (!latestActionsByItem || latestActionsByItem.size === 0) return states;
+
+  return states.map((state) => {
+    const latestAction = latestActionsByItem.get(state.id);
+    if (!latestAction) return state;
+    if (latestAction.action !== "reclassified") return state;
+    // A new inbound message after the reclassify resets to the classifier's verdict,
+    // mirroring the reactivation semantics in filterSuppressedStates.
+    if (isReactivatedSinceAction(state, latestAction)) return state;
+    return applyReclassifyToState(state, latestAction);
   });
 }
 
@@ -1273,9 +1402,17 @@ async function getCommunicationActionStates(userId, options = {}) {
     visibleBaseStates,
     options
   );
-  const visibleStates = sortStates(
-    await applyPriorityLabels(workspaceAdjustedStates, options)
+  const priorityAdjustedStates = await applyPriorityLabels(
+    workspaceAdjustedStates,
+    options
   );
+  // User reclassify is the final word — it overrides the rules-based classifier,
+  // the workspace LLM, and the priority LLM. A newer inbound message resets it.
+  const reclassifiedStates = applyUserReclassifications(
+    priorityAdjustedStates,
+    latestActionsByItem
+  );
+  const visibleStates = sortStates(reclassifiedStates);
   const publicStates = visibleStates.map(stripInternalStateFields);
   const insightsStates = sortStates(filterSurfaceStates(publicStates));
   const briefingStates = sortStates(filterBriefingStates(publicStates));
@@ -1598,6 +1735,11 @@ module.exports = {
     filterSurfaceStates,
     filterBriefingStates,
     filterPriorityFeedStates,
+    filterSuppressedStates,
+    isReactivatedSinceAction,
+    isHighSignalState,
+    applyReclassifyToState,
+    applyUserReclassifications,
     buildGmailThreadHaystack: conversationSourceAdapters.buildGmailThreadHaystack,
     getNormalizedGmailMessageText: conversationSourceAdapters.getNormalizedGmailMessageText,
     normalizeGmailThread: conversationSourceAdapters.normalizeGmailThread,
