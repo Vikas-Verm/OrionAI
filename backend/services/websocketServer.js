@@ -684,15 +684,55 @@ async function startTelegramListener(userId) {
         });
         lastTelegramCount.set(userId, next);
 
+        // Use the actual telegram message id for the item fingerprint so the
+        // frontend dedups this real-time event against the matching poll
+        // update. Without a stable latestMessageId the poll's item
+        // (id = latestMessageId) and the real-time item (id = senderKey)
+        // were treated as two different new messages, producing two toasts.
+        const latestMessageId =
+          message?.id !== undefined && message?.id !== null
+            ? String(message.id)
+            : null;
+        const latestMessageAt =
+          message?.date instanceof Date
+            ? message.date.toISOString()
+            : Number.isFinite(Number(message?.date))
+              ? new Date(Number(message.date) * 1000).toISOString()
+              : new Date().toISOString();
+        const realtimeItem = {
+          id: latestMessageId || senderKey,
+          senderKey,
+          name: from,
+          preview,
+          unread: 1,
+          latestMessageId,
+          latestMessageAt,
+        };
+        const realtimeSnapshot = JSON.stringify({
+          count: next,
+          summary: realtimeSummary,
+          items: [
+            {
+              id: realtimeItem.id,
+              unread: realtimeItem.unread,
+              preview: realtimeItem.preview,
+              latestMessageAt: realtimeItem.latestMessageAt,
+            },
+          ],
+          highSignalCount: 0,
+        });
+        // Update the polling snapshot so the next poll cycle sees no
+        // change for this item and skips re-broadcasting it.
+        const snapshotMap = pollUser._lastSnapshot ||= new Map();
+        snapshotMap.set(`${userId}:telegram`, realtimeSnapshot);
+
         broadcast(userId, {
           type: "notification_update",
           updates: [
             {
               app: "telegram",
               count: next,
-              items: [
-                { id: senderKey, senderKey, name: from, preview, unread: 1 },
-              ],
+              items: [realtimeItem],
               summary: realtimeSummary,
               ai,
               isNew: true,

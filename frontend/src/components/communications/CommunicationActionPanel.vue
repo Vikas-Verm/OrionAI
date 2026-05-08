@@ -38,12 +38,16 @@
         :class="[
           `state-${item.actionState}`,
           String(item.conversationId) === String(selectedConversationId || '') && 'selected',
+          itemUnreadCount(item) > 0 && 'unread',
         ]"
       >
         <div class="comm-card-top">
           <span class="comm-card-source">
             <span>{{ item.sourceIcon }}</span>
             <span>{{ item.sourceLabel }}</span>
+          </span>
+          <span v-if="itemUnreadCount(item) > 0" class="comm-card-unread-badge">
+            {{ itemUnreadCount(item) > 9 ? '9+' : itemUnreadCount(item) }}
           </span>
           <span v-if="showStateBadge(item)" class="comm-card-state">{{ item.actionStateLabel }}</span>
         </div>
@@ -176,6 +180,22 @@ function showStateBadge(item) {
   return Boolean(item?.actionStateLabel) && item?.actionState !== 'waiting_on_others'
 }
 
+function itemUnreadCount(item) {
+  const candidates = [
+    item?.sourceMetadata?.unreadCount,
+    item?.platformMetadata?.unreadCount,
+    item?.meta?.sourceMetadata?.unreadCount,
+    item?.meta?.platformMetadata?.unreadCount,
+    item?.unreadCount,
+    item?.unread,
+  ]
+  for (const value of candidates) {
+    const numeric = Number(value)
+    if (Number.isFinite(numeric) && numeric > 0) return numeric
+  }
+  return 0
+}
+
 function setActiveFilter(filterId) {
   const nextFilter = filterId || 'all'
   activeFilter.value = nextFilter
@@ -295,6 +315,32 @@ function setActiveFilter(filterId) {
 .comm-card.selected {
   border-color: rgba(82, 212, 255, 0.24);
   box-shadow: 0 0 0 1px rgba(82, 212, 255, 0.12);
+}
+
+.comm-card.unread {
+  border-color: rgba(82, 212, 255, 0.32);
+  box-shadow: 0 0 0 1px rgba(82, 212, 255, 0.18);
+}
+
+.comm-card.unread .comm-card-title {
+  color: #f8fbff;
+  font-weight: 700;
+}
+
+.comm-card-unread-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #52d4ff, #8b7dff);
+  color: #0b1224;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  margin-left: auto;
 }
 
 .comm-card-top,

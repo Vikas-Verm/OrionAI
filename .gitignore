@@ -40,8 +40,3 @@ backend/data/gmail_cache/*.db
 .claude/
 .mcp.json
 CLAUDE.md
-# Local AI / Codex / Claude generated files
-.code-review-graph/
-.claude/
-.mcp.json
-CLAUDE.md

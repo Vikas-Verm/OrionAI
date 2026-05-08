@@ -14,6 +14,16 @@ const {
   buildCommunicationPriorityItems,
   getCommunicationActionStates,
 } = require("./communicationActionService");
+const {
+  QUICK_ACTIONS,
+  applyQuickAction,
+  normalizeQuickAction,
+  parseCanonicalConversationKey,
+  buildCanonicalConversationKey,
+} = require("./conversationActionStateMachine");
+const {
+  recordTelemetryEvent,
+} = require("./communicationTelemetryService");
 const { calendarGetToday } = require("./tools/toolCalendar");
 const {
   toolGetMyTickets,
@@ -1052,10 +1062,16 @@ function mapAuditEntry(action) {
   return {
     id: String(action._id),
     itemId: action.itemId,
+    conversationId: action.conversationId || "",
     title: action.title,
     action: action.action,
+    legacyAction: action.legacyAction || "",
     actionLabel: action.actionLabel || "",
+    fromActionState: action.fromActionState || "",
+    toActionState: action.toActionState || "",
+    reason: action.reason || "",
     note: action.note || "",
+    snoozedUntil: action.snoozedUntil || null,
     createdAt: action.createdAt,
     ...buildSourceBadge(action.sourceApp),
   };
@@ -1196,27 +1212,77 @@ async function recordPriorityFeedAction(userId, payload = {}) {
     actionLabel,
     note = "",
     snoozeMinutes = 0,
+    fromActionState = "",
+    targetActionState = "",
+    targetState = "",
+    reason = "",
   } = payload;
 
   if (!itemId || !action) {
     throw new Error("itemId and action are required");
   }
 
-  let snoozedUntil = null;
-  if (action === "snoozed") {
-    const minutes = clamp(Number(snoozeMinutes || 120), 15, 7 * 24 * 60);
-    snoozedUntil = new Date(Date.now() + minutes * 60000);
+  const canonicalAction = normalizeQuickAction(action);
+  if (!canonicalAction) {
+    const allowed = Object.values(QUICK_ACTIONS).join(", ");
+    throw new Error(`Unsupported action "${action}". Allowed: ${allowed}.`);
   }
+
+  const transition = applyQuickAction({
+    fromActionState,
+    action: canonicalAction,
+    targetActionState,
+    targetState,
+    snoozeMinutes,
+    reason,
+  });
+
+  const parsed = parseCanonicalConversationKey(itemId);
+  const resolvedSourceApp = String(sourceApp || parsed?.sourceApp || "")
+    .trim()
+    .toLowerCase();
+  const resolvedConversationId = String(parsed?.conversationId || "");
+  const canonicalItemId =
+    buildCanonicalConversationKey(resolvedSourceApp, resolvedConversationId) ||
+    itemId;
 
   const entry = await PriorityFeedAction.create({
     userId,
-    itemId,
-    sourceApp,
+    itemId: canonicalItemId,
+    sourceApp: resolvedSourceApp,
+    conversationId: resolvedConversationId,
     title,
-    action,
+    action: canonicalAction,
+    legacyAction:
+      String(action || "").toLowerCase() === canonicalAction
+        ? ""
+        : String(action || "").toLowerCase(),
     actionLabel: actionLabel || "",
+    fromActionState: transition.fromActionState || "",
+    toActionState: transition.toActionState || "",
+    reason: transition.reason || "",
     note: String(note || "").trim().slice(0, 500),
-    snoozedUntil,
+    snoozedUntil: transition.snoozedUntil,
+  });
+
+  // Emit a single telemetry row per user click. We pick the kind based on
+  // whether the transition actually moved the conversation to a new state —
+  // a separate "action" + "state_change" pair would double the storage cost
+  // with no extra information for user-driven transitions.
+  const fromState = transition.fromState || "";
+  const toState = transition.toState || "";
+  const stateChanged = Boolean(toState) && toState !== fromState;
+
+  await recordTelemetryEvent(userId, {
+    kind: stateChanged ? "state_change" : "action",
+    itemId: canonicalItemId,
+    sourceApp: resolvedSourceApp,
+    conversationId: resolvedConversationId,
+    action: canonicalAction,
+    fromState,
+    toState,
+    reason: transition.reason || "",
+    origin: "priority-feed",
   });
 
   return mapAuditEntry(entry.toObject());
