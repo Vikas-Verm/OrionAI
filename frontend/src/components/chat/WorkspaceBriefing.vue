@@ -32,7 +32,15 @@
           class="briefing-app-chip briefing-app-chip-action"
           @click="triggerAction(app.action)"
         >
-          <span>{{ app.icon }}</span>
+          <img
+            v-if="appIconUrlFor(app) && !brokenAppIconIds.has(app.id)"
+            :src="appIconUrlFor(app)"
+            :alt="app.label || app.id"
+            class="briefing-app-chip-img"
+            loading="lazy"
+            @error="brokenAppIconIds.add(app.id)"
+          />
+          <span v-else>{{ app.icon }}</span>
           <span>{{ app.label }}</span>
         </button>
       </div>
@@ -218,7 +226,15 @@
           <article v-for="entry in auditTrail" :key="entry.id" class="audit-trail-item">
             <div class="audit-trail-top">
               <span class="audit-trail-badge">
-                <span>{{ entry.sourceIcon }}</span>
+                <img
+                  v-if="auditEntryIconUrl(entry) && !brokenAuditIconIds.has(entry.id)"
+                  :src="auditEntryIconUrl(entry)"
+                  :alt="entry.sourceLabel || entry.sourceApp || 'App'"
+                  class="audit-trail-img"
+                  loading="lazy"
+                  @error="brokenAuditIconIds.add(entry.id)"
+                />
+                <span v-else>{{ entry.sourceIcon }}</span>
                 <span>{{ entry.sourceLabel }}</span>
               </span>
               <span class="audit-trail-state">{{ actionStateLabel(entry.action) }}</span>
@@ -253,11 +269,12 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import api, { agentAPI } from '../../services/api'
 import PriorityFeedCard from '../home/PriorityFeedCard.vue'
 import { useWebSocket } from '../../composables/useWebSocket'
 import { emitCommunicationPriorityRefresh } from '../../composables/useCommunicationActions'
+import { getAppIconUrl } from '../../utils/appIcons'
 
 const props = defineProps({
   fallbackTitle: { type: String, default: 'Daily Briefing' },
@@ -270,6 +287,18 @@ const dashboard = ref(null)
 const items = ref([])
 const auditTrail = ref([])
 const activeFilter = ref('all')
+// Per-app icon-load failures so we don't keep retrying broken URLs and
+// fall back cleanly to the existing emoji glyph.
+const brokenAppIconIds = reactive(new Set())
+const brokenAuditIconIds = reactive(new Set())
+function appIconUrlFor(app) {
+  if (!app) return ''
+  return getAppIconUrl(app.id || app.module || '')
+}
+function auditEntryIconUrl(entry) {
+  if (!entry) return ''
+  return getAppIconUrl(entry.sourceApp || entry.module || '')
+}
 const pendingItemId = ref(null)
 const pendingDashboard = ref(null)
 const briefingUpdateLabel = ref('')
@@ -312,10 +341,20 @@ const filterDefinitions = computed(() => dashboard.value?.priorityFeed?.filters?
   { id: 'tasks', label: 'Tasks', count: 0 },
 ])
 const filters = computed(() =>
-  filterDefinitions.value.map((filter) => ({
-    ...filter,
-    count: countItemsForFilter(visiblePriorityItems.value, filter.id),
-  }))
+  // Only render chips that have items, plus "All" and whichever filter is
+  // currently active. With 2 messages we previously rendered all 7 chips,
+  // many showing 0; that read as noisy and confusing.
+  filterDefinitions.value
+    .map((filter) => ({
+      ...filter,
+      count: countItemsForFilter(visiblePriorityItems.value, filter.id),
+    }))
+    .filter(
+      (filter) =>
+        filter.id === 'all' ||
+        filter.id === activeFilter.value ||
+        Number(filter.count || 0) > 0
+    )
 )
 
 const briefingTitle = computed(() => dailyBriefing.value.title || props.fallbackTitle)
@@ -814,12 +853,18 @@ async function saveFeedAction(item, action, extras = {}, options = {}) {
   const managePending = options.managePending !== false
   if (managePending) pendingItemId.value = item.id
   try {
+    const openContext = item?.meta?.openContext || item?.openContext || {}
+    const latestMessageId =
+      item?.meta?.latestMessageId || item?.latestMessageId || ''
     const { data } = await api.post('/api/briefing/priority-feed/actions', {
       itemId: item.id,
       sourceApp: item.sourceApp,
       title: item.title,
       action,
       actionLabel: item.action?.label || item.suggestedNextAction,
+      fromActionState: item.actionState || item.meta?.actionState || '',
+      openContext,
+      latestMessageId,
       ...extras,
     })
     applyActionResult(item.id, data.entry)
@@ -1128,6 +1173,17 @@ onUnmounted(() => {
   border: 1px solid var(--briefing-chip-border);
   color: var(--briefing-chip-text);
   font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.briefing-app-chip-img {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  border-radius: 3px;
+  display: inline-block;
 }
 
 .briefing-app-chip-action {
@@ -1562,6 +1618,20 @@ onUnmounted(() => {
 .audit-trail-state {
   font-size: 11px;
   color: rgba(191, 226, 255, 0.8);
+}
+
+.audit-trail-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.audit-trail-img {
+  width: 14px;
+  height: 14px;
+  object-fit: contain;
+  border-radius: 3px;
+  display: inline-block;
 }
 
 .audit-trail-item {

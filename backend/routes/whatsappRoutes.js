@@ -14,9 +14,12 @@ const {
   sendWhatsAppMessage,
   uploadWhatsAppMedia,
   markWhatsAppRoomAsRead,
+  redactWhatsAppMessage,
+  deleteWhatsAppChat,
   fetchWhatsAppMedia,
   getWhatsAppUnreadSummary,
   invalidateWhatsAppCache,
+  syncWhatsAppContacts,
 } = require("../services/whatsappMatrixService");
 
 router.use(authenticate);
@@ -78,6 +81,26 @@ router.get("/chats", async (req, res) => {
   } catch (err) {
     console.error("WhatsApp chats error:", err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// One-click "Sync contacts" — sends `sync contacts` to the bridge
+// management room so the bridge re-pulls the address book into its local
+// SQLite. This populates whatsmeow_contacts.full_name for chats that were
+// still showing as phone numbers.
+router.post("/sync-contacts", async (req, res) => {
+  try {
+    const result = await syncWhatsAppContacts(req.user?.username);
+    res.json({
+      ok: true,
+      roomId: result?.roomId || null,
+      eventId: result?.eventId || null,
+      message:
+        "Contact sync requested. Names usually update within 5–30 seconds.",
+    });
+  } catch (err) {
+    console.error("WhatsApp sync-contacts error:", err.message);
+    res.status(400).json({ ok: false, error: err.message });
   }
 });
 
@@ -209,6 +232,47 @@ router.post("/rooms/:roomId/upload", whatsappUpload.single("file"), async (req, 
     res.json(result);
   } catch (err) {
     console.error("WhatsApp upload error:", err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Delete a single message. The Matrix redaction propagates through the
+// mautrix-whatsapp bridge as WhatsApp's "Delete for everyone" — the
+// recipient sees "This message was deleted" in their WhatsApp.
+router.post("/rooms/:roomId/messages/:eventId/redact", async (req, res) => {
+  try {
+    const result = await redactWhatsAppMessage(
+      req.user?.username,
+      req.params.roomId,
+      req.params.eventId,
+      req.body?.reason || ""
+    );
+    res.json(result);
+  } catch (err) {
+    console.error("WhatsApp redact error:", err.message);
+    res
+      .status(err?.response?.status === 403 ? 403 : 400)
+      .json({
+        error:
+          err?.response?.status === 403
+            ? "You don't have permission to delete that message."
+            : err.message,
+      });
+  }
+});
+
+// Delete the whole chat for this user — matches WhatsApp's local "Delete
+// chat" semantic. Removes the Matrix portal from our view; the other party
+// keeps their copy of the chat.
+router.delete("/rooms/:roomId", async (req, res) => {
+  try {
+    const result = await deleteWhatsAppChat(
+      req.user?.username,
+      req.params.roomId
+    );
+    res.json(result);
+  } catch (err) {
+    console.error("WhatsApp delete-chat error:", err.message);
     res.status(400).json({ error: err.message });
   }
 });

@@ -10,7 +10,15 @@
     <div class="priority-card-top" :aria-expanded="expanded" @click="toggleExpanded">
       <div class="priority-card-meta">
         <span class="priority-source priority-source-icon" :title="item.sourceLabel">
-          <span>{{ item.sourceIcon }}</span>
+          <img
+            v-if="appIconUrl && !appIconBroken"
+            :src="appIconUrl"
+            :alt="item.sourceLabel || item.sourceApp || 'App'"
+            class="priority-source-img"
+            loading="lazy"
+            @error="appIconBroken = true"
+          />
+          <span v-else>{{ item.sourceIcon }}</span>
         </span>
         <span v-if="isUnread" class="priority-unread-badge" :title="`${unreadCount} unread`">
           {{ unreadCount > 9 ? '9+' : unreadCount }}
@@ -232,6 +240,7 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useDisclosure } from '../../composables/useDisclosure'
+import { getAppIconUrl } from '../../utils/appIcons'
 
 const props = defineProps({
   item: { type: Object, required: true },
@@ -281,6 +290,16 @@ const unreadCount = computed(() => {
   return 0
 })
 const isUnread = computed(() => unreadCount.value > 0)
+const appIconBroken = ref(false)
+const appIconUrl = computed(() =>
+  getAppIconUrl(props.item?.sourceApp || props.item?.module || '')
+)
+watch(
+  () => props.item?.sourceApp,
+  () => {
+    appIconBroken.value = false
+  }
+)
 const showPriorityBadge = computed(() =>
   props.item?.category !== 'meetings' && sourceApp.value !== 'google_calendar'
 )
@@ -750,6 +769,14 @@ function joinGoogleMeet() {
   padding: 0;
   justify-content: center;
   font-size: 15px;
+}
+
+.priority-source-img {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  border-radius: 4px;
+  display: block;
 }
 
 .priority-level.level-high {

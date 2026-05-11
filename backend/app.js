@@ -45,6 +45,7 @@ const googleAuthRoutes = require("./routes/googleAuthRoutes");
 const healthRoutes = require("./routes/healthRoutes");
 const briefingRoutes = require("./routes/briefingRoutes");
 const communicationRoutes = require("./routes/communicationRoutes");
+const gifRoutes = require("./routes/gifRoutes");
 const googleDocsRoutes = require("./routes/googleDocsRoutes");
 const googleSheetsRoutes = require("./routes/googleSheetsRoutes");
 const {
@@ -111,6 +112,7 @@ app.post("/api/webhooks/slack", handleSlackWebhook);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/briefing", authenticate, briefingRoutes);
 app.use("/api/communications", authenticate, communicationRoutes);
+app.use("/api/gifs", gifRoutes);
 app.use("/api/whatsapp", whatsappRoutes);
 app.use("/api/automations", automationRoutes);
 app.use("/auth/google", googleAuthRoutes);

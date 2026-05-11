@@ -453,6 +453,11 @@ function buildWhatsAppBridgeContactMap(bridgeContacts = []) {
       contact?.canonicalContactJid || contactJid
     ).trim();
     const roomId = String(contact?.roomId || "").trim();
+    const contactId = String(contact?.contactId || "").trim();
+    const ghostId = String(contact?.ghostId || "").trim();
+    const phoneNumberRaw = String(contact?.phoneNumber || "").trim();
+    // Phone-number match should be order-insensitive to "+", spaces, etc.
+    const phoneDigits = normalizeDigits(phoneNumberRaw);
 
     if (contactJid) {
       contactMap.set(contactJid, contact);
@@ -462,6 +467,20 @@ function buildWhatsAppBridgeContactMap(bridgeContacts = []) {
     }
     if (roomId) {
       contactMap.set(roomId, contact);
+    }
+    // Also index by raw contact id and ghost id so a room descriptor that
+    // only knows the WhatsApp ghost mxid (e.g. @whatsapp_919870291255:...)
+    // can resolve to its address-book entry. Without these keys, any room
+    // whose portal had drifted out of the bridge snapshot kept showing the
+    // phone number as title.
+    if (contactId) {
+      contactMap.set(contactId, contact);
+    }
+    if (ghostId && ghostId !== contactId) {
+      contactMap.set(ghostId, contact);
+    }
+    if (phoneDigits) {
+      contactMap.set(phoneDigits, contact);
     }
   }
 
@@ -691,6 +710,96 @@ function readWhatsAppBridgeContacts(matrixMxid = "", bridgeSnapshot = null) {
       })
       .filter((contact) => contact.contactJid && contact.title);
 
+    // Fallback: pull rows from the bridge `ghost` table ONLY when the user
+    // has no whatsmeow_contacts rows yet (fresh install / pre-sync state).
+    // Earlier this fallback ran unconditionally and produced duplicate chat
+    // rows whenever a contact was reachable via both a phone JID and a LID
+    // JID — the phone-derived contact id and the LID-derived contact id
+    // didn't overlap, so the dedup that lives downstream couldn't merge
+    // them. Trust whatsmeow_contacts when it's populated; click "Sync
+    // contacts" to refresh names if address-book sync hasn't run.
+    if (contacts.length === 0) {
+      try {
+        const ghostRows = db
+          .prepare(
+            `
+              SELECT id, name, avatar_mxc
+              FROM ghost
+              WHERE id IS NOT NULL AND id != ''
+            `
+          )
+          .all();
+
+        for (const row of ghostRows) {
+          const ghostId = String(row?.id || "").trim();
+          if (!ghostId) continue;
+          // Bridge bot / system ids — skip.
+          if (/bot$/i.test(ghostId)) continue;
+          const ghostName = String(row?.name || "").trim();
+          if (!ghostName) continue;
+
+          const inferredJid = ghostId.includes("@")
+            ? ghostId
+            : `${ghostId}@s.whatsapp.net`;
+          const canonicalJid = canonicalizeWhatsAppContactJid(
+            inferredJid,
+            lidMap
+          );
+          const contactJid = canonicalJid || inferredJid;
+          const contactId = extractWhatsAppIdentifier(contactJid);
+          const phoneNumber = formatWhatsAppPhone(contactId || "");
+          const bridgePortal =
+            portalMap.get(contactJid) || portalMap.get(inferredJid) || null;
+          const avatarMxc = String(
+            row?.avatar_mxc || bridgePortal?.avatarMxc || ""
+          ).trim();
+
+          const fallbackContact = {
+            contactId,
+            contactJid,
+            canonicalContactJid: contactJid,
+            rawContactJid: inferredJid,
+            fullName: "",
+            pushName: ghostName,
+            businessName: "",
+            ghostId,
+            ghostName,
+            phoneNumber,
+            avatarMxc: avatarMxc || null,
+            avatarUrl: buildWhatsAppMediaUrl(avatarMxc || ""),
+            roomId:
+              String(bridgePortal?.roomId || "").trim() ||
+              buildWhatsAppContactRoomId(contactJid),
+            bridgeStatus: bridgePortal?.roomId ? "portal" : "contact",
+            contactMxid: buildWhatsAppGhostMxid(ghostId),
+          };
+
+          contacts.push({
+            ...fallbackContact,
+            title: buildWhatsAppContactDisplayName(fallbackContact),
+            name: buildWhatsAppContactDisplayName(fallbackContact),
+            isGroup: false,
+            isDirect: true,
+            isPlaceholder: !bridgePortal?.roomId,
+            unreadCount: 0,
+            highlightCount: 0,
+            lastMessage: "",
+            lastMessagePreview: "",
+            lastMessageAt: null,
+            lastMessageTs: 0,
+            lastSender: "",
+            memberCount: 2,
+            source: "whatsapp",
+            isPinned: false,
+            isMuted: false,
+          });
+        }
+      } catch {
+        // Ghost-table fallback is best-effort; schema differences just leave
+        // contacts as-is.
+      }
+    }
+
     const dedupedContacts = contacts.reduce((accumulator, contact) => {
       const key = buildWhatsAppContactKey(contact, lidMap);
       if (!key) return accumulator;
@@ -746,16 +855,101 @@ function mergeRoomWithBridgePortalMetadata(room = {}, bridgePortal = null) {
   };
 }
 
+// A title that's just a phone number ("+91 98 70 29 12 55", "919870291255",
+// "+1-555-0100") gives no signal beyond the JID we already have. When the
+// bridge contact knows a real address-book name we should always prefer it.
+function looksLikePhoneNumberTitle(value = "") {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return false;
+  // Allow a leading +, digits, spaces, dashes, parens. Reject anything with
+  // letters (which means it's a real name like "Pat Lee" or "Ops Team").
+  return /^[+]?[\d\s().-]+$/.test(trimmed);
+}
+
+// A raw Matrix room id (e.g. "!aliCGcdQakhIGwyyDz:orion.local") must NEVER
+// surface as a chat title. Earlier the room-title-with-letters branch was
+// happily accepting these because room ids contain letters too.
+function looksLikeRawMatrixRoomId(value = "") {
+  return /^!.+:.+$/.test(String(value || "").trim());
+}
+
+function isUsableTitle(value = "") {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return false;
+  if (looksLikeRawMatrixRoomId(trimmed)) return false;
+  return true;
+}
+
+function pickWhatsAppDisplayName(bridgeContact = null, roomTitleSanitized = "") {
+  const addressBookName = sanitizeWhatsAppDisplayLabel(
+    bridgeContact?.fullName || bridgeContact?.businessName || ""
+  );
+  const pushName = sanitizeWhatsAppDisplayLabel(bridgeContact?.pushName || "");
+  const ghostName = sanitizeWhatsAppDisplayLabel(bridgeContact?.ghostName || "");
+  const bridgeTitle = sanitizeWhatsAppDisplayLabel(
+    bridgeContact?.title || bridgeContact?.name || ""
+  );
+  const phoneNumber = sanitizeWhatsAppDisplayLabel(
+    bridgeContact?.phoneNumber || ""
+  );
+
+  // Address-book name always wins — that's the saved contact name from the
+  // user's phone, which is what they expect to see.
+  if (isUsableTitle(addressBookName)) return addressBookName;
+
+  // If the existing room title looks like a real label (has letters AND is
+  // not a raw matrix room id), keep it — the bridge has either set
+  // m.room.name from a previous sync or the user renamed the chat.
+  if (
+    isUsableTitle(roomTitleSanitized) &&
+    !looksLikePhoneNumberTitle(roomTitleSanitized)
+  ) {
+    return roomTitleSanitized;
+  }
+
+  // Otherwise the room title is a phone number, empty, or a raw room id;
+  // fall back through trusted contact signals first, then the phone number,
+  // and finally a generic label. We never return the room id.
+  if (isUsableTitle(pushName)) return pushName;
+  if (isUsableTitle(ghostName)) return ghostName;
+  if (isUsableTitle(bridgeTitle)) return bridgeTitle;
+  if (phoneNumber && looksLikePhoneNumberTitle(phoneNumber)) return phoneNumber;
+  if (
+    roomTitleSanitized &&
+    looksLikePhoneNumberTitle(roomTitleSanitized) &&
+    !looksLikeRawMatrixRoomId(roomTitleSanitized)
+  ) {
+    return roomTitleSanitized;
+  }
+  return "";
+}
+
 function mergeRoomWithBridgeContactMetadata(room = {}, bridgeContact = null) {
   if (!bridgeContact) return room;
 
+  const roomTitleSanitized = sanitizeWhatsAppDisplayLabel(
+    room.title || room.name || ""
+  );
+  const phoneFallback = sanitizeWhatsAppDisplayLabel(
+    bridgeContact.phoneNumber || room.phoneNumber || ""
+  );
+  // Title cascade: bridge-resolved best name → existing usable room title →
+  // a phone-number-only label → an empty string. We deliberately never fall
+  // back to the raw matrix room id here — surfacing "!abc:orion.local" as a
+  // chat title is worse than showing nothing because the user can't act on
+  // it. Final-stage filtering in listWhatsAppChats will drop chats whose
+  // title still ends up empty/unusable.
   const title =
-    sanitizeWhatsAppDisplayLabel(
-      bridgeContact.title || bridgeContact.name || ""
-    ) ||
-    sanitizeWhatsAppDisplayLabel(room.title || room.name || room.roomId || "");
+    pickWhatsAppDisplayName(bridgeContact, roomTitleSanitized) ||
+    (isUsableTitle(roomTitleSanitized) ? roomTitleSanitized : "") ||
+    (looksLikePhoneNumberTitle(phoneFallback) ? phoneFallback : "");
   const phoneNumber =
     String(bridgeContact.phoneNumber || room.phoneNumber || "").trim() || "";
+  // Prefer the bridge contact's avatar when the room has no Matrix-side
+  // avatar. The bridge tracks address-book / WhatsApp profile pictures and
+  // updates the ghost user's avatar_mxc when WhatsApp pushes a new one;
+  // older syncs may still have the room's avatar empty.
+  const avatarMxc = room.avatarMxc || bridgeContact.avatarMxc || null;
   const avatarUrl =
     room.avatarUrl ||
     buildWhatsAppMediaUrl(bridgeContact.avatarMxc || "") ||
@@ -766,7 +960,7 @@ function mergeRoomWithBridgeContactMetadata(room = {}, bridgeContact = null) {
     ...room,
     title,
     name: title,
-    avatarMxc: room.avatarMxc || bridgeContact.avatarMxc || null,
+    avatarMxc,
     avatarUrl,
     phoneNumber,
     contactJid: bridgeContact.contactJid || room.contactJid || "",
@@ -786,23 +980,38 @@ function buildWhatsAppPortalRoom(portal = {}, bridgeContact = null) {
   const roomId = String(portal?.roomId || "").trim();
   if (!roomId) return null;
 
+  // A portal-only room with no human-readable label and no contact metadata
+  // is a bridge-internal room (management, admin, login). Surfacing it puts
+  // raw matrix ids like "!sMHjwPKXRhzKtsXrFC:orion.local" in the chat list.
+  // Filter them here and let the descriptor path own real rooms.
+  const sanitizedLabel = sanitizeWhatsAppDisplayLabel(
+    portal?.title || bridgeContact?.title || bridgeContact?.name || ""
+  );
+  const hasContactMetadata = Boolean(
+    bridgeContact?.phoneNumber ||
+      bridgeContact?.canonicalContactJid ||
+      bridgeContact?.contactJid ||
+      bridgeContact?.fullName ||
+      bridgeContact?.pushName ||
+      bridgeContact?.businessName ||
+      portal?.portalId
+  );
+  if (!sanitizedLabel && !hasContactMetadata) {
+    return null;
+  }
+
   const roomType = String(portal?.roomType || "")
     .trim()
     .toLowerCase();
   const isDirect = roomType
     ? roomType === "dm"
     : !Boolean(bridgeContact?.isGroup);
+  const fallbackTitle = sanitizedLabel || "WhatsApp chat";
   const baseRoom = {
     roomId,
     id: roomId,
-    title:
-      sanitizeWhatsAppDisplayLabel(
-        portal?.title || bridgeContact?.title || bridgeContact?.name || ""
-      ) || roomId,
-    name:
-      sanitizeWhatsAppDisplayLabel(
-        portal?.title || bridgeContact?.title || bridgeContact?.name || ""
-      ) || roomId,
+    title: fallbackTitle,
+    name: fallbackTitle,
     avatarMxc:
       String(portal?.avatarMxc || bridgeContact?.avatarMxc || "").trim() ||
       null,
@@ -991,12 +1200,42 @@ function summarizeEventContent(content = {}) {
 }
 
 function isInternalWhatsAppBridgeCommandMessage(message = {}) {
-  if (!message?.fromMe) return false;
   const text = String(message.text || message.previewText || "")
     .trim()
     .toLowerCase();
   if (!text) return false;
-  return /^login qr$/i.test(text) || /^start-chat\s+\S+$/i.test(text);
+
+  // Outbound: bridge commands we sent ourselves to the management bot.
+  if (message.fromMe) {
+    return (
+      /^login qr$/i.test(text) ||
+      /^start-chat\s+\S+$/i.test(text) ||
+      /^sync\s+contacts$/i.test(text) ||
+      /^sync\s+space$/i.test(text) ||
+      /^sync\s+groups$/i.test(text)
+    );
+  }
+
+  // Inbound: bridge bot system replies. These were creating phantom
+  // duplicate "Vikas Verma" rows because every `start-chat` redirect put
+  // the bot's "You already have a direct chat with…" reply into a fresh
+  // portal room, and that bot reply was being rendered as the chat preview.
+  const senderMxid = String(message.sender || "").toLowerCase();
+  const looksLikeBridgeBot =
+    /(?:^|@)whatsappbot:/i.test(senderMxid) ||
+    /(?:^|@)signalbot:/i.test(senderMxid) ||
+    /(?:^|@)[a-z]+bot[a-z0-9_-]*:/i.test(senderMxid);
+  if (looksLikeBridgeBot) {
+    if (text.includes("you already have a direct chat with")) return true;
+    if (text.startsWith("logged in as")) return true;
+    if (text.includes("login successful")) return true;
+    if (text.startsWith("the chat is now bridged")) return true;
+    if (text.startsWith("started chat with")) return true;
+    if (/^logged out\b/i.test(text)) return true;
+    if (/^sync(?:ing)?\s+(?:contacts|groups|space)/i.test(text)) return true;
+  }
+
+  return false;
 }
 
 function buildMediaDescriptor(content = {}) {
@@ -1522,6 +1761,16 @@ function buildRoomDescriptor({
   const containsWhatsAppGhost = memberIds.some((mxid) =>
     isWhatsAppGhostMxid(mxid)
   );
+  // Capture the first WhatsApp ghost mxid so we can extract a contact id and
+  // build a JID lookup key. Without this the bridgeContactMap lookup chain
+  // had only `roomId` and `room.contactJid` (which was empty until the
+  // portal merge ran) — meaning rooms whose portal entry had drifted out
+  // of the bridge snapshot kept showing as a phone number.
+  const whatsAppGhostMxid =
+    memberIds.find((mxid) => isWhatsAppGhostMxid(mxid)) || "";
+  const whatsAppGhostId = whatsAppGhostMxid
+    ? extractWhatsAppIdentifier(whatsAppGhostMxid.replace(/^@whatsapp_/i, ""))
+    : "";
   const containsSignalGhost = memberIds.some((mxid) => isSignalGhostMxid(mxid));
   const containsWhatsAppBot = memberIds.includes(bridgeBotMxid);
   const containsSignalBot = memberIds.some((mxid) => isSignalBotMxid(mxid));
@@ -1555,7 +1804,7 @@ function buildRoomDescriptor({
     directMap.get(String(roomId)) === true ||
     (!isManagement && memberCount <= 2 && containsWhatsAppGhost);
 
-  const messages = applyDeliveryStateToMessages(
+  const rawMessages = applyDeliveryStateToMessages(
     parseRoomEvents({
       roomId,
       roomData,
@@ -1566,7 +1815,15 @@ function buildRoomDescriptor({
     roomData,
     currentUserId,
     bridgeBotMxid
-  ).filter((message) => !isInternalWhatsAppBridgeCommandMessage(message));
+  );
+  const messages = rawMessages.filter(
+    (message) => !isInternalWhatsAppBridgeCommandMessage(message)
+  );
+  // If every meaningful message in this room was a bridge-bot redirect /
+  // system reply, the room is a transient phantom (created by `start-chat`
+  // when a chat already existed). Mark it so the chat-list filter drops it.
+  const isBridgeRedirectOnly =
+    rawMessages.length > 0 && messages.length === 0;
   const typingUsers = extractTypingUsers(
     roomData,
     memberMap,
@@ -1581,6 +1838,7 @@ function buildRoomDescriptor({
   return {
     isWhatsAppRoom,
     isManagement,
+    isBridgeRedirectOnly,
     room: {
       roomId: String(roomId),
       id: String(roomId),
@@ -1608,6 +1866,10 @@ function buildRoomDescriptor({
       lastEventId: lastMessage?.eventId || null,
       latestMessageId: lastMessage?.eventId || null,
       typingUsers,
+      // Surfaced so the contact-name lookup downstream has more keys to try.
+      // Empty for groups and management rooms — only direct chats get these.
+      contactGhostId: whatsAppGhostId || "",
+      contactGhostMxid: whatsAppGhostMxid || "",
     },
     messages,
     memberMap,
@@ -2528,6 +2790,22 @@ async function resolveBridgeState(
   return bridgeState;
 }
 
+/**
+ * Tells the mautrix-whatsapp bridge to re-sync the user's WhatsApp address
+ * book into the bridge's local SQLite (`whatsmeow_contacts.full_name`).
+ * The bridge command is the same one a power-user would type by hand into
+ * the management room: `sync contacts`. Returns the bridge response and
+ * invalidates our cache so the next list call sees fresh names.
+ *
+ * Best-effort. If the bridge is offline / not yet logged in, the underlying
+ * sendBridgeTextCommand throws and the caller surfaces the error.
+ */
+async function syncWhatsAppContacts(userId) {
+  const result = await sendBridgeTextCommand(userId, "sync contacts");
+  invalidateWhatsAppCache(userId);
+  return result;
+}
+
 async function sendBridgeTextCommand(userId, command) {
   const roomId = await ensureManagementRoom(userId);
   const content = {
@@ -2855,7 +3133,9 @@ async function listMatrixWhatsAppRooms(
     .filter(
       ({ descriptor, bridgePortal }) =>
         (descriptor.isWhatsAppRoom || bridgePortal?.roomId) &&
-        !descriptor.isManagement
+        !descriptor.isManagement &&
+        // Drop transient redirect rooms — see buildRoomDescriptor.
+        !descriptor.isBridgeRedirectOnly
     )
     .map(({ descriptor, bridgePortal }) =>
       mergeRoomWithBridgePortalMetadata(
@@ -3375,9 +3655,18 @@ async function listWhatsAppChats(
   };
 
   for (const room of rooms) {
+    // Try every key the contact map indexes so a name shows even when the
+    // bridge portal/JID linkage has drifted. Order matters: the first hit
+    // wins, so we try the most specific keys first.
+    const phoneDigits = normalizeDigits(room?.phoneNumber || "");
     const bridgeContact =
       bridgeContactMap.get(String(room.roomId || "").trim()) ||
       bridgeContactMap.get(String(room.contactJid || "").trim()) ||
+      bridgeContactMap.get(
+        String(room.canonicalContactJid || "").trim()
+      ) ||
+      bridgeContactMap.get(String(room.contactGhostId || "").trim()) ||
+      (phoneDigits ? bridgeContactMap.get(phoneDigits) : null) ||
       null;
     registerChat(mergeRoomWithBridgeContactMetadata(room, bridgeContact));
   }
@@ -3417,6 +3706,11 @@ async function listWhatsAppChats(
         );
       }
 
+      // Skip management/admin rooms — only the bridge bot lives there.
+      if (descriptor?.isManagement) {
+        return null;
+      }
+
       return buildWhatsAppPortalRoom(portal, bridgeContact);
     })
   );
@@ -3427,10 +3721,43 @@ async function listWhatsAppChats(
     registerChat(contact);
   }
 
+  // Second-pass dedup by phone digits. The bridge sometimes creates two
+  // Matrix portal rooms for the same WhatsApp contact — typically when the
+  // contact is reachable via both a phone JID (`919...@s.whatsapp.net`) and
+  // a LID JID (`14194...@lid`) and the lid_map is missing the link. Both
+  // entries end up in the chatMap under different canonical keys but resolve
+  // to the same person. Merge them by phone digits, keeping the better one.
+  const phoneIndex = new Map();
+  for (const [key, chat] of chatMap.entries()) {
+    if (!chat || chat.isGroup) continue;
+    const digits = normalizeDigits(chat.phoneNumber || "");
+    if (!digits) continue;
+    const existing = phoneIndex.get(digits);
+    if (!existing) {
+      phoneIndex.set(digits, { key, chat });
+      continue;
+    }
+    const winner = pickBetterWhatsAppContact(existing.chat, chat);
+    const loserKey = winner === existing.chat ? key : existing.key;
+    chatMap.delete(loserKey);
+    phoneIndex.set(digits, {
+      key: winner === existing.chat ? existing.key : key,
+      chat: winner,
+    });
+  }
+
   const query = normalizeSearchValue(search);
 
   return [...chatMap.values()]
     .filter((room) => {
+      const label = String(room.title || room.name || "").trim();
+      // Strict: never surface a chat whose label is a raw Matrix room id
+      // ("!aliCGcdQakhIGwyyDz:orion.local"), even if we have phone/JID
+      // metadata for it. The previous "keep if contactInfo" carve-out was
+      // letting unidentified rooms through with garbage titles. If the
+      // bridge later resolves a real name, it'll show on the next sync.
+      if (!label || looksLikeRawMatrixRoomId(label)) return false;
+
       if (!query) return true;
       const haystack = normalizeSearchValue(
         [
@@ -3960,6 +4287,104 @@ async function uploadWhatsAppMedia(
   };
 }
 
+/**
+ * Redact a single message. mautrix-whatsapp maps Matrix redactions to
+ * WhatsApp's "Delete for everyone" — the deletion propagates over the
+ * WhatsApp protocol so the recipient also sees "This message was deleted".
+ *
+ * The Matrix room's power level must allow us to redact; in portal rooms
+ * the bridge gives the linked user admin rights, so own messages always
+ * work. Non-own messages will reject with a 403 from the homeserver if
+ * the power level is too low — we surface that as a regular error.
+ */
+async function redactWhatsAppMessage(userId, roomId, eventId, reason = "") {
+  const cleanEventId = String(eventId || "").trim();
+  if (!cleanEventId) throw new Error("Message id is required.");
+  const resolvedRoom = await resolveRoomReference(userId, roomId, {
+    createIfMissing: false,
+  });
+  if (resolvedRoom.placeholder) {
+    throw new Error(
+      "Open the chat first — placeholder rooms cannot send deletions."
+    );
+  }
+  await assertWhatsAppRoom(userId, resolvedRoom.roomId);
+
+  const trimmedReason = String(reason || "").trim().slice(0, 200);
+  const data = trimmedReason ? { reason: trimmedReason } : {};
+
+  const response = await matrixRequestWithRefresh(
+    userId,
+    "PUT",
+    `/_matrix/client/v3/rooms/${encodeURIComponent(
+      resolvedRoom.roomId
+    )}/redact/${encodeURIComponent(cleanEventId)}/${buildTxnId("whatsapp-redact")}`,
+    { data }
+  );
+
+  invalidateWhatsAppCache(userId);
+  return {
+    ok: true,
+    roomId: resolvedRoom.roomId,
+    eventId: cleanEventId,
+    redactionEventId: response.data?.event_id || null,
+  };
+}
+
+/**
+ * "Delete chat" — matches the local-delete semantic in WhatsApp's UI: the
+ * chat disappears from the user's device but is not removed from the other
+ * party's view. We implement this by leaving + forgetting the Matrix portal
+ * room. The bridge cleans up the portal on its side. If the user starts a
+ * new conversation with the same contact, the bridge will re-create the
+ * portal automatically.
+ */
+async function deleteWhatsAppChat(userId, roomId) {
+  const resolvedRoom = await resolveRoomReference(userId, roomId, {
+    createIfMissing: false,
+  });
+  if (resolvedRoom.placeholder) {
+    // Nothing to delete — the room was synthesized client-side.
+    invalidateWhatsAppCache(userId);
+    return { ok: true, roomId: null, placeholder: true };
+  }
+  await assertWhatsAppRoom(userId, resolvedRoom.roomId);
+
+  const targetRoomId = resolvedRoom.roomId;
+
+  // Leave the room first. /forget then drops it from our sync state.
+  // Both are best-effort: if /leave 404s because we've already left, /forget
+  // still succeeds; if /forget 400s because the room isn't in our forget
+  // list yet, that's not fatal either.
+  try {
+    await matrixRequestWithRefresh(
+      userId,
+      "POST",
+      `/_matrix/client/v3/rooms/${encodeURIComponent(targetRoomId)}/leave`,
+      { data: {} }
+    );
+  } catch (err) {
+    if (process.env.NODE_ENV !== "production") {
+      console.debug("[whatsapp] deleteChat leave failed:", err.message);
+    }
+  }
+  try {
+    await matrixRequestWithRefresh(
+      userId,
+      "POST",
+      `/_matrix/client/v3/rooms/${encodeURIComponent(targetRoomId)}/forget`,
+      { data: {} }
+    );
+  } catch (err) {
+    if (process.env.NODE_ENV !== "production") {
+      console.debug("[whatsapp] deleteChat forget failed:", err.message);
+    }
+  }
+
+  invalidateWhatsAppCache(userId);
+  return { ok: true, roomId: targetRoomId };
+}
+
 async function markWhatsAppRoomAsRead(userId, roomId, eventId = "") {
   const resolvedRoom = await resolveRoomReference(userId, roomId, {
     createIfMissing: false,
@@ -4107,10 +4532,13 @@ module.exports = {
   sendWhatsAppMessage,
   uploadWhatsAppMedia,
   markWhatsAppRoomAsRead,
+  redactWhatsAppMessage,
+  deleteWhatsAppChat,
   fetchWhatsAppMedia,
   getWhatsAppUnreadSummary,
   getWhatsAppUnreadSignal: getWhatsAppUnreadSummary,
   sendBridgeCommand: sendBridgeTextCommand,
+  syncWhatsAppContacts,
   invalidateWhatsAppCache,
   __test: {
     stripReplyFallback,
@@ -4123,6 +4551,10 @@ module.exports = {
     findWhatsAppPortalByRoomId,
     mergeRoomWithBridgePortalMetadata,
     mergeRoomWithBridgeContactMetadata,
+    pickWhatsAppDisplayName,
+    looksLikePhoneNumberTitle,
+    looksLikeRawMatrixRoomId,
+    isUsableTitle,
     buildWhatsAppPortalRoom,
     deriveWhatsAppConnectionState,
     collectMemberMap,

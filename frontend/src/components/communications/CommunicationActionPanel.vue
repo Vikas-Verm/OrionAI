@@ -43,7 +43,15 @@
       >
         <div class="comm-card-top">
           <span class="comm-card-source">
-            <span>{{ item.sourceIcon }}</span>
+            <img
+              v-if="appIconUrlFor(item) && !brokenIconIds.has(item.id)"
+              :src="appIconUrlFor(item)"
+              :alt="item.sourceLabel || item.sourceApp || 'App'"
+              class="comm-card-source-img"
+              loading="lazy"
+              @error="brokenIconIds.add(item.id)"
+            />
+            <span v-else>{{ item.sourceIcon }}</span>
             <span>{{ item.sourceLabel }}</span>
           </span>
           <span v-if="itemUnreadCount(item) > 0" class="comm-card-unread-badge">
@@ -85,7 +93,8 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
+import { getAppIconUrl } from '../../utils/appIcons'
 
 const props = defineProps({
   title: { type: String, default: 'Reply / Action Required' },
@@ -178,6 +187,15 @@ function relativeTime(timestamp) {
 
 function showStateBadge(item) {
   return Boolean(item?.actionStateLabel) && item?.actionState !== 'waiting_on_others'
+}
+
+// Track per-item icon-load failures so we don't keep retrying broken URLs
+// across re-renders, and so we cleanly fall back to the emoji glyph.
+const brokenIconIds = reactive(new Set())
+
+function appIconUrlFor(item) {
+  if (!item) return ''
+  return getAppIconUrl(item.sourceApp || item.module || '')
 }
 
 function itemUnreadCount(item) {
@@ -325,6 +343,16 @@ function setActiveFilter(filterId) {
 .comm-card.unread .comm-card-title {
   color: #f8fbff;
   font-weight: 700;
+}
+
+.comm-card-source-img {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  border-radius: 3px;
+  display: inline-block;
+  margin-right: 6px;
+  vertical-align: middle;
 }
 
 .comm-card-unread-badge {
