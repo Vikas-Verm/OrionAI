@@ -14,7 +14,7 @@
           :class="{ 'sidebar-panel-collapsed': sidebarCollapsed }"
           :activeView="activeModule || (showingIntegrations ? 'settings' : (store.mode === 'db' ? 'database' : 'agent'))"
           :showingIntegrations="showingIntegrations"
-          @newChat="() => { activeModule = null; showingIntegrations = false; setMode('chat'); store.webMode = false; startNewChat() }"
+          @newChat="onNewChatRequested"
           @switchSession="switchSession"
           @deleteSession="deleteSession"
           @logout="logout"
@@ -117,7 +117,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { store, clearAuth, setMode, setModuleContext } from './stores/app'
 import { useSession } from './composables/useSession'
 import { useChat } from './composables/useChat'
@@ -169,9 +169,139 @@ const { start, stop, unreadNotifCount, hasUrgent } = useWebSocket()
 // Refs
 const sidebarRef = ref(null)
 const sidebarCollapsed = ref(false)
-const showingIntegrations = ref(false)
+
+// URL-based routing without vue-router. Pathnames map to UI state:
+//   - /              →  fresh new chat (always — never restores a session)
+//   - /c/{sessionId} →  specific AI chat session (Mongo session id)
+//   - /integrations  →  Integrations page
+//   - /<module>      →  module page (gmail, whatsapp, telegram, slack, etc.)
+//
+// On refresh we read the pathname and restore that view. On login we push
+// "/" so a fresh session lands on the new-chat view regardless of what the
+// previous user had open.
+const MODULE_ROUTES = {
+  telegram: 'telegram',
+  gmail: 'gmail',
+  slack: 'slack',
+  jira: 'jira',
+  signal: 'signal',
+  whatsapp: 'whatsapp',
+  google_calendar: 'calendar',
+  calendar: 'calendar',
+  google_docs: 'google-docs',
+  google_sheets: 'google-sheets',
+  database: 'database',
+  razorpay: 'razorpay',
+}
+const ROUTE_TO_MODULE = Object.fromEntries(
+  Object.entries(MODULE_ROUTES).map(([id, slug]) => [slug, id])
+)
+// Some module ids share a route ("calendar" maps to "google_calendar"); keep
+// the canonical id for state so existing component routing keeps working.
+ROUTE_TO_MODULE.calendar = 'google_calendar'
+
+function pathFor({ module = null, integrations = false, sessionId = null } = {}) {
+  if (integrations) return '/integrations'
+  if (module && MODULE_ROUTES[module]) return `/${MODULE_ROUTES[module]}`
+  if (sessionId) return `/c/${encodeURIComponent(sessionId)}`
+  return '/'
+}
+
+function readInitialRouteFromLocation() {
+  if (typeof window === 'undefined')
+    return { module: null, integrations: false, sessionId: null, isNewChat: true }
+  const pathname = String(window.location?.pathname || '/').replace(/\/+$/, '') || '/'
+  if (pathname === '/integrations') {
+    return { module: null, integrations: true, sessionId: null, isNewChat: false }
+  }
+  // /c/{id} — decode and restore that chat session.
+  const chatMatch = pathname.match(/^\/c\/([^/]+)$/)
+  if (chatMatch) {
+    let sessionId = chatMatch[1]
+    try { sessionId = decodeURIComponent(sessionId) } catch {}
+    return { module: null, integrations: false, sessionId, isNewChat: false }
+  }
+  const slug = pathname.startsWith('/') ? pathname.slice(1) : pathname
+  if (slug && ROUTE_TO_MODULE[slug]) {
+    return {
+      module: ROUTE_TO_MODULE[slug],
+      integrations: false,
+      sessionId: null,
+      isNewChat: false,
+    }
+  }
+  // "/" or any unknown route → fresh new chat home.
+  return { module: null, integrations: false, sessionId: null, isNewChat: true }
+}
+
+const initialRoute = readInitialRouteFromLocation()
+const showingIntegrations = ref(initialRoute.integrations)
 const integrationsFocusType = ref(null)
-const activeModule = ref(null)   // null | 'telegram' | 'gmail' | 'slack' | 'jira' | 'calendar'
+const activeModule = ref(initialRoute.module)
+
+function pushRouteIfChanged(targetPath) {
+  if (typeof window === 'undefined') return
+  const current = String(window.location?.pathname || '/') || '/'
+  if (current === targetPath) return
+  try {
+    window.history.pushState({}, '', targetPath)
+  } catch {
+    // pushState can throw in certain sandboxed contexts. Best-effort only.
+  }
+}
+
+watch(
+  [activeModule, showingIntegrations],
+  ([moduleVal, integrationsVal]) => {
+    // Only push module / integrations URLs from this watcher. Chat-session
+    // URLs are pushed explicitly when switchSession() / startNewChat() runs
+    // so we don't clobber /c/{id} every time a module ref toggles.
+    if (moduleVal || integrationsVal) {
+      pushRouteIfChanged(
+        pathFor({ module: moduleVal, integrations: integrationsVal })
+      )
+    }
+  }
+)
+
+// Track the currently-routed chat session so popstate can restore it.
+function pushChatSessionRoute(sessionId) {
+  pushRouteIfChanged(sessionId ? `/c/${encodeURIComponent(sessionId)}` : '/')
+}
+
+// Upgrade "/" → "/c/{sessionId}" once a draft chat actually has messages.
+// This gives every real chat a stable URL the user can reload back into,
+// while empty drafts stay at the home "/" route.
+watch(
+  [() => store.currentSessionId, () => store.messages.length],
+  ([sessionId, messageCount]) => {
+    if (!sessionId) return
+    if (messageCount <= 0) return
+    if (activeModule.value || showingIntegrations.value) return
+    const currentPath = String(window.location?.pathname || '/')
+    if (currentPath === '/' || currentPath === '') {
+      pushRouteIfChanged(`/c/${encodeURIComponent(sessionId)}`)
+    }
+  }
+)
+
+// Browser back/forward — sync state to the new URL so the UI updates.
+async function handlePopState() {
+  const next = readInitialRouteFromLocation()
+  showingIntegrations.value = next.integrations
+  activeModule.value = next.module
+  if (next.sessionId && next.sessionId !== store.currentSessionId) {
+    try {
+      await _switchSession(next.sessionId)
+    } catch {
+      // If the session is gone, fall through to home.
+      pushRouteIfChanged('/')
+    }
+  } else if (next.isNewChat && !next.module && !next.integrations) {
+    // Hitting / via back/forward starts a fresh chat (or reuses a blank draft).
+    await startNewChat().catch(() => {})
+  }
+}
 const messageListRef = ref(null)
 const inputAreaRef = ref(null)
 const onboardingRef = ref(null)
@@ -189,6 +319,7 @@ onMounted(async () => {
   }
   document.addEventListener('keydown', handleKeyboard)
   document.addEventListener('click', () => inputAreaRef.value?.closeMenus())
+  window.addEventListener('popstate', handlePopState)
   // Listen for TelegramRenderer "Open chat" button
   openTelegramListener = (e) => {
     showingIntegrations.value = false
@@ -217,10 +348,34 @@ onMounted(async () => {
     try {
       await api.get('/auth/me')
       await loadSessions()
-      if (store.sessions.length === 0) await startNewChat()
-      else {
-        store.currentSessionId = store.sessions[0].sessionId
-        await switchSession(store.currentSessionId)
+
+      // URL-driven boot:
+      //  - /c/{sessionId} → switch into that session (no module change).
+      //  - /<module>      → keep activeModule (already set from URL); load
+      //                     a session in the background so chat is ready
+      //                     when the user closes the module.
+      //  - /              → ALWAYS start a fresh new chat (or reuse a blank
+      //                     draft). Never auto-restore the latest session.
+      if (initialRoute.sessionId) {
+        try {
+          await _switchSession(initialRoute.sessionId)
+        } catch {
+          // The persisted session id is gone — fall back to a new chat at /.
+          activeModule.value = null
+          showingIntegrations.value = false
+          pushRouteIfChanged('/')
+          await startNewChat()
+        }
+      } else if (activeModule.value || showingIntegrations.value) {
+        // We're on a module / integrations page. Just keep a session warm
+        // in memory so the user can swipe back to chat without delay.
+        if (store.sessions.length > 0) {
+          store.currentSessionId = store.sessions[0].sessionId
+          await _switchSession(store.currentSessionId).catch(() => {})
+        }
+      } else {
+        // Plain "/" → home is always a fresh new chat.
+        await startNewChat()
       }
       start()
     } catch { logout() }
@@ -231,18 +386,24 @@ onUnmounted(() => {
   document.removeEventListener('keydown', handleKeyboard)
   if (openTelegramListener) document.removeEventListener('orion:open-telegram', openTelegramListener)
   if (openModuleListener) document.removeEventListener('orion:open-module', openModuleListener)
+  window.removeEventListener('popstate', handlePopState)
   stop()
 })
 
 // ── Auth ──────────────────────────────────────────────────
 async function onLoginSuccess() {
   api.defaults.headers.common['Authorization'] = `Bearer ${store.token}`
+  // Always land on the home / new-chat view after a fresh login —
+  // the previous user's URL must not leak through. We deliberately do NOT
+  // auto-switch to the latest existing session here: that would push
+  // /c/{id} and override the "/" we just set. The sidebar still shows
+  // every previous session so the user can pick one explicitly.
+  showingIntegrations.value = false
+  integrationsFocusType.value = null
+  activeModule.value = null
+  pushRouteIfChanged('/')
   await loadSessions()
-  if (store.sessions.length === 0) await startNewChat()
-  else {
-    store.currentSessionId = store.sessions[0].sessionId
-    await switchSession(store.currentSessionId)
-  }
+  await startNewChat()
   start()
 }
 
@@ -250,6 +411,10 @@ function logout() {
   stop()
   clearAuth()
   delete api.defaults.headers.common['Authorization']
+  showingIntegrations.value = false
+  integrationsFocusType.value = null
+  activeModule.value = null
+  pushRouteIfChanged('/')
 }
 
 function openSidebar() {
@@ -307,8 +472,20 @@ async function switchSession(sessionId) {
   showingIntegrations.value = false  // ← close settings too
   setModuleContext(null)
   await _switchSession(sessionId)
+  pushChatSessionRoute(sessionId)
   await nextTick()
   messageListRef.value?.scrollToBottom()
+}
+
+async function onNewChatRequested() {
+  activeModule.value = null
+  showingIntegrations.value = false
+  setMode('chat')
+  store.webMode = false
+  // Push "/" first so the URL reflects the home/new-chat view immediately,
+  // even before startNewChat() finishes hitting the server.
+  pushRouteIfChanged('/')
+  await startNewChat()
 }
 
 // ── Chat ──────────────────────────────────────────────────

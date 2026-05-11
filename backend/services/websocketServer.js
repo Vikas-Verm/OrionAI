@@ -21,6 +21,8 @@ const lastGmailMsgIds = new Map();
 const lastTelegramCount = new Map();
 const lastSignalCount = new Map();
 const lastSlackCount = new Map();
+const lastWhatsAppCount = new Map();
+const lastWhatsAppMsgIds = new Map();
 const lastCalendarEventIds = new Map();
 const telegramListeners = new Map();
 
@@ -126,11 +128,22 @@ async function pollUser(userId, isFirstRun = false, options = {}) {
   const prevCounts = lastCounts.get(userId) || {};
   const prevSnapshot = (pollUser._lastSnapshot ||= new Map());
 
-  // Gmail should NOT be checked on every 15s poll.
-  // Only check it:
-  // 1) on first run
-  // 2) when explicitly forced (gmail webhook / manual refresh)
-  const shouldCheckGmail = isFirstRun || forceGmail;
+  // Gmail's per-poll cost is heavy: threads.list (5 units) + N×threads.get
+  // (10 units each, up to 16 threads ≈ 165 units per cycle). Polling that
+  // every 60s previously caused GCP to throttle / temporarily block the
+  // OAuth app. The default cadence here is now ~5 minutes (20 × 15s ticks)
+  // which keeps mid-session updates flowing without burning quota. Operators
+  // can tune via GMAIL_POLL_TICKS — floored to 4 (60s) so nobody can
+  // accidentally re-introduce the old aggressive cadence.
+  const tickCounts = (pollUser._tickCount ||= new Map());
+  const tick = (tickCounts.get(userId) || 0) + 1;
+  tickCounts.set(userId, tick);
+  const GMAIL_POLL_EVERY_TICKS = Math.max(
+    4,
+    Number(process.env.GMAIL_POLL_TICKS) || 20
+  );
+  const shouldCheckGmail =
+    isFirstRun || forceGmail || tick % GMAIL_POLL_EVERY_TICKS === 0;
 
   const tasks = [
     shouldCheckGmail ? checkGmail(userId, isFirstRun) : Promise.resolve(null),
@@ -138,7 +151,7 @@ async function pollUser(userId, isFirstRun = false, options = {}) {
     checkTelegram(userId, isFirstRun),
     checkSignal(userId, isFirstRun),
     checkSlack(userId, isFirstRun),
-    checkWhatsApp(userId),
+    checkWhatsApp(userId, isFirstRun),
   ];
 
   const [gmailRes, calendarRes, telegramRes, signalRes, slackRes, whatsappRes] =
@@ -588,25 +601,50 @@ async function checkSlack(userId, isFirstRun) {
 // ─────────────────────────────────────────────────────────────────────────────
 // WHATSAPP CHECKER
 // ─────────────────────────────────────────────────────────────────────────────
-async function checkWhatsApp(userId) {
+async function checkWhatsApp(userId, isFirstRun = false) {
   try {
     const { whatsappGetUnread } = require("./tools/toolWhatsapp");
     const result = await whatsappGetUnread({}, { userId });
     if (!result) return null;
+
+    const items = (result.chats || []).slice(0, 5).map((c) => ({
+      id: c.chatId,
+      chatId: c.chatId,
+      name: c.chatName,
+      unread: c.unreadCount,
+      preview: c.lastMessage || "",
+      isGroup: c.isGroup,
+      latestMessageId: c.latestMessageId || null,
+      latestMessageAt: c.latestMessageAt || null,
+    }));
+
+    const count = Number(result.totalUnread || 0) || 0;
+
+    // Compute new-message detection from message-id diff (mirrors checkGmail).
+    // Hardcoding _isNew=false meant browser notifications never fired for
+    // WhatsApp even though the snapshot diff still updated the badge count.
+    const currentIds = new Set(
+      items
+        .map((item) => item.latestMessageId || item.id || item.chatId)
+        .filter(Boolean)
+    );
+    const prevIds = lastWhatsAppMsgIds.get(userId) || new Set();
+    const newIds = [...currentIds].filter((id) => !prevIds.has(id));
+    const prevCount = lastWhatsAppCount.get(userId);
+    const isNewByCount =
+      !isFirstRun && prevCount !== undefined && count > prevCount;
+    const isNew = !isFirstRun && (newIds.length > 0 || isNewByCount);
+    lastWhatsAppMsgIds.set(userId, currentIds);
+    lastWhatsAppCount.set(userId, count);
+
     return {
-      count: result.totalUnread || 0,
-      items: (result.chats || []).slice(0, 5).map((c) => ({
-        id: c.chatId,
-        chatId: c.chatId,
-        name: c.chatName,
-        unread: c.unreadCount,
-        preview: c.lastMessage || "",
-        isGroup: c.isGroup,
-        latestMessageId: c.latestMessageId || null,
-        latestMessageAt: c.latestMessageAt || null,
-      })),
-      _isNew: false,
-      _newCount: 0,
+      count,
+      items,
+      summary: result.summary || null,
+      _isNew: isNew,
+      _newCount: isNew
+        ? Math.max(newIds.length, isNewByCount ? count - (prevCount || 0) : 0)
+        : 0,
     };
   } catch {
     return null;
@@ -1011,6 +1049,72 @@ function hasAnyGmailScope(scopes = []) {
     set.has("https://www.googleapis.com/auth/gmail.metadata")
   );
 }
+/**
+ * Reset every in-memory poll/snapshot cache the websocket server keeps for
+ * a (userId, app) pair. Called during a fresh disconnect so the next time
+ * the app reconnects we start clean and the next poll is treated as a
+ * first-run population (no false "X new" toast for old data).
+ */
+function clearAppPollState(userId, app = "") {
+  if (!userId) return;
+  const normalizedApp = String(app || "").trim().toLowerCase();
+
+  const snapshotMap = pollUser._lastSnapshot;
+  if (snapshotMap instanceof Map) {
+    if (normalizedApp) {
+      snapshotMap.delete(`${userId}:${normalizedApp}`);
+    } else {
+      for (const key of [...snapshotMap.keys()]) {
+        if (typeof key === "string" && key.startsWith(`${userId}:`)) {
+          snapshotMap.delete(key);
+        }
+      }
+    }
+  }
+
+  const counts = lastCounts.get(userId);
+  if (counts && normalizedApp) {
+    delete counts[normalizedApp];
+    lastCounts.set(userId, counts);
+  } else if (!normalizedApp) {
+    lastCounts.delete(userId);
+  }
+
+  if (!normalizedApp || normalizedApp === "gmail") {
+    lastGmailMsgIds.delete(userId);
+  }
+  if (!normalizedApp || normalizedApp === "telegram") {
+    lastTelegramCount.delete(userId);
+    const listener = telegramListeners.get(userId);
+    if (listener) {
+      try {
+        listener.client?.removeEventHandler?.();
+      } catch {}
+      telegramListeners.delete(userId);
+    }
+  }
+  if (!normalizedApp || normalizedApp === "signal") {
+    lastSignalCount.delete(userId);
+  }
+  if (!normalizedApp || normalizedApp === "slack") {
+    lastSlackCount.delete(userId);
+  }
+  if (!normalizedApp || normalizedApp === "whatsapp") {
+    lastWhatsAppCount.delete(userId);
+    lastWhatsAppMsgIds.delete(userId);
+  }
+  if (!normalizedApp || normalizedApp === "google_calendar") {
+    lastCalendarEventIds.delete(userId);
+  }
+
+  // When the whole user disconnects, also reset the per-user poll tick so
+  // the next reconnect's first cycle is treated as first-run.
+  if (!normalizedApp) {
+    const tickMap = pollUser._tickCount;
+    if (tickMap instanceof Map) tickMap.delete(userId);
+  }
+}
+
 module.exports = {
   init,
   pushToUser,
@@ -1018,4 +1122,5 @@ module.exports = {
   refreshUserSignals,
   handleGmailWebhook,
   handleSlackWebhook,
+  clearAppPollState,
 };

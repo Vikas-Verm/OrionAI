@@ -9,7 +9,17 @@
             :style="{ '--app-color': toast.color }"
             @click="open(toast)"
           >
-            <div class="toast-icon">{{ toast.icon }}</div>
+            <div class="toast-icon">
+              <img
+                v-if="toastIconUrl(toast)"
+                :src="toastIconUrl(toast)"
+                :alt="toast.label || toast.app"
+                class="toast-icon-img"
+                loading="lazy"
+                @error="markToastIconBroken(toast.id)"
+              />
+              <span v-else>{{ toast.icon }}</span>
+            </div>
             <div class="toast-body">
               <div class="toast-title">
                 <span class="toast-app">{{ toast.label }}</span>
@@ -25,17 +35,35 @@
   </template>
   
   <script setup>
+  import { reactive } from 'vue'
   import { useWebSocket } from '../../composables/useWebSocket'
-  
+  import { getAppIconUrl } from '../../utils/appIcons'
+
   const emit = defineEmits(['openModule'])
-  
+
   const { toasts, dismissToast } = useWebSocket()
-  
+
+  // Tracks which toast IDs failed to load their real-app icon so we fall
+  // back to the emoji glyph instead of leaving a blank square.
+  const brokenIconIds = reactive(new Set())
+
+  function toastIconUrl(toast) {
+    if (!toast) return ''
+    if (brokenIconIds.has(toast.id)) return ''
+    return getAppIconUrl(toast.app || toast.route || '')
+  }
+
+  function markToastIconBroken(id) {
+    brokenIconIds.add(id)
+  }
+
   function dismiss(id) {
+    brokenIconIds.delete(id)
     dismissToast(id)
   }
-  
+
   function open(toast) {
+    brokenIconIds.delete(toast.id)
     dismissToast(toast.id)
     emit('openModule', toast.route)
   }
@@ -77,6 +105,18 @@
   .toast-icon {
     font-size: 22px;
     flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .toast-icon-img {
+    width: 22px;
+    height: 22px;
+    object-fit: contain;
+    border-radius: 4px;
   }
   
   .toast-body {

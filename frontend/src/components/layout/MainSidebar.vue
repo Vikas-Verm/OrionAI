@@ -174,7 +174,15 @@
             }"
             :title="`${app.label}${app.unread > 0 ? ': ' + formatCount(app.unread) + ' active' : ''}${appSummary(app.id) ? '\n' + appSummary(app.id) : ''}`"
             @click="openApp(app.id)">
-            <component :is="app.icon" :size="16" />
+            <img
+              v-if="useRealIconFor(app) && !brokenSidebarIconIds.has(app.id)"
+              :src="getAppIconUrl(app.id)"
+              :alt="app.label"
+              class="int-app-img"
+              loading="lazy"
+              @error="brokenSidebarIconIds.add(app.id)"
+            />
+            <component v-else :is="app.icon" :size="16" />
             <span v-if="app.unread > 0" class="int-badge-pill" :style="{ background: app.color }">
               {{ formatCount(app.unread) }}
             </span>
@@ -214,7 +222,15 @@
                 ? { background: app.color + '18', borderColor: app.color + '30' }
                 : { background: 'transparent', borderColor: 'transparent' }">
                 <div class="int-row-inner" @click="openApp(app.id)">
-                  <component :is="app.icon" :size="16" />
+                  <img
+                    v-if="useRealIconFor(app) && !brokenSidebarIconIds.has(app.id)"
+                    :src="getAppIconUrl(app.id)"
+                    :alt="app.label"
+                    class="int-app-img"
+                    loading="lazy"
+                    @error="brokenSidebarIconIds.add(app.id)"
+                  />
+                  <component v-else :is="app.icon" :size="16" />
                   <span class="int-row-name"
                     :style="{ color: activeView === app.id ? 'var(--text-primary)' : 'var(--text-secondary)', fontWeight: activeView === app.id ? 600 : 400 }">
                     {{ app.label }}
@@ -296,6 +312,7 @@ import { store } from '../../stores/app'
 import { useSession } from '../../composables/useSession'
 import { useWebSocket } from '../../composables/useWebSocket'
 import api from '../../services/api'
+import { getAppIconUrl } from '../../utils/appIcons'
 import { useIntegrationHealth } from '../../composables/useIntegrationHealth'
 import { buildSessionTitle, shouldHideDraftSession } from '../../utils/sessionTitles'
 import { useDisclosure } from '../../composables/useDisclosure'
@@ -399,6 +416,17 @@ const RazorpayIcon = ic(s => h('svg', { width: s, height: s, viewBox: '0 0 24 24
   h('circle', { cx: 12, cy: 12, r: 12, fill: '#072654' }),
   h('text', { x: 12, y: 16, 'text-anchor': 'middle', fill: 'white', 'font-size': 11, 'font-weight': 'bold' }, '₹'),
 ]))
+
+// Calendar keeps its dynamic SVG (which renders today's date) — every other
+// app falls through to the real-vendor PNG/SVG so the sidebar matches the
+// Integrations page. brokenSidebarIconIds collects per-app load failures so
+// we cleanly fall back to the existing inline SVG component.
+const brokenSidebarIconIds = reactive(new Set())
+function useRealIconFor(app) {
+  if (!app?.id) return false
+  if (app.id === 'google_calendar' || app.id === 'calendar') return false
+  return Boolean(getAppIconUrl(app.id))
+}
 
 const ALL_APPS = [
   { id: 'telegram', label: 'Telegram', color: '#229ED9', icon: TelegramIcon, apiType: 'telegram' },
@@ -1184,6 +1212,15 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   min-width: 0;
   padding: 9px 10px;
   cursor: pointer;
+}
+
+.int-app-img {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  border-radius: 3px;
+  display: inline-block;
+  flex-shrink: 0;
 }
 
 .int-row-name {

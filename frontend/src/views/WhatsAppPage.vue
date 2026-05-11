@@ -28,6 +28,20 @@
         </button>
 
         <div v-if="!sidebarCollapsed" class="wa-head-actions">
+          <button
+            class="wa-icon-btn"
+            :disabled="syncingContacts || !isConnected"
+            :title="syncingContacts ? 'Syncing contacts…' : 'Sync contacts (refresh names from your phone’s address book)'"
+            @click="syncContacts"
+          >
+            <span v-if="syncingContacts" class="wa-spinner wa-spinner--sm"></span>
+            <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+              <circle cx="9" cy="7" r="4" />
+              <path d="M22 11l-3-3-3 3" />
+              <path d="M19 8v8" />
+            </svg>
+          </button>
           <button class="wa-icon-btn" :disabled="refreshing" title="Refresh WhatsApp" @click="refreshAll">
             <span v-if="refreshing" class="wa-spinner wa-spinner--sm"></span>
             <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -319,6 +333,21 @@
                 <path d="M1 14l4.6 4.4A9 9 0 0 0 20.5 15" />
               </svg>
             </button>
+            <button
+              class="wa-icon-btn wa-icon-btn--danger"
+              :disabled="deletingChat"
+              title="Delete chat (removes it from OrionAI; the other party keeps their copy)"
+              @click="deleteCurrentChat"
+            >
+              <span v-if="deletingChat" class="wa-spinner wa-spinner--sm"></span>
+              <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="3 6 5 6 21 6" />
+                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                <path d="M10 11v6" />
+                <path d="M14 11v6" />
+                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+              </svg>
+            </button>
           </div>
         </header>
 
@@ -377,6 +406,17 @@
                           @click="downloadAttachment(firstAttachment(message))"
                         >
                           Download
+                        </button>
+                        <button
+                          v-if="!message.deleted"
+                          class="wa-mini-btn wa-mini-btn--danger"
+                          :disabled="deletingMessageIds.has(message.id)"
+                          :title="canDeleteForEveryone(message)
+                            ? 'Delete for everyone — also removes the message from WhatsApp for the other party'
+                            : 'Delete this message'"
+                          @click="deleteMessage(message)"
+                        >
+                          Delete
                         </button>
                       </div>
 
@@ -559,20 +599,30 @@
           </div>
 
           <div v-if="gifPanelOpen" class="wa-quick-panel wa-quick-panel--gif">
-            <div class="wa-panel-head">
-              <strong>GIF picker</strong>
-              <span>Provider hookup is still pending</span>
+            <div class="wa-gif-search">
+              <input
+                v-model="gifQuery"
+                class="wa-gif-search-input"
+                type="search"
+                placeholder="Search GIFs"
+                @input="onGifQueryInput"
+              />
             </div>
-            <div class="wa-gif-grid">
+            <div v-if="gifLoading" class="wa-gif-loading">Searching…</div>
+            <div v-else-if="gifResults.length" class="wa-gif-grid">
               <button
-                v-for="prompt in GIF_PLACEHOLDERS"
-                :key="prompt"
+                v-for="gif in gifResults"
+                :key="gif.id"
                 class="wa-gif-card"
-                @click="useGifPlaceholder(prompt)"
+                :title="gif.title"
+                @click="pickGif(gif)"
               >
-                <span>{{ prompt }}</span>
-                <small>Pick a provider later</small>
+                <img :src="gif.preview" :alt="gif.title" loading="lazy" />
               </button>
+            </div>
+            <div v-else-if="gifError" class="wa-gif-empty">{{ gifError }}</div>
+            <div v-else class="wa-gif-empty">
+              No results — try a different search.
             </div>
           </div>
 
@@ -641,6 +691,46 @@
         </div>
       </div>
     </transition>
+
+    <!-- OrionAI-styled confirm modal — replaces window.confirm so prompts
+         feel native to the app instead of showing the browser's
+         "localhost says…" dialog. Used for delete-for-me / delete-for-
+         everyone / delete-chat. -->
+    <transition name="wa-fade">
+      <div
+        v-if="confirmModal.open"
+        class="wa-confirm-backdrop"
+        @click.self="closeConfirm()"
+      >
+        <div class="wa-confirm-card" role="dialog" aria-modal="true">
+          <div class="wa-confirm-head">
+            <strong>{{ confirmModal.title }}</strong>
+            <button
+              class="wa-confirm-close"
+              aria-label="Close"
+              @click="closeConfirm()"
+            >
+              ✕
+            </button>
+          </div>
+          <p v-if="confirmModal.message" class="wa-confirm-body">
+            {{ confirmModal.message }}
+          </p>
+          <div class="wa-confirm-actions">
+            <button
+              v-for="(action, idx) in confirmModal.actions"
+              :key="idx"
+              class="wa-confirm-btn"
+              :class="`wa-confirm-btn--${action.variant || 'default'}`"
+              :disabled="confirmModal.busy"
+              @click="runConfirmAction(action)"
+            >
+              {{ action.label }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </transition>
   </div>
 </template>
 
@@ -663,7 +753,8 @@ const CHAT_FILTERS = [
   { id: 'unread', label: 'Unread' },
   { id: 'groups', label: 'Groups' },
 ]
-const GIF_PLACEHOLDERS = ['Celebrate', 'Thanks', 'Follow up', 'On my way', 'Approved']
+// GIF picker is backed by the backend's Tenor proxy (TENOR_API_KEY in env).
+// We never call Tenor directly from the browser so the key stays server-side.
 
 const status = ref({
   connected: false,
@@ -688,9 +779,115 @@ const loadingChats = ref(false)
 const loadingMessages = ref(false)
 const loadingOlder = ref(false)
 const refreshing = ref(false)
+const deletingChat = ref(false)
+const deletingMessageIds = ref(new Set())
+
+// OrionAI-styled confirm modal. Replaces window.confirm so the dialog feels
+// like part of the app rather than a browser-chrome alert. Each action is
+// `{ label, variant: 'default' | 'danger' | 'ghost', handler: async () => {} }`.
+// While an action's handler runs, all buttons are disabled (busy = true).
+const confirmModal = ref({
+  open: false,
+  title: '',
+  message: '',
+  actions: [],
+  busy: false,
+})
+
+function openConfirm({ title = '', message = '', actions = [] } = {}) {
+  confirmModal.value = {
+    open: true,
+    title,
+    message,
+    actions,
+    busy: false,
+  }
+}
+
+function closeConfirm() {
+  confirmModal.value = {
+    open: false,
+    title: '',
+    message: '',
+    actions: [],
+    busy: false,
+  }
+}
+
+async function runConfirmAction(action) {
+  if (!action || typeof action.handler !== 'function' || confirmModal.value.busy) {
+    if (action?.handler === null || action?.cancel) {
+      closeConfirm()
+    }
+    return
+  }
+  confirmModal.value = { ...confirmModal.value, busy: true }
+  try {
+    await action.handler()
+  } finally {
+    closeConfirm()
+  }
+}
+
+// "Delete for me" hide-list. Matrix redactions are always-for-everyone, so
+// to mimic WhatsApp's local-only "Delete for me" we keep an opt-in hide
+// list per (user, room) in localStorage and filter the visible messages.
+// The actual server-side message is left untouched.
+const hiddenMessageIds = ref(new Set())
+
+function hideListStorageKey(roomId) {
+  const user = store.user?.username || 'anon'
+  return `wa:hidden:${user}:${roomId || ''}`
+}
+
+function loadHiddenMessageIds(roomId) {
+  if (!roomId || typeof window === 'undefined') {
+    hiddenMessageIds.value = new Set()
+    return
+  }
+  try {
+    const raw = localStorage.getItem(hideListStorageKey(roomId))
+    if (!raw) {
+      hiddenMessageIds.value = new Set()
+      return
+    }
+    const parsed = JSON.parse(raw)
+    hiddenMessageIds.value = new Set(
+      Array.isArray(parsed) ? parsed.filter(Boolean) : []
+    )
+  } catch {
+    hiddenMessageIds.value = new Set()
+  }
+}
+
+function persistHiddenMessageIds(roomId) {
+  if (!roomId || typeof window === 'undefined') return
+  try {
+    localStorage.setItem(
+      hideListStorageKey(roomId),
+      JSON.stringify([...hiddenMessageIds.value])
+    )
+  } catch {
+    // localStorage might be disabled — best-effort only.
+  }
+}
+
+function hideMessageLocally(message) {
+  if (!message?.id || !selectedChat.value?.roomId) return
+  const next = new Set(hiddenMessageIds.value)
+  next.add(message.id)
+  hiddenMessageIds.value = next
+  persistHiddenMessageIds(selectedChat.value.roomId)
+}
+const syncingContacts = ref(false)
 const sending = ref(false)
 const emojiPanelOpen = ref(false)
 const gifPanelOpen = ref(false)
+const gifQuery = ref('')
+const gifResults = ref([])
+const gifLoading = ref(false)
+const gifError = ref('')
+let gifSearchTimer = null
 const searchInChatOpen = ref(false)
 const composerNotice = ref('')
 const draftAttachments = ref([])
@@ -814,9 +1011,13 @@ const filteredChats = computed(() => {
 })
 
 const visibleMessages = computed(() => {
+  const hidden = hiddenMessageIds.value
+  const base = hidden.size
+    ? messages.value.filter((message) => !hidden.has(message.id))
+    : messages.value
   const query = messageQuery.value.trim().toLowerCase()
-  if (!query) return messages.value
-  return messages.value.filter((message) => {
+  if (!query) return base
+  return base.filter((message) => {
     const haystack = [
       message.text,
       message.senderName,
@@ -1107,6 +1308,149 @@ async function loadChats({ silent = false } = {}) {
   }
 }
 
+// "Delete for everyone" semantic — only on outbound (own) messages. WhatsApp
+// itself only allows the sender to recall, so we offer that wording to
+// match. For received messages we still let the user delete locally via
+// the same path (the server may reject with 403 if their power level is
+// too low); failure surfaces in composerNotice.
+function canDeleteForEveryone(message) {
+  if (!message) return false
+  return Boolean(message.fromMe || message.direction === 'outbound')
+}
+
+// Perform the actual "Delete for everyone" call. Used by the modal handler.
+async function performDeleteForEveryone(message) {
+  if (!message?.id || !selectedChat.value?.roomId) return
+  if (deletingMessageIds.value.has(message.id)) return
+  const nextSet = new Set(deletingMessageIds.value)
+  nextSet.add(message.id)
+  deletingMessageIds.value = nextSet
+  try {
+    await api.post(
+      `/api/whatsapp/rooms/${encodeURIComponent(
+        selectedChat.value.roomId
+      )}/messages/${encodeURIComponent(message.id)}/redact`,
+      {}
+    )
+    // Optimistically reflect the redaction locally — the next sync will
+    // also confirm it via an inbound m.room.redaction event.
+    messages.value = messages.value.map((m) =>
+      m.id === message.id
+        ? {
+            ...m,
+            deleted: true,
+            text: 'Message deleted',
+            previewText: 'Message deleted',
+            media: null,
+            reactions: [],
+          }
+        : m
+    )
+  } catch (err) {
+    composerNotice.value =
+      err?.response?.data?.error ||
+      err?.message ||
+      'Could not delete that message.'
+  } finally {
+    const releasedSet = new Set(deletingMessageIds.value)
+    releasedSet.delete(message.id)
+    deletingMessageIds.value = releasedSet
+  }
+}
+
+// Open the WhatsApp-style three-option modal. Own messages get the full
+// "Delete for everyone / Delete for me / Cancel" set; received messages
+// only get the local-only "Delete for me / Cancel".
+function deleteMessage(message) {
+  if (!message?.id || !selectedChat.value?.roomId) return
+  if (deletingMessageIds.value.has(message.id)) return
+
+  const forEveryone = canDeleteForEveryone(message)
+  const actions = []
+  if (forEveryone) {
+    actions.push({
+      label: 'Delete for everyone',
+      variant: 'danger',
+      handler: () => performDeleteForEveryone(message),
+    })
+  }
+  actions.push({
+    label: 'Delete for me',
+    variant: 'default',
+    handler: () => {
+      hideMessageLocally(message)
+    },
+  })
+  actions.push({
+    label: 'Cancel',
+    variant: 'ghost',
+    cancel: true,
+    handler: null,
+  })
+
+  openConfirm({
+    title: 'Delete message?',
+    message: forEveryone
+      ? "Choose how you'd like to delete this message. 'Delete for everyone' removes it from WhatsApp for the other person too."
+      : 'This will hide the message from your view in OrionAI. The original stays in the chat for everyone else.',
+    actions,
+  })
+}
+
+async function performDeleteCurrentChat() {
+  const chat = selectedChat.value
+  if (!chat?.roomId || deletingChat.value) return
+  deletingChat.value = true
+  try {
+    await api.delete(
+      `/api/whatsapp/rooms/${encodeURIComponent(chat.roomId)}`
+    )
+    const goneRoomId = chat.roomId
+    chats.value = chats.value.filter((c) => c.roomId !== goneRoomId)
+    selectedChat.value = null
+    messages.value = []
+    prevBatch.value = null
+    showProfilePanel.value = false
+    showInfoPanel.value = false
+    emitCommunicationPriorityRefresh('communication_chat_deleted', {
+      sourceApp: 'whatsapp',
+      conversationId: goneRoomId,
+    })
+    loadChats({ silent: true }).catch(() => {})
+  } catch (err) {
+    composerNotice.value =
+      err?.response?.data?.error ||
+      err?.message ||
+      'Could not delete the chat.'
+  } finally {
+    deletingChat.value = false
+  }
+}
+
+function deleteCurrentChat() {
+  const chat = selectedChat.value
+  if (!chat?.roomId || deletingChat.value) return
+  const label = chat.title || chat.name || 'this chat'
+  openConfirm({
+    title: 'Delete chat?',
+    message:
+      `"${label}" will be removed from OrionAI. The other person keeps their copy of the chat in their WhatsApp.`,
+    actions: [
+      {
+        label: 'Delete chat',
+        variant: 'danger',
+        handler: () => performDeleteCurrentChat(),
+      },
+      {
+        label: 'Cancel',
+        variant: 'ghost',
+        cancel: true,
+        handler: null,
+      },
+    ],
+  })
+}
+
 async function markCurrentRoomRead(roomId = selectedChat.value?.roomId || '', eventId = '') {
   const targetRoomId = String(roomId || '').trim()
   if (!targetRoomId) return
@@ -1212,6 +1556,9 @@ async function selectChat(chat) {
     messages.value = []
     prevBatch.value = null
   }
+  // Re-hydrate the per-room "Delete for me" hide-list whenever the user
+  // opens a chat so previously-hidden messages stay hidden across reloads.
+  loadHiddenMessageIds(chat.roomId)
   await loadSelectedConversation()
   if (unreadBeforeOpen > 0 && selectedChat.value?.bridgeStatus !== 'contact') {
     const latestVisible = [...messages.value].reverse().find((message) => message?.id) || null
@@ -1225,6 +1572,24 @@ async function refreshSelectedConversation() {
   if (!selectedChat.value?.roomId) return
   await loadSelectedConversation({ silent: false })
   await loadChats({ silent: true })
+}
+
+async function syncContacts() {
+  if (syncingContacts.value || !isConnected.value) return
+  syncingContacts.value = true
+  try {
+    await api.post('/api/whatsapp/sync-contacts')
+    // The bridge takes a few seconds to write address-book names back into
+    // its local SQLite. Schedule a delayed refresh so the user sees their
+    // names appear without having to click Refresh themselves.
+    setTimeout(() => {
+      loadChats({ silent: true }).catch(() => {})
+    }, 6000)
+  } catch (err) {
+    console.error('WhatsApp sync-contacts failed:', err.message)
+  } finally {
+    syncingContacts.value = false
+  }
 }
 
 async function refreshAll() {
@@ -1499,6 +1864,10 @@ function ensureEmojiPicker() {
       previewPosition: 'none',
       navPosition: 'bottom',
       searchPosition: 'sticky',
+      // dynamicWidth makes the <em-emoji-picker> expand to fill its
+      // container instead of the library's hardcoded ~350px width — that
+      // was leaving a big empty stripe to the right of the panel.
+      dynamicWidth: true,
       emojiButtonRadius: '14px',
       emojiButtonSize: 34,
       emojiSize: 20,
@@ -1521,7 +1890,14 @@ function toggleEmojiPanel() {
 
 function toggleGifPanel() {
   gifPanelOpen.value = !gifPanelOpen.value
-  if (gifPanelOpen.value) emojiPanelOpen.value = false
+  if (gifPanelOpen.value) {
+    emojiPanelOpen.value = false
+    // Show trending on first open. Subsequent opens keep whatever the user
+    // last searched for.
+    if (!gifResults.value.length && !gifQuery.value && !gifLoading.value) {
+      fetchGifs('')
+    }
+  }
 }
 
 function insertEmoji(emoji) {
@@ -1531,9 +1907,62 @@ function insertEmoji(emoji) {
   nextTick(() => composerEl.value?.focus())
 }
 
-function useGifPlaceholder(prompt) {
+async function fetchGifs(query) {
+  gifLoading.value = true
+  gifError.value = ''
+  try {
+    const { data } = await api.get('/api/gifs/search', {
+      params: { q: query || '', limit: 24 },
+    })
+    if (data?.ok === false) {
+      gifError.value = data?.error || 'GIF search is not configured.'
+      gifResults.value = []
+      return
+    }
+    gifResults.value = Array.isArray(data?.results) ? data.results : []
+  } catch (err) {
+    gifError.value =
+      err?.response?.data?.error ||
+      'GIF search is unavailable. Set TENOR_API_KEY in the backend .env to enable it.'
+    gifResults.value = []
+  } finally {
+    gifLoading.value = false
+  }
+}
+
+function onGifQueryInput() {
+  if (gifSearchTimer) clearTimeout(gifSearchTimer)
+  gifSearchTimer = setTimeout(() => {
+    fetchGifs(gifQuery.value)
+  }, 300)
+}
+
+async function pickGif(gif) {
   gifPanelOpen.value = false
-  composerNotice.value = `GIF picker scaffolded. Connect a GIF provider to send "${prompt}" as a real media result.`
+  if (!gif?.url || !selectedChat.value) {
+    composerNotice.value = 'Could not send that GIF.'
+    return
+  }
+  // We send the GIF as a Matrix m.image with the original GIF URL so the
+  // mautrix-whatsapp bridge forwards it as an animated image attachment.
+  try {
+    await api.post(
+      `/api/whatsapp/rooms/${encodeURIComponent(selectedChat.value.roomId)}/send`,
+      {
+        body: gif.title || 'GIF',
+        msgtype: 'm.image',
+        url: gif.url,
+        info: {
+          mimetype: 'image/gif',
+          w: gif.width || undefined,
+          h: gif.height || undefined,
+        },
+      }
+    )
+  } catch (err) {
+    composerNotice.value =
+      err?.response?.data?.error || 'Could not send that GIF.'
+  }
 }
 
 function stopRecordingTimer() {
@@ -2688,12 +3117,25 @@ onUnmounted(() => {
 }
 
 .wa-bubble {
-  padding: 12px 14px 10px;
-  border-radius: 24px;
+  padding: 10px 12px 8px;
+  border-radius: 20px;
   border-bottom-left-radius: 10px;
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.08);
   color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* Hug the bubble to its widest child (image or text). Without this the
+     bubble inherited the parent message-stack max-width (560px) and an
+     image attachment left a big empty stripe on the right. */
+  width: fit-content;
+  max-width: 100%;
+  min-width: 64px;
+}
+
+.wa-bubble > .wa-media-card + .wa-message-text {
+  margin-top: 0;
 }
 
 .wa-message-row.from-me .wa-bubble {
@@ -2734,14 +3176,21 @@ onUnmounted(() => {
 }
 
 .wa-media-card {
-  margin-bottom: 8px;
+  margin-bottom: 6px;
+}
+
+.wa-media-card:last-child {
+  margin-bottom: 0;
 }
 
 .wa-media-card--image img {
-  max-width: min(220px, 100%);
-  max-height: 280px;
+  /* Grow to bubble width so a caption underneath sits flush, while still
+     capping the image in narrow viewports so it doesn't dominate. */
+  width: 100%;
+  max-width: 280px;
+  max-height: 320px;
   display: block;
-  border-radius: 18px;
+  border-radius: 14px;
   cursor: zoom-in;
   object-fit: cover;
 }
@@ -2777,23 +3226,44 @@ onUnmounted(() => {
 .wa-file-card {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 10px 12px;
-  border-radius: 18px;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 14px;
   background: rgba(255, 255, 255, 0.05);
+  max-width: 320px;
+}
+
+.wa-file-card > div {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .wa-file-card strong {
   display: block;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 12.5px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .wa-file-card span {
   display: block;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 10.5px;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wa-file-card .wa-mini-btn {
+  flex-shrink: 0;
+  padding: 6px 10px;
+  font-size: 11.5px;
+  white-space: nowrap;
 }
 
 .wa-message-text {
@@ -2958,12 +3428,45 @@ onUnmounted(() => {
 
 .wa-upload-strip {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: thin;
+}
+
+.wa-upload-strip::-webkit-scrollbar { height: 4px; }
+.wa-upload-strip::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 2px;
 }
 
 .wa-upload-chip {
-  min-width: 220px;
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 240px;
+  padding: 8px 10px;
+  gap: 8px;
+}
+
+.wa-upload-chip > span {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.wa-upload-chip button {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .wa-upload-thumb {
@@ -3010,10 +3513,35 @@ onUnmounted(() => {
 .wa-quick-panel {
   margin-bottom: 12px;
   padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(7, 12, 22, 0.92);
+  max-height: 360px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.wa-quick-panel--gif {
+  max-height: 380px;
+}
+
+.wa-emoji-mart {
+  width: 100%;
+  height: 320px;
+  overflow: hidden;
 }
 
 .wa-emoji-mart :deep(em-emoji-picker) {
   width: 100%;
+  height: 100%;
+  min-height: 320px;
+  /* Override emoji-mart's internal --em-emoji-picker-width default (350px)
+     so the picker fills the chat panel width instead of leaving a dead
+     empty stripe on the right. dynamicWidth on the Picker handles layout
+     reflow; this var stops the host element from shrinking back. */
+  --em-emoji-picker-width: 100%;
+  --rgb-background: 14 22 41;
 }
 
 .wa-panel-head {
@@ -3029,28 +3557,60 @@ onUnmounted(() => {
   color: var(--text-primary);
 }
 
-.wa-gif-grid {
+.wa-gif-search {
   display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.wa-gif-search-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.wa-gif-search-input:focus {
+  outline: none;
+  border-color: rgba(95, 255, 170, 0.32);
+}
+
+.wa-gif-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 8px;
+  overflow-y: auto;
+  flex: 1;
 }
 
 .wa-gif-card {
-  min-width: 120px;
-  padding: 10px 12px;
-  border-radius: 18px;
-  text-align: left;
+  padding: 0;
+  border-radius: 12px;
+  overflow: hidden;
+  aspect-ratio: 1 / 1;
+  background: rgba(255, 255, 255, 0.04);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.wa-gif-card span {
+.wa-gif-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
   display: block;
-  color: var(--text-primary);
-  font-size: 13px;
-  margin-bottom: 4px;
 }
 
-.wa-gif-card small {
+.wa-gif-empty,
+.wa-gif-loading {
+  text-align: center;
   color: var(--text-muted);
+  font-size: 12px;
+  padding: 24px 12px;
 }
 
 .wa-compose {
@@ -3088,6 +3648,28 @@ onUnmounted(() => {
 
 .wa-icon-btn--ghost {
   background: rgba(255, 255, 255, 0.03);
+}
+
+.wa-icon-btn--danger {
+  color: #ff8088;
+  border-color: rgba(255, 128, 136, 0.25);
+}
+
+.wa-icon-btn--danger:hover:not(:disabled) {
+  background: rgba(255, 80, 92, 0.18);
+  border-color: rgba(255, 80, 92, 0.42);
+  color: #ffd0d4;
+}
+
+.wa-mini-btn--danger {
+  color: #ff8088;
+  border-color: rgba(255, 128, 136, 0.25);
+}
+
+.wa-mini-btn--danger:hover:not(:disabled) {
+  background: rgba(255, 80, 92, 0.18);
+  border-color: rgba(255, 80, 92, 0.42);
+  color: #ffd0d4;
 }
 
 .wa-icon-btn.active,
@@ -3243,6 +3825,130 @@ onUnmounted(() => {
 .wa-fade-enter-from,
 .wa-fade-leave-to {
   opacity: 0;
+}
+
+/* ── OrionAI-styled confirm modal ──────────────────────────────────────
+   Replaces window.confirm. Used for Delete-for-everyone / Delete-for-me /
+   Delete-chat prompts so the dialog feels native to OrionAI instead of
+   showing the browser's "localhost:5173 says…" alert.
+   ────────────────────────────────────────────────────────────────────── */
+.wa-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 16, 0.62);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1200;
+  padding: 24px;
+}
+
+.wa-confirm-card {
+  width: min(420px, 100%);
+  background: linear-gradient(180deg, rgba(20, 28, 44, 0.98), rgba(11, 16, 28, 0.98));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  padding: 20px 22px 18px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.wa-confirm-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.wa-confirm-head strong {
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.wa-confirm-close {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  line-height: 1;
+}
+
+.wa-confirm-close:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.wa-confirm-body {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.wa-confirm-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.wa-confirm-btn {
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.wa-confirm-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.wa-confirm-btn--default {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: var(--text-primary);
+}
+
+.wa-confirm-btn--default:hover:not(:disabled) {
+  background: rgba(95, 255, 170, 0.12);
+  border-color: rgba(95, 255, 170, 0.32);
+  transform: translateY(-1px);
+}
+
+.wa-confirm-btn--danger {
+  background: rgba(255, 80, 92, 0.18);
+  border-color: rgba(255, 80, 92, 0.32);
+  color: #ffd0d4;
+}
+
+.wa-confirm-btn--danger:hover:not(:disabled) {
+  background: rgba(255, 80, 92, 0.28);
+  border-color: rgba(255, 80, 92, 0.5);
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.wa-confirm-btn--ghost {
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+}
+
+.wa-confirm-btn--ghost:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
 }
 
 @keyframes wa-spin {

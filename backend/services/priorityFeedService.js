@@ -24,6 +24,9 @@ const {
 const {
   recordTelemetryEvent,
 } = require("./communicationTelemetryService");
+const {
+  markConversationReadAtSource,
+} = require("./conversationMarkRead");
 const { calendarGetToday } = require("./tools/toolCalendar");
 const {
   toolGetMyTickets,
@@ -1216,6 +1219,8 @@ async function recordPriorityFeedAction(userId, payload = {}) {
     targetActionState = "",
     targetState = "",
     reason = "",
+    openContext = {},
+    latestMessageId = "",
   } = payload;
 
   if (!itemId || !action) {
@@ -1284,6 +1289,20 @@ async function recordPriorityFeedAction(userId, payload = {}) {
     reason: transition.reason || "",
     origin: "priority-feed",
   });
+
+  // When the user clicks "handled" we treat the conversation as resolved and
+  // also mark it read at the source platform (Gmail / Slack / Telegram /
+  // WhatsApp / Signal). This is best-effort and never blocks the action
+  // record. We deliberately do NOT mark-read on dismiss/reclassify/snooze —
+  // those are user-side organizational actions, not "I read this" signals.
+  if (canonicalAction === QUICK_ACTIONS.HANDLED) {
+    markConversationReadAtSource({
+      userId,
+      sourceApp: resolvedSourceApp,
+      openContext,
+      latestMessageId,
+    }).catch(() => {});
+  }
 
   return mapAuditEntry(entry.toObject());
 }

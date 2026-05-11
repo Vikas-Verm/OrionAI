@@ -110,6 +110,12 @@ export function useCommunicationActions(source) {
   async function recordAction(item, action, extras = {}) {
     const canonicalAction = normalizeQuickAction(action)
     const itemId = buildCanonicalItemId(item, source)
+    // Pass openContext + latestMessageId so the backend can mark the source
+    // thread as read at the platform (Gmail / Slack / Telegram / WhatsApp /
+    // Signal) when the action is "handled".
+    const openContext = item?.meta?.openContext || item?.openContext || {}
+    const latestMessageId =
+      item?.meta?.latestMessageId || item?.latestMessageId || ''
     await api.post('/api/briefing/priority-feed/actions', {
       itemId,
       sourceApp: item.sourceApp || source,
@@ -117,6 +123,8 @@ export function useCommunicationActions(source) {
       action: canonicalAction,
       actionLabel: item.actionStateLabel || item.actionReason || '',
       fromActionState: item.actionState || item.meta?.actionState || '',
+      openContext,
+      latestMessageId,
       ...extras,
     })
 

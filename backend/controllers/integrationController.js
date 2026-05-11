@@ -91,6 +91,8 @@ async function deleteIntegration(req, res) {
   const userId = req.user?.username;
   const { type } = req.params;
   await Integration.findOneAndDelete({ userId, type });
+
+  // Per-app cache invalidations.
   if (type === "signal") {
     const { invalidateSignalCache } = require("../services/signalMatrixService");
     invalidateSignalCache(userId);
@@ -101,6 +103,52 @@ async function deleteIntegration(req, res) {
     } = require("../services/whatsappMatrixService");
     invalidateWhatsAppCache(userId);
   }
+  if (type === "telegram") {
+    // Cleanly tear down the MTProto session so reconnects don't reuse stale
+    // device state. We also drop the cached client.
+    try {
+      const tg = require("../services/tools/toolTelegramMTProto");
+      if (typeof tg.logout === "function") {
+        await tg.logout(userId).catch(() => {});
+      } else if (typeof tg.disconnectClient === "function") {
+        await tg.disconnectClient(userId).catch(() => {});
+      }
+    } catch {}
+  }
+
+  // Wipe websocket poll caches so the next reconnect is treated as a clean
+  // first-run population.
+  try {
+    const { clearAppPollState } = require("../services/websocketServer");
+    clearAppPollState(userId, type);
+  } catch {}
+
+  // Wipe per-app priority-feed action history and telemetry. We use
+  // sourceApp matches plus the canonical "comm:<type>:" itemId prefix so
+  // older legacy rows are also cleared.
+  try {
+    const PriorityFeedAction = require("../models/PriorityFeedAction");
+    await PriorityFeedAction.deleteMany({
+      userId,
+      $or: [
+        { sourceApp: type },
+        { itemId: { $regex: `^comm:${type}:` } },
+        { itemId: { $regex: `^${type}:` } },
+      ],
+    }).catch(() => {});
+  } catch {}
+
+  try {
+    const CommunicationTelemetryEvent = require("../models/CommunicationTelemetryEvent");
+    await CommunicationTelemetryEvent.deleteMany({
+      userId,
+      $or: [
+        { sourceApp: type },
+        { itemId: { $regex: `^comm:${type}:` } },
+      ],
+    }).catch(() => {});
+  } catch {}
+
   res.json({ ok: true });
 }
 
