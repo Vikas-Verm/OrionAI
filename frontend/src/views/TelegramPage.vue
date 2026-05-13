@@ -860,16 +860,10 @@
           <!-- Input / channel bar -->
           <div v-if="selDlg.type !== 'channel'" class="tg-input-bar">
             <!-- Emoji picker popup -->
-            <div v-if="showEmojiPicker" class="tg-emoji-picker" @click.stop>
-              <div class="tg-emoji-tabs">
-                <button v-for="cat in EMOJI_CATS" :key="cat.name"
-                  :class="['tg-emoji-tab', emojiCat===cat.name&&'on']"
-                  @click="emojiCat=cat.name">{{ cat.icon }}</button>
-              </div>
-              <div class="tg-emoji-grid">
-                <button v-for="e in currentEmojis" :key="e" class="tg-epick-btn" @click="insertEmoji(e)">{{ e }}</button>
-              </div>
-            </div>
+          <!-- Emoji picker popup -->
+<div v-if="showEmojiPicker" class="tg-emoji-picker" @click.stop>
+  <div ref="emojiPickerEl" class="tg-emoji-mart"></div>
+</div>
             <!-- File upload input (hidden) -->
             <input type="file" ref="fileInputEl" style="display:none" multiple @change="handleFileUpload"/>
             <div class="tg-input-wrap" :class="{recording: isRecording}">
@@ -984,7 +978,11 @@ import { useWebSocket } from '../composables/useWebSocket'
 import CommunicationInsightsWidget from '../components/communications/CommunicationInsightsWidget.vue'
 import { useCommunicationActions, emitCommunicationPriorityRefresh } from '../composables/useCommunicationActions'
 import { store, setModuleContext } from '../stores/app'
+import emojiData from '@emoji-mart/data'
+import { Picker, init as initEmojiMart } from 'emoji-mart'
 
+
+initEmojiMart({ data: emojiData })
 // ── Auth ──────────────────────────────────────────────────────────────
 const authStep = ref('loading')
 const authPhone = ref(''), authCode = ref(''), authPwd = ref('')
@@ -1118,18 +1116,22 @@ const pinnedMsg = ref(null)
 const typingText = ref('')
 
 // ── Emoji picker ──────────────────────────────────────────────────────
+// ── Emoji picker ──────────────────────────────────────────────────────
 const showEmojiPicker = ref(false)
-const emojiCat = ref('smileys')
-const EMOJI_CATS = [
-  { name: 'smileys', icon: '😀', emojis: ['😀','😃','😄','😁','😆','😅','🤣','😂','🙂','🙃','😉','😊','😇','🥰','😍','🤩','😘','😗','☺️','😚','😙','🥲','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🤫','🤔','🤐','🤨','😐','😑','😶','😏','😒','🙄','😬','🤥','😌','😔','😪','🤤','😴','😷','🤒','🤕','🤢','🤮','🤧','🥵','🥶','🥴','😵','💫','🤯','🤠','🥸','😎','🤓','🧐','😕','😟','🙁','☹️','😮','😯','😲','😳','🥺','😦','😧','😨','😰','😥','😢','😭','😱','😖','😣','😞','😓','😩','😫','🥱','😤','😡','😠','🤬','😈','👿','💀','☠️','💩','🤡','👹','👺','👻','👽','👾','🤖'] },
-  { name: 'gestures', icon: '👋', emojis: ['👋','🤚','🖐️','✋','🖖','👌','🤌','🤏','✌️','🤞','🤟','🤘','🤙','👈','👉','👆','🖕','👇','☝️','👍','👎','✊','👊','🤛','🤜','👏','🙌','🫶','👐','🤲','🤝','🙏','✍️','💅','🤳','💪','🦾','🦵','🦶','👂','🦻','👃','🫀','🫁','🧠','🦷','🦴','👀','👁️','👅','👄','💋','🩸'] },
-  { name: 'hearts', icon: '❤️', emojis: ['❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','❣️','💕','💞','💓','💗','💖','💘','💝','💟','☮️','✝️','☪️','🕉️','✡️','🔯','🛐','⛎','♈','♉','♊','♋','♌','♍','♎','♏','♐','♑','♒','♓','🆔','⚛️','🉑','☢️','☣️','📴','📳','🈶','🈚','🈸','🈺','🈷️','✴️','🆚','💮','🉐','㊙️','㊗️','🈴','🈵','🈹','🈲','🅰️','🅱️','🆎','🆑','🅾️','🆘','❌','⭕','🛑','⛔','📛','🚫','💯','💢','♨️','🚷','🚯','🚳','🚱','🔞','📵','🚭'] },
-  { name: 'nature', icon: '🐶', emojis: ['🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐻‍❄️','🐨','🐯','🦁','🐮','🐷','🐽','🐸','🐵','🙈','🙉','🙊','🐒','🐔','🐧','🐦','🐤','🐣','🐥','🦆','🦅','🦉','🦇','🐺','🐗','🐴','🦄','🐝','🪱','🐛','🦋','🐌','🐞','🐜','🪲','🦟','🦗','🪳','🕷️','🦂','🐢','🐍','🦎','🐊','🦖','🦕','🐙','🦑','🦐','🦞','🦀','🐡','🐠','🐟','🐬','🐳','🐋','🦈','🐊','🐅','🐆','🦓','🦍','🦧','🦣','🐘','🦛','🦏','🐪','🐫','🦒','🦘','🦬','🐃','🐂','🐄','🐎','🐖','🐏','🐑','🦙','🐐','🦌','🐕','🐩','🦮','🐕‍🦺','🐈','🐈‍⬛','🪶','🐓','🦃','🦤','🦚','🦜','🦢','🦩','🕊️','🐇','🦝','🦨','🦡','🦫','🦦','🦥','🐁','🐀','🐿️','🦔','🐾','🐉','🐲','🌵','🎄','🌲','🌳','🌴','🪵','🌱','🌿','☘️','🍀','🎍','🪴','🎋','🍃','🍂','🍁','🪺','🪹','🍄','🌾','💐','🌷','🌹','🥀','🪷','🌺','🌸','🌼','🌻','🌞','🌝','🌛','🌜','🌚','🌕','🌖','🌗','🌘','🌑','🌒','🌓','🌔','🌙','🌟','⭐','🌠','🌌','☀️','🌤️','⛅','🌥️','☁️','🌦️','🌧️','⛈️','🌩️','🌨️','❄️','☃️','⛄','🌬️','💨','💧','💦','🫧','☔','☂️','🌊','🌫️'] },
-  { name: 'food', icon: '🍕', emojis: ['🍕','🍔','🍟','🌭','🥪','🥙','🧆','🌮','🌯','🫔','🥗','🥘','🫕','🥫','🍝','🍜','🍲','🍛','🍣','🍱','🥟','🦪','🍤','🍙','🍚','🍘','🍥','🥮','🍢','🧁','🍰','🎂','🍮','🍭','🍬','🍫','🍿','🍩','🍪','🌰','🥜','🍯','🧃','🥤','🧋','☕','🍵','🫖','🍺','🍻','🥂','🍷','🫗','🥃','🍸','🍹','🧉','🍾','🧊','🥄','🍴','🍽️','🥢','🧂'] },
-  { name: 'travel', icon: '✈️', emojis: ['✈️','🚀','🛸','🚁','🛶','⛵','🚤','🛥️','🛳️','🚢','🚂','🚃','🚄','🚅','🚆','🚇','🚈','🚉','🚊','🚝','🚞','🚋','🚌','🚍','🚎','🚐','🚑','🚒','🚓','🚔','🚕','🚖','🚗','🚘','🚙','🛻','🚚','🚛','🚜','🏎️','🏍️','🛵','🦽','🦼','🛺','🚲','🛴','🛹','🛼','🚏','🛣️','🛤️','⛽','🚧','⚓','🪝','⛵','🚦','🚥','🗺️','🗿','🗽','🗼','🏰','🏯','🏟️','🎡','🎢','🎠','⛲','🎪','🏕️','🏖️','🏜️','🏝️','🏞️','🏠','🏡','🏢','🏣','🏤','🏥','🏦','🏨','🏩','🏪','🏫','🏬','🏭','🏗️','🧱','🪨','🪵','⛏️','🪚','🔧','🪛','🔩','⚙️','🗜️','🔗','⛓️','🪝','🧰','🪤','🪣','🔑','🗝️','🔐','🔏','🔒','🔓'] },
-  { name: 'symbols', icon: '💥', emojis: ['💥','✨','🌟','⚡','🔥','🌈','🎉','🎊','🎈','🎁','🎀','🎗️','🎟️','🎫','🏆','🥇','🥈','🥉','🏅','🎖️','🏵️','🎗️','📯','🔔','🔕','🎵','🎶','🎼','🎤','🎧','📻','🎷','🪗','🎸','🎹','🎺','🎻','🪕','🥁','🪘','📱','💻','⌨️','🖥️','🖨️','🖱️','🖲️','💾','💿','📀','📷','📸','📹','🎥','📽️','🎞️','📞','☎️','📟','📠','📺','📡','🔭','🔬','🕯️','💡','🔦','🏮','🪔','📔','📒','📕','📗','📘','📙','📚','📓','📃','📄','📑','🗒️','🗓️','📆','📅','🗑️','📁','📂','🗂️','🗃️','🗳️','🗄️','🗑️','🔒','🔓','🔏','🔐','🔑','🗝️'] },
-]
-const currentEmojis = computed(() => EMOJI_CATS.find(c => c.name === emojiCat.value)?.emojis || [])
+const emojiPickerEl = ref(null)
+let emojiPicker = null
+
+const EMOJI_CATEGORIES = Object.freeze([
+  'frequent',
+  'people',
+  'nature',
+  'foods',
+  'activity',
+  'places',
+  'objects',
+  'symbols',
+  'flags',
+])
 
 // ── Voice recording ───────────────────────────────────────────────────
 const fileInputEl = ref(null)
@@ -1262,6 +1264,8 @@ onMounted(async () => {
 onUnmounted(() => {
   document.removeEventListener('click', docClick)
   stopPolling()
+  if (emojiPicker?.remove) emojiPicker.remove()
+  emojiPicker = null
 })
 
 // Wire scroll listener after selDlg is set
@@ -1273,6 +1277,15 @@ watch(selDlg, () => {
     }
   })
 })
+
+watch(
+  () => showEmojiPicker.value,
+  async (open) => {
+    if (!open) return
+    await nextTick()
+    ensureEmojiPicker()
+  }
+)
 
 function docClick(e) {
   if (moreRef.value && !moreRef.value.contains(e.target)) showMore.value = false
@@ -1833,15 +1846,54 @@ async function doForward(targetDlg) {
 }
 
 // ── Emoji picker ──────────────────────────────────────────────────────
-function toggleEmojiPicker() {
+function ensureEmojiPicker() {
+  if (!emojiPickerEl.value) return
+
+  // The popup uses v-if, so Vue destroys this DOM node whenever it closes.
+  // Create a fresh Emoji Mart picker against the current node every time it opens.
+  if (emojiPicker?.remove) emojiPicker.remove()
+  emojiPicker = null
+  emojiPickerEl.value.innerHTML = ''
+
+  emojiPicker = new Picker({
+    data: emojiData,
+    categories: EMOJI_CATEGORIES,
+    set: 'native',
+    theme: 'dark',
+    previewPosition: 'none',
+    navPosition: 'bottom',
+    searchPosition: 'sticky',
+    dynamicWidth: true,
+    emojiButtonRadius: '14px',
+    emojiButtonSize: 34,
+    emojiSize: 20,
+    onEmojiSelect: (emoji) => insertEmoji(emoji?.native || ''),
+  })
+
+  emojiPickerEl.value.appendChild(emojiPicker)
+}
+
+function toggleEmojiPicker(event) {
+  event?.stopPropagation?.()
   showEmojiPicker.value = !showEmojiPicker.value
 }
+
 function insertEmoji(e) {
+  if (!e) return
+
   const el = inputEl.value
-  if (!el) { draft.value += e; return }
+  if (!el) {
+    draft.value += e
+    showEmojiPicker.value = false
+    return
+  }
+
   const start = el.selectionStart ?? draft.value.length
-  const end   = el.selectionEnd   ?? draft.value.length
+  const end = el.selectionEnd ?? draft.value.length
+
   draft.value = draft.value.slice(0, start) + e + draft.value.slice(end)
+  showEmojiPicker.value = false
+
   nextTick(() => {
     el.focus()
     el.setSelectionRange(start + e.length, start + e.length)
@@ -2844,23 +2896,40 @@ function fIconCol(n = '') { return EX[(n.split('.').pop() || '').toLowerCase()] 
 
 /* ── EMOJI PICKER ── */
 .tg-emoji-picker {
-  position: absolute; bottom: 100%; left: 0; right: 0;
-  background: var(--bg-surface); border: 1px solid var(--border-subtle);
-  border-radius: 16px 16px 0 0;
-  box-shadow: 0 -8px 30px rgba(0,0,0,.35);
-  z-index: 200; display: flex; flex-direction: column; max-height: 320px;
-  margin-bottom: 0;
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 18px;
+  right: 18px;
+  height: 340px;
+  padding: 10px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(8, 13, 28, 0.96);
+  box-shadow: 0 -18px 45px rgba(0, 0, 0, 0.38);
+  z-index: 260;
+  overflow: hidden;
+  backdrop-filter: blur(20px);
 }
-.tg-emoji-tabs {
-  display: flex; gap: 2px; padding: 10px 10px 6px;
-  border-bottom: 1px solid var(--border-subtle); overflow-x: auto; flex-shrink: 0;
+.tg-emoji-mart {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
 }
-.tg-emoji-tab {
-  padding: 5px 8px; border-radius: 8px; border: none;
-  background: transparent; cursor: pointer; font-size: 18px;
-  transition: background .12s; flex-shrink: 0;
+.tg-emoji-mart :deep(em-emoji-picker) {
+  width: 100%;
+  height: 100%;
+  min-height: 320px;
+  --em-emoji-picker-width: 100%;
+  --rgb-background: 8 13 28;
+  --rgb-input: 255 255 255;
+  --rgb-accent: 34 158 217;
+  --shadow: none;
 }
-.tg-emoji-tab.on { background: var(--bg-elevated); }
+.tg-emoji-btn.on {
+  color: var(--tg-accent);
+  border-color: rgba(82, 212, 255, 0.34);
+  background: rgba(82, 212, 255, 0.1);
+}
 .tg-emoji-tab:hover { background: var(--bg-elevated); }
 .tg-emoji-grid {
   display: grid; grid-template-columns: repeat(auto-fill, 36px);

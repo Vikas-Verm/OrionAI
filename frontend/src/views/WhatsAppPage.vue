@@ -633,7 +633,7 @@
                 <path d="m21.44 11.05-8.49 8.49a5.5 5.5 0 0 1-7.78-7.78l9.2-9.19a3.5 3.5 0 1 1 4.95 4.95l-9.19 9.2a1.5 1.5 0 0 1-2.12-2.12l8.49-8.48" />
               </svg>
             </button>
-            <button class="wa-compose-btn wa-emoji-btn" :disabled="composerDisabled" title="Emoji picker" @click="toggleEmojiPanel">
+            <button class="wa-compose-btn wa-emoji-btn" :disabled="composerDisabled" title="Emoji picker" @click.stop="toggleEmojiPanel">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="12" cy="12" r="10" />
                 <path d="M8 14s1.5 2 4 2 4-2 4-2" />
@@ -746,6 +746,17 @@ import { store, setModuleContext } from '../stores/app'
 
 initEmojiMart({ data: emojiData })
 
+const EMOJI_CATEGORIES = Object.freeze([
+  'frequent',
+  'people',
+  'nature',
+  'foods',
+  'activity',
+  'places',
+  'objects',
+  'symbols',
+  'flags',
+])
 const emit = defineEmits(['close', 'open-integrations'])
 
 const CHAT_FILTERS = [
@@ -1854,36 +1865,43 @@ function handleFilePick(event) {
 
 // FIX 2: Always re-append the picker to the current DOM node when the panel opens.
 // The v-if destroys the DOM node on close, so we must re-attach every time.
+// Rebuild Emoji Mart every time the panel opens.
+// The picker is a web component with an internal virtual scroller. Reusing the
+// same Picker instance after Vue's v-if destroys/recreates the host div can
+// leave only the first category rendered. A fresh instance fixes all categories.
 function ensureEmojiPicker() {
   if (!emojiPickerEl.value) return
 
-  if (!emojiPicker) {
-    emojiPicker = new Picker({
-      data: emojiData,
-      theme: 'dark',
-      previewPosition: 'none',
-      navPosition: 'bottom',
-      searchPosition: 'sticky',
-      // dynamicWidth makes the <em-emoji-picker> expand to fill its
-      // container instead of the library's hardcoded ~350px width — that
-      // was leaving a big empty stripe to the right of the panel.
-      dynamicWidth: true,
-      emojiButtonRadius: '14px',
-      emojiButtonSize: 34,
-      emojiSize: 20,
-      onEmojiSelect: (emoji) => insertEmoji(emoji?.native || ''),
-      onClickOutside: () => {
-        emojiPanelOpen.value = false
-      },
-    })
-  }
-
-  // Always clear and re-append so the picker attaches to the freshly rendered DOM node
+  if (emojiPicker?.remove) emojiPicker.remove()
+  emojiPicker = null
   emojiPickerEl.value.innerHTML = ''
+
+  emojiPicker = new Picker({
+    data: emojiData,
+    categories: EMOJI_CATEGORIES,
+    set: 'native',
+    theme: 'dark',
+    previewPosition: 'none',
+    navPosition: 'bottom',
+    searchPosition: 'sticky',
+    dynamicWidth: true,
+    emojiButtonRadius: '14px',
+    emojiButtonSize: 34,
+    emojiSize: 20,
+    onEmojiSelect: (emoji) => insertEmoji(emoji?.native || ''),
+    onClickOutside: (event) => {
+      const path = typeof event?.composedPath === 'function' ? event.composedPath() : []
+      if (emojiPickerEl.value && path.includes(emojiPickerEl.value)) return
+      if (event?.target && emojiPickerEl.value?.contains(event.target)) return
+      emojiPanelOpen.value = false
+    },
+  })
+
   emojiPickerEl.value.appendChild(emojiPicker)
 }
 
-function toggleEmojiPanel() {
+function toggleEmojiPanel(event) {
+  event?.stopPropagation?.()
   emojiPanelOpen.value = !emojiPanelOpen.value
   if (emojiPanelOpen.value) gifPanelOpen.value = false
 }
