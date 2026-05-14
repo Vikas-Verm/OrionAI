@@ -1,97 +1,112 @@
 "use strict";
 
 const express = require("express");
-const router = express.Router();
-const { OAuth2Client } = require("google-auth-library");
-const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
-
-// ── You need a User model — adjust path if yours is different ────────────
+const { OAuth2Client } = require("google-auth-library");
 const User = require("../models/user");
+const {
+  cleanString,
+  normalizeEmail,
+  normalizeUsername,
+  sanitizeUser,
+  createAuthToken,
+} = require("../utils/auth");
 
+const router = express.Router();
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 
-// POST /auth/google/verify
-// Frontend sends the Google ID token after user clicks "Sign in with Google"
+function baseUsernameFromProfile(email, name) {
+  const candidate = normalizeUsername(email || name || "")
+    .replace(/@.*$/, "")
+    .replace(/[^a-z0-9._-]/g, "")
+    .slice(0, 24);
+
+  return candidate || "orionuser";
+}
+
+async function generateUniqueUsername(email, name) {
+  const base = baseUsernameFromProfile(email, name);
+  let candidate = base;
+  let suffix = 0;
+
+  while (await User.findOne({ username: candidate })) {
+    suffix += 1;
+    const suffixText = String(suffix);
+    const maxBaseLength = Math.max(1, 24 - suffixText.length);
+    candidate = `${base.slice(0, maxBaseLength)}${suffixText}`;
+  }
+
+  return candidate;
+}
+
 router.post("/verify", async (req, res) => {
   try {
-    const { credential } = req.body;
-    if (!credential)
-      return res.status(400).json({ error: "No credential provided" });
+    if (!CLIENT_ID) {
+      return res.status(503).json({ error: "Google sign-in is not configured." });
+    }
 
-    // Verify the token with Google
+    const credential = cleanString(req.body?.credential);
+    if (!credential) {
+      return res.status(400).json({ error: "No Google credential was provided." });
+    }
+
     const client = new OAuth2Client(CLIENT_ID);
     const ticket = await client.verifyIdToken({
       idToken: credential,
       audience: CLIENT_ID,
     });
-    const payload = ticket.getPayload();
-
-    const googleId = payload.sub;
-    const email = payload.email;
-    const name = payload.name || email.split("@")[0];
-    const picture = payload.picture || null;
+    const payload = ticket.getPayload() || {};
 
     if (!payload.email_verified) {
-      return res.status(400).json({ error: "Google email not verified" });
+      return res.status(400).json({ error: "Google email must be verified." });
     }
 
-    // Find or create user by Google ID or email
+    const googleId = cleanString(payload.sub);
+    const email = normalizeEmail(payload.email);
+    const fullName = cleanString(payload.name) || email.split("@")[0] || "OrionAI User";
+    const picture = cleanString(payload.picture);
+
     let user = await User.findOne({
       $or: [{ googleId }, { email }],
     });
 
     if (!user) {
-      // New user — create account automatically
-      const username =
-        email
-          .split("@")[0]
-          .replace(/[^a-zA-Z0-9]/g, "")
-          .toLowerCase() + Math.floor(Math.random() * 1000);
       user = await User.create({
         googleId,
         email,
-        username,
-        displayName: name,
+        username: await generateUniqueUsername(email, fullName),
+        fullName,
+        displayName: fullName,
         picture,
-        // Random password — user will only log in via Google
-        password: await bcrypt.hash(Math.random().toString(36), 10),
-        createdAt: new Date(),
+        passwordHash: await bcrypt.hash(`${googleId}:${Date.now()}`, 12),
+        lastLoginAt: new Date(),
       });
     } else {
-      // Update Google info on existing user
-      await User.findByIdAndUpdate(user._id, {
-        $set: {
-          googleId: googleId,
-          picture: picture,
-          displayName: name,
-          lastLoginAt: new Date(),
+      user = await User.findByIdAndUpdate(
+        user._id,
+        {
+          $set: {
+            googleId,
+            email,
+            fullName,
+            displayName: fullName,
+            picture,
+            username:
+              user.username || (await generateUniqueUsername(email, fullName)),
+            lastLoginAt: new Date(),
+          },
         },
-      });
+        { new: true }
+      );
     }
 
-    // Issue JWT — same as your normal login
-    const token = jwt.sign(
-      { userId: user._id, username: user.username || user.email },
-      process.env.JWT_SECRET,
-      { expiresIn: "30d" }
-    );
-
-    res.json({
-      token,
-      user: {
-        id: user._id,
-        username: user.username,
-        email: user.email,
-        displayName: name,
-        picture,
-      },
+    return res.json({
+      token: createAuthToken(user),
+      user: sanitizeUser(user),
     });
-  } catch (err) {
-    console.error("Google auth error:", err.message);
-    res
-      .status(401)
-      .json({ error: "Google authentication failed: " + err.message });
+  } catch (error) {
+    console.error("Google auth error:", error.message);
+    return res.status(401).json({ error: "Google authentication failed." });
   }
 });
 

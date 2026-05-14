@@ -10,8 +10,7 @@
 
 const APP_ICON_URL = {
   gmail: 'https://ssl.gstatic.com/ui/v1/icons/mail/rfr/gmail.ico',
-  slack:
-    'https://upload.wikimedia.org/wikipedia/commons/thumb/d/d5/Slack_icon_2019.svg/2048px-Slack_icon_2019.svg.png',
+  slack: '/app-icons/slack.svg',
   telegram: 'https://cdn.worldvectorlogo.com/logos/telegram-1.svg',
   signal:
     'https://static.vecteezy.com/system/resources/previews/068/842/068/non_2x/signal-icon-logo-signal-app-transparent-background-free-png.png',
@@ -19,8 +18,7 @@ const APP_ICON_URL = {
     'https://e7.pngegg.com/pngimages/551/579/png-clipart-whats-app-logo-whatsapp-logo-whatsapp-cdr-leaf-thumbnail.png',
   jira:
     'https://w7.pngwing.com/pngs/992/738/png-transparent-jira-hd-logo-thumbnail.png',
-  google_calendar:
-    'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a5/Google_Calendar_icon_%282020%29.svg/2048px-Google_Calendar_icon_%282020%29.svg.png',
+  google_calendar: '/app-icons/google-calendar.svg',
   google_docs:
     'https://upload.wikimedia.org/wikipedia/commons/thumb/0/01/Google_Docs_logo_%282014-2020%29.svg/1920px-Google_Docs_logo_%282014-2020%29.svg.png',
   google_sheets: '/google-sheets-logo.svg',

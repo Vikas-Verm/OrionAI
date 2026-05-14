@@ -1006,7 +1006,7 @@ const cards = [
     name:  'Slack',
     desc:  'Read and send messages as yourself',
     color: '#4A154B',
-    img:   'https://upload.wikimedia.org/wikipedia/commons/thumb/d/d5/Slack_icon_2019.svg/2048px-Slack_icon_2019.svg.png',
+    img:   '/app-icons/slack.svg',
   },
 //   {
 //     type:  'notion',
@@ -1069,7 +1069,7 @@ const cards = [
     name:  'Google Calendar',
     desc:  'View, create and manage calendar events',
     color: '#1a73e8',
-    img:   'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a5/Google_Calendar_icon_%282020%29.svg/2048px-Google_Calendar_icon_%282020%29.svg.png',
+    img:   '/app-icons/google-calendar.svg',
   },
   {
     type:  'telegram',

@@ -15,16 +15,27 @@ const {
 const {
   buildWhatsAppClientIntegration,
 } = require("../services/whatsappMatrixService");
+const { isConnectedIntegration } = require("../services/integrationConnectionState");
 
 function sanitizeIntegrationForClient(integration) {
   if (!integration) return integration;
+  const connected = isConnectedIntegration(integration);
   if (integration.type === "signal") {
-    return buildSignalClientIntegration(integration);
+    return {
+      ...buildSignalClientIntegration(integration),
+      connected,
+    };
   }
   if (integration.type === "whatsapp") {
-    return buildWhatsAppClientIntegration(integration);
+    return {
+      ...buildWhatsAppClientIntegration(integration),
+      connected,
+    };
   }
-  return integration;
+  return {
+    ...(integration.toObject?.() || integration),
+    connected,
+  };
 }
 
 // ── GET /api/integrations ─────────────────────────────────

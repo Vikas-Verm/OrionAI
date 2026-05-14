@@ -63,6 +63,11 @@ export function setAuth(token, user) {
   localStorage.setItem("user", JSON.stringify(user));
 }
 
+export function setUser(user) {
+  store.user = user;
+  localStorage.setItem("user", JSON.stringify(user));
+}
+
 export function clearAuth() {
   store.token = null;
   store.user = null;

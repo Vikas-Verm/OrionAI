@@ -1,12 +1,29 @@
 <template>
   <div>
     <LoginScreen v-if="!isLoggedIn" @success="onLoginSuccess" />
+    <ConnectAppsOnboarding
+      v-else-if="activeOnboardingRoute === 'connect-apps'"
+      @complete="onOnboardingStepComplete"
+    />
+    <SyncingOnboarding
+      v-else-if="activeOnboardingRoute === 'syncing'"
+      @complete="onOnboardingStepComplete"
+    />
+    <div v-else-if="authBooting" class="app-auth-loading">
+      <div class="app-auth-loading__glow app-auth-loading__glow--cyan" aria-hidden="true"></div>
+      <div class="app-auth-loading__glow app-auth-loading__glow--violet" aria-hidden="true"></div>
+      <div class="app-auth-loading__grid" aria-hidden="true"></div>
+      <div class="app-auth-loading__card">
+        <div class="app-auth-loading__logo">🔭</div>
+        <h1>Preparing OrionAI</h1>
+        <p>Checking your workspace and routing you to the right first-run experience.</p>
+        <span class="app-auth-loading__spinner"></span>
+      </div>
+    </div>
     <div v-else class="app">
       <div class="app-aurora app-aurora-cyan" aria-hidden="true"></div>
       <div class="app-aurora app-aurora-violet" aria-hidden="true"></div>
       <div class="app-grid-glow" aria-hidden="true"></div>
-      <OnboardingFlow ref="onboardingRef" @done="() => { }" @openIntegrations="onOpenIntegrations"
-        @runCommand="onOnboardingCommand" />
       <div class="sidebar-shell" :class="{ 'sidebar-shell-collapsed': sidebarCollapsed }">
         <Sidebar
           ref="sidebarRef"
@@ -118,17 +135,19 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
-import { store, clearAuth, setMode, setModuleContext } from './stores/app'
+import { store, clearAuth, setMode, setModuleContext, setUser } from './stores/app'
 import { useSession } from './composables/useSession'
 import { useChat } from './composables/useChat'
 import { useFiles } from './composables/useFiles'
 import { useAgent } from './composables/useAgent'
 import { useWebSocket } from './composables/useWebSocket'
-import api from './services/api'
+import api, { onboardingAPI } from './services/api'
 import html2pdf from 'html2pdf.js'
 
 // Layout
 import LoginScreen from './components/auth/LoginScreen.vue'
+import ConnectAppsOnboarding from './components/onboarding/ConnectAppsOnboarding.vue'
+import SyncingOnboarding from './components/onboarding/SyncingOnboarding.vue'
 import Sidebar from './components/layout/MainSidebar.vue'
 import MainHeader from './components/layout/MainHeader.vue'
 
@@ -138,7 +157,6 @@ import InputArea from './components/input/InputArea.vue'
 import DocPanel from './components/rag/DocPanel.vue'
 import CanvasPane from './components/canvas/CanvasPane.vue'
 import ParamPrompt from './components/agent/ParamPrompt.vue'
-import OnboardingFlow from './components/onboarding/OnboardingFlow.vue'
 
 // Integrations & modules
 import IntegrationsPage from './components/integrations/IntegrationsPage.vue'
@@ -159,6 +177,7 @@ import AgentConfirmModal from './components/agent/AgentConfirmModal.vue'
 //Notifications
 
 const isLoggedIn = computed(() => !!store.token && !!store.user)
+const authBooting = ref(Boolean(store.token))
 
 // Composables
 const { loadSessions, startNewChat, switchSession: _switchSession, deleteSession } = useSession()
@@ -170,10 +189,22 @@ const { start, stop, unreadNotifCount, hasUrgent } = useWebSocket()
 const sidebarRef = ref(null)
 const sidebarCollapsed = ref(false)
 
+const ONBOARDING_ROUTE_TO_PATH = Object.freeze({
+  'connect-apps': '/onboarding/connect-apps',
+  syncing: '/onboarding/syncing',
+})
+const ONBOARDING_PATH_TO_ROUTE = Object.freeze(
+  Object.fromEntries(Object.entries(ONBOARDING_ROUTE_TO_PATH).map(([route, path]) => [path, route]))
+)
+const WORKSPACE_BRIEFING_PATH = '/workspace-briefing'
+const HOME_PATHS = new Set(['/', '', WORKSPACE_BRIEFING_PATH])
+
 // URL-based routing without vue-router. Pathnames map to UI state:
 //   - /              →  fresh new chat (always — never restores a session)
 //   - /c/{sessionId} →  specific AI chat session (Mongo session id)
 //   - /integrations  →  Integrations page
+//   - /workspace-briefing → OrionAI home / briefing surface
+//   - /onboarding/*  → first-run onboarding flow
 //   - /<module>      →  module page (gmail, whatsapp, telegram, slack, etc.)
 //
 // On refresh we read the pathname and restore that view. On login we push
@@ -200,6 +231,10 @@ const ROUTE_TO_MODULE = Object.fromEntries(
 // the canonical id for state so existing component routing keeps working.
 ROUTE_TO_MODULE.calendar = 'google_calendar'
 
+function normalizePathname(pathname = '/') {
+  return String(pathname || '/').replace(/\/+$/, '') || '/'
+}
+
 function pathFor({ module = null, integrations = false, sessionId = null } = {}) {
   if (integrations) return '/integrations'
   if (module && MODULE_ROUTES[module]) return `/${MODULE_ROUTES[module]}`
@@ -209,17 +244,59 @@ function pathFor({ module = null, integrations = false, sessionId = null } = {})
 
 function readInitialRouteFromLocation() {
   if (typeof window === 'undefined')
-    return { module: null, integrations: false, sessionId: null, isNewChat: true }
-  const pathname = String(window.location?.pathname || '/').replace(/\/+$/, '') || '/'
+    return {
+      module: null,
+      integrations: false,
+      sessionId: null,
+      isNewChat: true,
+      onboardingRoute: null,
+      isWorkspaceBriefingHome: false,
+    }
+  const pathname = normalizePathname(window.location?.pathname || '/')
+  const onboardingRoute = ONBOARDING_PATH_TO_ROUTE[pathname]
+  if (onboardingRoute) {
+    return {
+      module: null,
+      integrations: false,
+      sessionId: null,
+      isNewChat: false,
+      onboardingRoute,
+      isWorkspaceBriefingHome: false,
+    }
+  }
+  if (pathname === WORKSPACE_BRIEFING_PATH) {
+    return {
+      module: null,
+      integrations: false,
+      sessionId: null,
+      isNewChat: true,
+      onboardingRoute: null,
+      isWorkspaceBriefingHome: true,
+    }
+  }
   if (pathname === '/integrations') {
-    return { module: null, integrations: true, sessionId: null, isNewChat: false }
+    return {
+      module: null,
+      integrations: true,
+      sessionId: null,
+      isNewChat: false,
+      onboardingRoute: null,
+      isWorkspaceBriefingHome: false,
+    }
   }
   // /c/{id} — decode and restore that chat session.
   const chatMatch = pathname.match(/^\/c\/([^/]+)$/)
   if (chatMatch) {
     let sessionId = chatMatch[1]
     try { sessionId = decodeURIComponent(sessionId) } catch {}
-    return { module: null, integrations: false, sessionId, isNewChat: false }
+    return {
+      module: null,
+      integrations: false,
+      sessionId,
+      isNewChat: false,
+      onboardingRoute: null,
+      isWorkspaceBriefingHome: false,
+    }
   }
   const slug = pathname.startsWith('/') ? pathname.slice(1) : pathname
   if (slug && ROUTE_TO_MODULE[slug]) {
@@ -228,21 +305,31 @@ function readInitialRouteFromLocation() {
       integrations: false,
       sessionId: null,
       isNewChat: false,
+      onboardingRoute: null,
+      isWorkspaceBriefingHome: false,
     }
   }
   // "/" or any unknown route → fresh new chat home.
-  return { module: null, integrations: false, sessionId: null, isNewChat: true }
+  return {
+    module: null,
+    integrations: false,
+    sessionId: null,
+    isNewChat: true,
+    onboardingRoute: null,
+    isWorkspaceBriefingHome: false,
+  }
 }
 
 const initialRoute = readInitialRouteFromLocation()
+const activeOnboardingRoute = ref(initialRoute.onboardingRoute)
 const showingIntegrations = ref(initialRoute.integrations)
 const integrationsFocusType = ref(null)
 const activeModule = ref(initialRoute.module)
 
 function pushRouteIfChanged(targetPath) {
   if (typeof window === 'undefined') return
-  const current = String(window.location?.pathname || '/') || '/'
-  if (current === targetPath) return
+  const current = normalizePathname(window.location?.pathname || '/')
+  if (current === normalizePathname(targetPath)) return
   try {
     window.history.pushState({}, '', targetPath)
   } catch {
@@ -253,6 +340,7 @@ function pushRouteIfChanged(targetPath) {
 watch(
   [activeModule, showingIntegrations],
   ([moduleVal, integrationsVal]) => {
+    if (activeOnboardingRoute.value) return
     // Only push module / integrations URLs from this watcher. Chat-session
     // URLs are pushed explicitly when switchSession() / startNewChat() runs
     // so we don't clobber /c/{id} every time a module ref toggles.
@@ -277,9 +365,10 @@ watch(
   ([sessionId, messageCount]) => {
     if (!sessionId) return
     if (messageCount <= 0) return
+    if (activeOnboardingRoute.value) return
     if (activeModule.value || showingIntegrations.value) return
-    const currentPath = String(window.location?.pathname || '/')
-    if (currentPath === '/' || currentPath === '') {
+    const currentPath = normalizePathname(window.location?.pathname || '/')
+    if (HOME_PATHS.has(currentPath)) {
       pushRouteIfChanged(`/c/${encodeURIComponent(sessionId)}`)
     }
   }
@@ -288,6 +377,15 @@ watch(
 // Browser back/forward — sync state to the new URL so the UI updates.
 async function handlePopState() {
   const next = readInitialRouteFromLocation()
+  if (next.onboardingRoute) {
+    activeOnboardingRoute.value = next.onboardingRoute
+    showingIntegrations.value = false
+    activeModule.value = null
+    integrationsFocusType.value = null
+    setModuleContext(null)
+    return
+  }
+  activeOnboardingRoute.value = null
   showingIntegrations.value = next.integrations
   activeModule.value = next.module
   if (next.sessionId && next.sessionId !== store.currentSessionId) {
@@ -300,14 +398,136 @@ async function handlePopState() {
   } else if (next.isNewChat && !next.module && !next.integrations) {
     // Hitting / via back/forward starts a fresh chat (or reuses a blank draft).
     await startNewChat().catch(() => {})
+    if (next.isWorkspaceBriefingHome) {
+      await maybeMarkFirstBriefingSeen()
+    }
   }
 }
 const messageListRef = ref(null)
 const inputAreaRef = ref(null)
-const onboardingRef = ref(null)
 const confirmRef = ref(null)
 let openTelegramListener = null
 let openModuleListener = null
+
+function resetSurfaceState() {
+  activeOnboardingRoute.value = null
+  showingIntegrations.value = false
+  integrationsFocusType.value = null
+  activeModule.value = null
+  setModuleContext(null)
+}
+
+function openOnboardingRoute(routeKey) {
+  activeOnboardingRoute.value = routeKey
+  showingIntegrations.value = false
+  integrationsFocusType.value = null
+  activeModule.value = null
+  setModuleContext(null)
+  const path = ONBOARDING_ROUTE_TO_PATH[routeKey]
+  if (path) pushRouteIfChanged(path)
+}
+
+async function refreshOnboardingStatus() {
+  const { data } = await onboardingAPI.status()
+  if (data?.user) setUser(data.user)
+  return data
+}
+
+async function maybeMarkFirstBriefingSeen() {
+  if (store.user?.onboarding?.hasSeenFirstBriefing) return
+  try {
+    const { data } = await onboardingAPI.update({ hasSeenFirstBriefing: true })
+    if (data?.user) setUser(data.user)
+  } catch (error) {
+    console.debug('Unable to mark first briefing as seen:', error?.message || error)
+  }
+}
+
+async function enterMainApp(route = initialRoute) {
+  const nextRoute = {
+    module: route?.module || null,
+    integrations: route?.integrations === true,
+    sessionId: route?.sessionId || null,
+    isNewChat: route?.isNewChat !== false,
+    onboardingRoute: null,
+    isWorkspaceBriefingHome: route?.isWorkspaceBriefingHome === true,
+  }
+
+  activeOnboardingRoute.value = null
+  showingIntegrations.value = nextRoute.integrations
+  activeModule.value = nextRoute.module
+  integrationsFocusType.value = null
+  setModuleContext(null)
+
+  await loadSessions()
+
+  if (nextRoute.sessionId) {
+    try {
+      await _switchSession(nextRoute.sessionId)
+    } catch {
+      activeModule.value = null
+      showingIntegrations.value = false
+      pushRouteIfChanged(WORKSPACE_BRIEFING_PATH)
+      await startNewChat()
+      await maybeMarkFirstBriefingSeen()
+    }
+  } else if (nextRoute.module || nextRoute.integrations) {
+    if (store.sessions.length > 0) {
+      store.currentSessionId = store.sessions[0].sessionId
+      await _switchSession(store.currentSessionId).catch(() => {})
+    } else {
+      await startNewChat()
+    }
+  } else {
+    await startNewChat()
+    pushRouteIfChanged(nextRoute.isWorkspaceBriefingHome ? WORKSPACE_BRIEFING_PATH : '/')
+    if (nextRoute.isWorkspaceBriefingHome) {
+      await maybeMarkFirstBriefingSeen()
+    }
+  }
+
+  stop()
+  start()
+}
+
+async function handleAuthenticatedEntry({
+  route = readInitialRouteFromLocation(),
+  preserveExplicitPath = true,
+  preferWorkspaceBriefing = false,
+} = {}) {
+  const status = await refreshOnboardingStatus()
+
+  if (status?.nextStep === 'connect_apps') {
+    openOnboardingRoute('connect-apps')
+    return status
+  }
+
+  if (status?.nextStep === 'syncing') {
+    openOnboardingRoute('syncing')
+    return status
+  }
+
+  const routeToUse =
+    preserveExplicitPath && !route?.onboardingRoute
+      ? {
+          ...route,
+          isWorkspaceBriefingHome:
+            route?.isWorkspaceBriefingHome === true ||
+            preferWorkspaceBriefing ||
+            (!route?.sessionId && !route?.module && !route?.integrations),
+        }
+      : {
+          module: null,
+          integrations: false,
+          sessionId: null,
+          isNewChat: true,
+          onboardingRoute: null,
+          isWorkspaceBriefingHome: true,
+        }
+
+  await enterMainApp(routeToUse)
+  return status
+}
 
 // ── Init ──────────────────────────────────────────────────
 onMounted(async () => {
@@ -344,41 +564,20 @@ onMounted(async () => {
   document.addEventListener('orion:open-module', openModuleListener)
 
   if (store.token) {
+    authBooting.value = true
     api.defaults.headers.common['Authorization'] = `Bearer ${store.token}`
     try {
-      await api.get('/auth/me')
-      await loadSessions()
-
-      // URL-driven boot:
-      //  - /c/{sessionId} → switch into that session (no module change).
-      //  - /<module>      → keep activeModule (already set from URL); load
-      //                     a session in the background so chat is ready
-      //                     when the user closes the module.
-      //  - /              → ALWAYS start a fresh new chat (or reuse a blank
-      //                     draft). Never auto-restore the latest session.
-      if (initialRoute.sessionId) {
-        try {
-          await _switchSession(initialRoute.sessionId)
-        } catch {
-          // The persisted session id is gone — fall back to a new chat at /.
-          activeModule.value = null
-          showingIntegrations.value = false
-          pushRouteIfChanged('/')
-          await startNewChat()
-        }
-      } else if (activeModule.value || showingIntegrations.value) {
-        // We're on a module / integrations page. Just keep a session warm
-        // in memory so the user can swipe back to chat without delay.
-        if (store.sessions.length > 0) {
-          store.currentSessionId = store.sessions[0].sessionId
-          await _switchSession(store.currentSessionId).catch(() => {})
-        }
-      } else {
-        // Plain "/" → home is always a fresh new chat.
-        await startNewChat()
-      }
-      start()
-    } catch { logout() }
+      await handleAuthenticatedEntry({
+        route: initialRoute,
+        preserveExplicitPath: true,
+      })
+    } catch {
+      logout()
+    } finally {
+      authBooting.value = false
+    }
+  } else {
+    authBooting.value = false
   }
 })
 
@@ -391,29 +590,35 @@ onUnmounted(() => {
 })
 
 // ── Auth ──────────────────────────────────────────────────
-async function onLoginSuccess() {
+async function onLoginSuccess(payload = {}) {
+  authBooting.value = true
   api.defaults.headers.common['Authorization'] = `Bearer ${store.token}`
-  // Always land on the home / new-chat view after a fresh login —
-  // the previous user's URL must not leak through. We deliberately do NOT
-  // auto-switch to the latest existing session here: that would push
-  // /c/{id} and override the "/" we just set. The sidebar still shows
-  // every previous session so the user can pick one explicitly.
-  showingIntegrations.value = false
-  integrationsFocusType.value = null
-  activeModule.value = null
-  pushRouteIfChanged('/')
-  await loadSessions()
-  await startNewChat()
-  start()
+  try {
+    await handleAuthenticatedEntry({
+      route: {
+        module: null,
+        integrations: false,
+        sessionId: null,
+        isNewChat: true,
+        onboardingRoute: null,
+        isWorkspaceBriefingHome: true,
+      },
+      preserveExplicitPath: false,
+      preferWorkspaceBriefing: payload?.redirectTo === WORKSPACE_BRIEFING_PATH,
+    })
+  } catch {
+    logout()
+  } finally {
+    authBooting.value = false
+  }
 }
 
 function logout() {
   stop()
   clearAuth()
   delete api.defaults.headers.common['Authorization']
-  showingIntegrations.value = false
-  integrationsFocusType.value = null
-  activeModule.value = null
+  authBooting.value = false
+  resetSurfaceState()
   pushRouteIfChanged('/')
 }
 
@@ -480,6 +685,7 @@ async function switchSession(sessionId) {
 async function onNewChatRequested() {
   activeModule.value = null
   showingIntegrations.value = false
+  activeOnboardingRoute.value = null
   setMode('chat')
   store.webMode = false
   // Push "/" first so the URL reflects the home/new-chat view immediately,
@@ -599,26 +805,150 @@ async function exportChatPDF() {
   }).from(content).save()
 }
 
-function onOnboardingCommand(command) {
-  // Close any open modules, go to chat
-  activeModule.value = null
-  showingIntegrations.value = false
+async function onOnboardingStepComplete(status = null) {
+  const nextStatus = status?.nextStep ? status : await refreshOnboardingStatus()
 
-  // Wait for next tick then fire the command in agent mode
-  nextTick(() => {
-    inputAreaRef.value?.setMode?.('agent')
-    inputAreaRef.value?.setTextAndSend?.(command)
-      // Fallback if setTextAndSend not available — just prefill
-      || (inputAreaRef.value?.setText?.(command))
+  if (nextStatus?.user) {
+    setUser(nextStatus.user)
+  }
+
+  if (nextStatus?.nextStep === 'connect_apps') {
+    openOnboardingRoute('connect-apps')
+    return
+  }
+
+  if (nextStatus?.nextStep === 'syncing') {
+    openOnboardingRoute('syncing')
+    return
+  }
+
+  await enterMainApp({
+    module: null,
+    integrations: false,
+    sessionId: null,
+    isNewChat: true,
+    onboardingRoute: null,
+    isWorkspaceBriefingHome: true,
   })
 }
-
-// function showOnboarding() {
-//   onboardingRef.value?.show()
-// }
 </script>
 
 <style>
+.app-auth-loading {
+  min-height: 100vh;
+  min-height: 100svh;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at top, rgba(82, 212, 255, 0.14), transparent 34%),
+    linear-gradient(180deg, #040713 0%, #050816 48%, #070d1c 100%);
+}
+
+.app-auth-loading__glow,
+.app-auth-loading__grid {
+  position: absolute;
+  pointer-events: none;
+}
+
+.app-auth-loading__glow {
+  width: 40rem;
+  height: 40rem;
+  border-radius: 999px;
+  filter: blur(96px);
+  opacity: 0.3;
+}
+
+.app-auth-loading__glow--cyan {
+  top: -12rem;
+  right: 12%;
+  background: radial-gradient(circle, rgba(82, 212, 255, 0.28) 0%, rgba(82, 212, 255, 0.08) 38%, transparent 72%);
+}
+
+.app-auth-loading__glow--violet {
+  bottom: -16rem;
+  left: 12%;
+  background: radial-gradient(circle, rgba(139, 125, 255, 0.26) 0%, rgba(139, 125, 255, 0.08) 34%, transparent 72%);
+}
+
+.app-auth-loading__grid {
+  inset: 0;
+  background:
+    linear-gradient(rgba(127, 146, 194, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(127, 146, 194, 0.08) 1px, transparent 1px);
+  background-size: 42px 42px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.9), transparent 100%);
+  opacity: 0.24;
+}
+
+.app-auth-loading__card {
+  position: relative;
+  z-index: 1;
+  width: min(480px, 100%);
+  padding: 40px 34px;
+  border-radius: 30px;
+  border: 1px solid rgba(137, 157, 213, 0.18);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
+    rgba(9, 14, 30, 0.88);
+  box-shadow: 0 30px 80px rgba(2, 6, 23, 0.42);
+  backdrop-filter: blur(28px);
+  text-align: center;
+}
+
+.app-auth-loading__logo {
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 18px;
+  border-radius: 24px;
+  display: grid;
+  place-items: center;
+  font-size: 34px;
+  background:
+    radial-gradient(circle at 40% 35%, rgba(210, 234, 255, 0.96), rgba(196, 201, 255, 0.78) 28%, rgba(111, 142, 255, 0.16) 32%, transparent 56%),
+    linear-gradient(180deg, rgba(62, 129, 255, 0.22), rgba(85, 104, 255, 0.1)),
+    rgba(24, 36, 72, 0.92);
+  border: 1px solid rgba(93, 139, 255, 0.24);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 20px 34px rgba(44, 90, 255, 0.16);
+}
+
+.app-auth-loading__card h1 {
+  margin: 0;
+  color: #f8fbff;
+  font-size: clamp(28px, 4vw, 38px);
+  line-height: 1.05;
+}
+
+.app-auth-loading__card p {
+  margin: 14px auto 0;
+  max-width: 32ch;
+  color: rgba(207, 217, 238, 0.76);
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.app-auth-loading__spinner {
+  width: 34px;
+  height: 34px;
+  margin-top: 22px;
+  border-radius: 999px;
+  border: 2px solid rgba(168, 190, 255, 0.16);
+  border-top-color: rgba(108, 210, 255, 0.92);
+  display: inline-block;
+  animation: app-auth-spin 0.85s linear infinite;
+}
+
+@keyframes app-auth-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .app {
   display: flex;
   height: 100vh;
