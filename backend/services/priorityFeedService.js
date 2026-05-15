@@ -47,6 +47,8 @@ const APP_META = {
   whatsapp: { label: "WhatsApp", icon: "🟢", module: "whatsapp" },
   jira: { label: "Jira", icon: "🔷", module: "jira" },
   google_calendar: { label: "Calendar", icon: "📅", module: "google_calendar" },
+  google_docs: { label: "Google Docs", icon: "📄", module: "google_docs" },
+  google_sheets: { label: "Google Sheets", icon: "📊", module: "google_sheets" },
   database: { label: "Database", icon: "🗄️", module: "database" },
 };
 
@@ -219,9 +221,20 @@ function getPriorityItemConversationKey(item = {}) {
 }
 
 function resolveCommunicationFallbackSources(communicationResult = null) {
+  // A source only counts as "covered" if the engine produced at least one
+  // actionable item for it — i.e. a state that buildCommunicationPriorityItems
+  // would actually render. If everything came back as NO_ACTION_NEEDED or
+  // RESOLVED, the engine effectively returned nothing for that app, so we
+  // still want the fallback chips (most visible symptom: WhatsApp chats with
+  // unread messages classified as "no action" never reached the feed).
   const coveredSources = new Set(
     Array.isArray(communicationResult?.allStates)
       ? communicationResult.allStates
+          .filter(
+            (state) =>
+              state?.actionState !== ACTION_STATES.NO_ACTION_NEEDED &&
+              state?.actionState !== ACTION_STATES.RESOLVED
+          )
           .map((state) => String(state?.sourceType || "").trim())
           .filter(Boolean)
       : []
@@ -359,6 +372,21 @@ function getPriorityItemActivityTime(item = {}) {
 
 function sortByLatestActivity(items = []) {
   return [...items].sort((a, b) => {
+    // Meetings should always be ordered by the nearest start time first.
+    // Without this clause, sorting by "latest activity" puts the furthest
+    // future meeting on top because its startsAt is the largest timestamp.
+    if (a.category === "meetings" && b.category === "meetings") {
+      const aStart = new Date(a.meta?.startsAt || 0).getTime();
+      const bStart = new Date(b.meta?.startsAt || 0).getTime();
+      if (
+        Number.isFinite(aStart) &&
+        Number.isFinite(bStart) &&
+        aStart !== bStart
+      ) {
+        return aStart - bStart;
+      }
+    }
+
     const activityDelta =
       getPriorityItemActivityTime(b) - getPriorityItemActivityTime(a);
     if (activityDelta !== 0) return activityDelta;
@@ -372,10 +400,19 @@ function sortByLatestActivity(items = []) {
 }
 
 function countItemsForFilter(items = [], filterId = "all", communicationSummary = null) {
-  if (filterId === "all") return items.length;
+  // Jira tasks have their own dedicated "Tasks" filter — keep the "All" view
+  // focused on communications / meetings / approvals so it stays scannable.
+  if (filterId === "all") {
+    return items.filter((item) => item.category !== "tasks").length;
+  }
   if (filterId === "urgent") {
+    // Jira tickets live under the dedicated "Tasks" filter even when their
+    // priority is High, so they should not double-count here.
     return items.filter(
-      (item) => item.priority === "High" && item.category !== "meetings"
+      (item) =>
+        item.priority === "High" &&
+        item.category !== "meetings" &&
+        item.category !== "tasks"
     ).length;
   }
   if (filterId === "communication") {
@@ -458,6 +495,14 @@ function buildAppShortcutAction(type) {
     return createModuleAction("Open Calendar", "google_calendar", {
       focus: "today",
     });
+  }
+
+  if (type === "google_docs") {
+    return createModuleAction("Open Google Docs", "google_docs");
+  }
+
+  if (type === "google_sheets") {
+    return createModuleAction("Open Google Sheets", "google_sheets");
   }
 
   if (type === "database") {
@@ -668,8 +713,9 @@ function mapCalendarEventToPriorityItem(event) {
 }
 
 async function buildJiraWorkspaceSignals(userId) {
-  const [myTicketsResult, overdueResult] = await Promise.allSettled([
-    toolGetMyTickets({ maxResults: 100 }, { userId }),
+  const [myTicketsResult, myOverdueTicketsResult, overdueResult] = await Promise.allSettled([
+    toolGetMyTickets({ maxResults: 100, allProjects: true }, { userId }),
+    toolGetMyTickets({ maxResults: 100, allProjects: true, overdueOnly: true }, { userId }),
     toolGetOverdueTickets({}, { userId }),
   ]);
 
@@ -681,6 +727,16 @@ async function buildJiraWorkspaceSignals(userId) {
     myTicketsResult.status === "fulfilled" && myTicketsResult.value?.success !== false
       ? Number(myTicketsResult.value?.count || myTickets.length)
       : myTickets.length;
+  const myOverdueTickets =
+    myOverdueTicketsResult.status === "fulfilled" &&
+    myOverdueTicketsResult.value?.success !== false
+      ? myOverdueTicketsResult.value?.tickets || []
+      : [];
+  const resolvedMyOverdueCount =
+    myOverdueTicketsResult.status === "fulfilled" &&
+    myOverdueTicketsResult.value?.success !== false
+      ? Number(myOverdueTicketsResult.value?.count || myOverdueTickets.length)
+      : null;
   const overdueInfo =
     overdueResult.status === "fulfilled" ? overdueResult.value || null : null;
 
@@ -696,7 +752,7 @@ async function buildJiraWorkspaceSignals(userId) {
   }
 
   upsertTickets(myTickets, { assignedToMe: true });
-  upsertTickets(overdueInfo?.myTickets || [], { assignedToMe: true, overdue: true });
+  upsertTickets(myOverdueTickets, { assignedToMe: true, overdue: true });
   upsertTickets(
     myTickets.filter((ticket) => isHighPriority(ticket.priority)),
     { assignedToMe: true, highPriority: true }
@@ -723,7 +779,8 @@ async function buildJiraWorkspaceSignals(userId) {
     insight: overdueInfo
       ? {
           myTotalCount,
-          myOverdueCount: overdueInfo.myCount || 0,
+          myOverdueCount:
+            resolvedMyOverdueCount ?? overdueInfo.myCount ?? 0,
           orgOverdueCount: overdueInfo.count || 0,
           blockedOverdueCount,
           highPriorityOverdueCount,
@@ -751,7 +808,9 @@ function mapJiraTicketToPriorityItem(ticket) {
   if (highPriority) score += 16;
   score = clamp(score, 0, 99);
 
-  const priority = toPriorityLevel(score);
+  // Honor the source Jira priority for the visible badge even when the
+  // computed score lands below the High threshold.
+  const priority = highPriority ? "High" : toPriorityLevel(score);
   const reasons = [];
   reasons.push("assigned to you");
   if (overdue) reasons.push(`${ticket.daysOverdue || 1}d overdue`);

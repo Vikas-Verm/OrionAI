@@ -18,6 +18,11 @@ export const authAPI = {
   me: () => api.get("/auth/me"),
 };
 
+export const onboardingAPI = {
+  status: () => api.get("/api/onboarding/status"),
+  update: (data) => api.patch("/api/onboarding", data),
+};
+
 // ── Sessions ──────────────────────────────────────────────
 export const sessionsAPI = {
   list: (search) => api.get("/sessions", { params: { search } }),

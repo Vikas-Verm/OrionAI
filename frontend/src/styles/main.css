@@ -308,12 +308,7 @@ body::before {
 }
 
 body::after {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 18%),
-    linear-gradient(rgba(176, 201, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(176, 201, 255, 0.03) 1px, transparent 1px);
-  background-size: auto, 72px 72px, 72px 72px;
-  mask-image: radial-gradient(circle at center, black 42%, transparent 86%);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 18%);
   z-index: 0;
   opacity: 0.55;
 }
@@ -609,13 +604,7 @@ body::after {
 .chat-pane::before {
   content: '';
   position: absolute; inset: 0;
-  background-image:
-    linear-gradient(rgba(176, 201, 255, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(176, 201, 255, 0.025) 1px, transparent 1px);
-  background-size: 72px 72px;
-  opacity: 0.6;
   pointer-events: none; z-index: 0;
-  mask-image: radial-gradient(ellipse 86% 86% at 50% 50%, black, transparent);
 }
    
    .main::before { display: none; }
@@ -717,7 +706,7 @@ body::after {
   min-height: 100%;
   width: 100%;
   align-self: stretch;
-  padding: 8px 28px 36px;
+  padding: 8px 28px 152px;
   box-sizing: border-box;
   background: transparent;
 }

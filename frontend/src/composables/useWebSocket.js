@@ -220,6 +220,7 @@ const PRIORITY_COLOR = {
 let ws = null;
 let reconnectTimer = null;
 let pingInterval = null;
+let unreadSyncTimer = null;
 let isStarted = false;
 let activeUserKey = null;
 let refreshListenerAttached = false;
@@ -413,6 +414,7 @@ export function useWebSocket() {
         ? currentEntry.seenItemIds
         : [];
       const itemBasedApp = supportsItemBasedDisplayCount({ app: normalizedApp });
+      const countIncrease = !isFirst && Math.max((Number(count) || 0) - previousRawCount, 0);
       const detectedNewCount =
         itemBasedApp &&
         !isFirst &&
@@ -420,10 +422,10 @@ export function useWebSocket() {
           ? countNewItemFingerprints(previousItems, items || [], previousSeenItemIds)
           : 0;
       const effectiveIsNew = itemBasedApp
-        ? detectedNewCount > 0
-        : Boolean(isNew || detectedNewCount > 0);
+        ? Boolean(isNew || detectedNewCount > 0 || countIncrease > 0)
+        : Boolean(isNew || detectedNewCount > 0 || countIncrease > 0);
       const effectiveNewCount = effectiveIsNew
-        ? Math.max(Number(newCount || 0) || 0, detectedNewCount)
+        ? Math.max(Number(newCount || 0) || 0, detectedNewCount, countIncrease)
         : 0;
 
       // Always update the live backend count (used for connected app state)
@@ -561,6 +563,28 @@ export function useWebSocket() {
     }
 
     persistState();
+  }
+
+  async function refreshUnreadState({ isFirst = false } = {}) {
+    const { data } = await api.get("/api/notifications/unread", {
+      params: { _: Date.now() },
+      headers: { "Cache-Control": "no-cache" },
+    });
+
+    const updates = Object.entries(data.apps || {}).map(([appKey, appData]) => ({
+      app: appKey,
+      count: Number(appData?.count || 0) || 0,
+      items: Array.isArray(appData?.previews) ? appData.previews : [],
+      summary: appData?.summary || null,
+      ai: null,
+      isNew: false,
+      newCount: 0,
+      highSignalCount: 0,
+      isFirst,
+    }));
+
+    processUpdates(updates);
+    return data;
   }
 
   function acknowledgeConversation(appKey, detail = {}) {
@@ -768,33 +792,17 @@ export function useWebSocket() {
 
     // REST call for immediate badge population on page load
     try {
-      const { data } = await api.get("/api/notifications/unread", {
-        params: { _: Date.now() },
-        headers: { "Cache-Control": "no-cache" },
-      });
-      for (const [appKey, appData] of Object.entries(data.apps || {})) {
-        const existing = state.unreadByApp[appKey] || {};
-        state.unreadByApp[appKey] = {
-          app: appKey,
-          rawCount: appData?.count || 0,
-          count: appData?.count || 0,
-          displayCount: 0,
-          seenCount: Number(existing.seenCount || 0) || 0,
-          seenItemIds: Array.isArray(existing.seenItemIds)
-            ? existing.seenItemIds
-            : [],
-          items: appData.previews || [],
-          summary: appData.summary || null,
-          ai: null,
-        };
-        state.unreadByApp[appKey].displayCount = computeDisplayCount(
-          state.unreadByApp[appKey]
-        );
-      }
-      persistState();
+      await refreshUnreadState({ isFirst: true });
     } catch {
       console.error("Failed to fetch initial unread counts");
     }
+
+    if (unreadSyncTimer) {
+      clearInterval(unreadSyncTimer);
+    }
+    unreadSyncTimer = setInterval(() => {
+      refreshUnreadState().catch(() => {});
+    }, 30000);
 
     if (!refreshListenerAttached) {
       document.addEventListener(
@@ -811,7 +819,9 @@ export function useWebSocket() {
     isStarted = false;
     activeUserKey = null;
     clearInterval(pingInterval);
+    clearInterval(unreadSyncTimer);
     clearTimeout(reconnectTimer);
+    unreadSyncTimer = null;
     ws?.close();
     ws = null;
     pendingCbs.clear();
@@ -848,6 +858,7 @@ export function useWebSocket() {
     sendSlack,
     markSeen,
     acknowledgeConversation,
+    refreshUnreadState,
     dismissToast,
     markRead,
     dismissNotification,

@@ -1555,6 +1555,47 @@ const dlgSubtitle = computed(() => {
   return username ? '@' + username : ''
 })
 
+function telegramReplyPreviewText(message) {
+  const text = String(message?.text || '').trim()
+  if (text) return text
+
+  const mediaType = String(message?.media?.type || '').trim().toLowerCase()
+  if (!mediaType) return null
+
+  if (mediaType === 'photo') return '📷 Photo'
+  if (mediaType === 'video') return '🎬 Video'
+  if (mediaType === 'voice') return '🎤 Voice message'
+  if (mediaType === 'audio') return '🎵 Audio'
+  if (mediaType === 'document') return `📎 ${message?.media?.fileName || 'Document'}`
+  if (mediaType === 'gif') return '🖼️ GIF'
+  if (mediaType === 'sticker') return '🎭 Sticker'
+  if (mediaType === 'location') return '📍 Location'
+  if (mediaType === 'contact') return '👤 Contact'
+  if (mediaType === 'poll') return `📊 ${message?.media?.question || 'Poll'}`
+  if (mediaType === 'webpage') return `🔗 ${message?.media?.title || message?.media?.url || 'Link'}`
+  return '📎 Attachment'
+}
+
+function hydrateTelegramReplyMetadata(messages = []) {
+  const byId = new Map(
+    (Array.isArray(messages) ? messages : [])
+      .filter((message) => message?.id !== undefined && message?.id !== null)
+      .map((message) => [String(message.id), message])
+  )
+
+  return (Array.isArray(messages) ? messages : []).map((message) => {
+    if (!message?.replyTo || (message.replyToName && message.replyToText)) return message
+    const replyTarget = byId.get(String(message.replyTo))
+    if (!replyTarget) return message
+
+    return {
+      ...message,
+      replyToName: message.replyToName || (replyTarget.fromMe ? 'You' : (replyTarget.fromName || 'Message')),
+      replyToText: message.replyToText || telegramReplyPreviewText(replyTarget),
+    }
+  })
+}
+
 // ── Messages ───────────────────────────────────────────────────────────
 async function selectDlg(d) {
   selDlg.value = d; msgs.value = []; canMore.value = false
@@ -1587,7 +1628,8 @@ async function loadMsgsReturn(dlg, unreadCount = 0) {
   msgsLoading.value = true; msgs.value = []
   try {
     const r = await api.get(`/api/telegram/dialogs/${encodeURIComponent(dlg.id)}/messages?limit=50`)
-    msgs.value = r.data.messages; canMore.value = r.data.messages.length >= 50
+    const nextMessages = hydrateTelegramReplyMetadata(r.data.messages || [])
+    msgs.value = nextMessages; canMore.value = nextMessages.length >= 50
     // Mark unread divider position
     if (unreadCount > 0 && msgs.value.length > unreadCount) {
       unreadStartIdx.value = msgs.value.length - unreadCount
@@ -1605,7 +1647,8 @@ async function loadMsgs(dlg, refresh = false) {
   msgsLoading.value = true; if (refresh) msgs.value = []
   try {
     const r = await api.get(`/api/telegram/dialogs/${encodeURIComponent(dlg.id)}/messages?limit=50`)
-    msgs.value = r.data.messages; canMore.value = r.data.messages.length >= 50
+    const nextMessages = hydrateTelegramReplyMetadata(r.data.messages || [])
+    msgs.value = nextMessages; canMore.value = nextMessages.length >= 50
     if (dlg.type !== 'user') {
       const ids = [...new Set(r.data.messages.filter(m => !m.fromMe && m.fromId).map(m => m.fromId))]
       ids.forEach(id => loadPhoto(id))
@@ -1640,7 +1683,7 @@ async function loadMore() {
   loadingMore.value = true
   try {
     const r = await api.get(`/api/telegram/dialogs/${encodeURIComponent(selDlg.value.id)}/messages?limit=50&offsetId=${msgs.value[0]?.id || 0}`)
-    msgs.value = [...r.data.messages, ...msgs.value]; canMore.value = r.data.messages.length >= 50
+    msgs.value = hydrateTelegramReplyMetadata([...(r.data.messages || []), ...msgs.value]); canMore.value = (r.data.messages || []).length >= 50
     await nextTick(); if (msgsEl.value) msgsEl.value.scrollTop = 220
   } catch (err) {
     console.debug('Failed to load older Telegram messages:', err?.message || err)

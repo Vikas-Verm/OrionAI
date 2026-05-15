@@ -37,19 +37,34 @@
       </div>
 
       <div class="priority-card-headline">
-        <h4>{{ item.title }}</h4>
+        <div class="priority-card-headline-main">
+          <h4>{{ item.title }}</h4>
+          <span v-if="collapsedTimeLabel" class="priority-card-time">{{ collapsedTimeLabel }}</span>
+        </div>
+        <p v-if="conversationMetaLabel" class="priority-card-context">
+          {{ conversationMetaLabel }}
+        </p>
       </div>
 
       <p v-if="!expanded && collapsedPreviewText" class="priority-collapsed-preview">
         {{ collapsedPreviewText }}
       </p>
+
+      <div v-if="!expanded && collapsedCountLabel" class="priority-collapsed-footer">
+        <span class="priority-collapsed-count">{{ collapsedCountLabel }}</span>
+      </div>
     </div>
 
     <Transition name="priority-expand">
       <div v-if="expanded" class="priority-card-body">
         <div v-if="showMessagePreview" class="priority-message-stack">
           <div class="priority-message-stack-head">
-            <span class="priority-message-label">Latest message</span>
+            <div class="priority-message-stack-summary">
+              <span class="priority-message-label">Latest message</span>
+              <span v-if="messageCountLabel" class="priority-message-count">
+                {{ messageCountLabel }}
+              </span>
+            </div>
             <button
               v-if="hasAdditionalPreviewMessages"
               class="priority-message-toggle"
@@ -60,17 +75,36 @@
           </div>
 
           <div v-if="showAllChatMessages" class="priority-message-list">
-            <p
-              v-for="(message, index) in previewMessages"
-              :key="`${item.id}-message-${index}`"
-              class="priority-message-line"
-              :class="{ latest: index === previewMessages.length - 1 }"
+            <article
+              v-for="(message, index) in expandedMessages"
+              :key="message.id || `${item.id}-message-${index}`"
+              class="priority-message-card"
+              :class="{
+                latest: index === expandedMessages.length - 1,
+                outbound: message.direction === 'outbound',
+              }"
             >
-              {{ message }}
-            </p>
+              <div class="priority-message-meta-line">
+                <span class="priority-message-sender">{{ messageSenderLabel(message) }}</span>
+                <span v-if="messageTimeLabel(message)" class="priority-message-time">
+                  {{ messageTimeLabel(message) }}
+                </span>
+              </div>
+              <p class="priority-message-line">{{ message.text }}</p>
+            </article>
           </div>
 
-          <p v-else class="priority-message-preview">{{ primaryPreviewMessage }}</p>
+          <article v-else class="priority-message-card priority-message-card--single latest">
+            <div class="priority-message-meta-line">
+              <span class="priority-message-sender">
+                {{ messageSenderLabel(primaryPreviewMessage) }}
+              </span>
+              <span v-if="messageTimeLabel(primaryPreviewMessage)" class="priority-message-time">
+                {{ messageTimeLabel(primaryPreviewMessage) }}
+              </span>
+            </div>
+            <p class="priority-message-preview">{{ primaryPreviewMessage?.text }}</p>
+          </article>
 
           <div v-if="showReplyComposer" class="priority-reply-composer priority-reply-composer-inline" @click.stop>
             <span class="priority-next-label">{{ replyPanelLabel }}</span>
@@ -100,71 +134,61 @@
                 @keydown.shift.enter.prevent="replyText += '\n'"
               />
 
-              <button
-                class="priority-reply-send"
-                type="button"
-                :disabled="busy || replySending || !replyText.trim()"
-                title="Send reply"
-                aria-label="Send reply"
-                @click.stop="sendInlineReply"
-              >
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M22 2L11 13" />
-                  <path d="M22 2L15 22l-4-9-9-4 20-7Z" />
-                </svg>
-              </button>
             </div>
 
             <p v-if="replyStatusText && !replyError" class="priority-reply-meta">{{ replyStatusText }}</p>
             <p v-if="replyError" class="priority-reply-error">{{ replyError }}</p>
+
+            <div class="priority-reply-footer">
+              <button
+                class="priority-message-action priority-message-action--subtle"
+                type="button"
+                :disabled="busy || replySending"
+                @click.stop="closeReplyComposer"
+              >
+                Cancel
+              </button>
+              <button
+                class="priority-message-action"
+                type="button"
+                :disabled="busy || replySending || !replyText.trim()"
+                @click.stop="sendInlineReply"
+              >
+                {{ replySending ? 'Sending...' : 'Send reply' }}
+              </button>
+            </div>
           </div>
 
-          <div v-if="showMessageActionIcons" class="priority-message-actions">
+          <div v-if="showMessageActionRow" class="priority-message-actions">
             <button
               v-if="supportsInlineReply"
-              class="priority-message-icon-action"
+              class="priority-message-action"
               :class="{ active: showReplyComposer }"
               :disabled="busy || replySending"
               type="button"
-              title="Reply"
-              data-tooltip="Reply"
               @click.stop="toggleReplyComposer"
             >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-                <path d="M10 9L5 12l5 3" />
-                <path d="M5 12h8a6 6 0 0 1 6 6v1" />
-              </svg>
+              {{ showReplyComposer ? 'Close reply' : 'Reply' }}
             </button>
 
             <button
               v-if="supportsInlineReply"
-              class="priority-message-icon-action"
+              class="priority-message-action priority-message-action--subtle"
               :disabled="busy || replyDrafting || replySending"
               type="button"
-              title="Agent Reply"
-              data-tooltip="Agent Reply"
               @click.stop="draftAgentReply"
             >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-                <path d="M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8L12 3Z" />
-                <path d="M19 15l.8 1.9L22 17.7l-2.2.8L19 20.5l-.8-2-2.2-.8 2.2-.8.8-1.9Z" />
-              </svg>
+              {{ replyDrafting ? 'Drafting...' : 'Agent reply' }}
             </button>
 
             <button
               v-if="showOpenConversationAction"
-              class="priority-message-icon-action"
+              class="priority-message-action priority-message-action--subtle"
               :disabled="busy || replySending"
               type="button"
-              :title="openConversationLabel"
-              :data-tooltip="openConversationLabel"
               @click.stop="emit('run-secondary-action', item)"
             >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-                <path d="M14 5h5v5" />
-                <path d="M10 14L19 5" />
-                <path d="M19 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5" />
-              </svg>
+              {{ openConversationShortLabel }}
             </button>
           </div>
         </div>
@@ -266,7 +290,6 @@ const showAllChatMessages = ref(false)
 const nowTick = ref(Date.now())
 let relativeTimer = null
 
-const CHAT_SOURCE_APPS = new Set(['slack', 'telegram', 'signal', 'whatsapp'])
 const INLINE_REPLY_SOURCE_APPS = new Set(['gmail', 'slack', 'telegram', 'signal', 'whatsapp'])
 
 const snoozeOptions = [
@@ -347,41 +370,110 @@ const replyDrafting = ref(false)
 const replySending = ref(false)
 const replyError = ref('')
 const approvalSuggestionLoaded = ref(false)
-const isChatSource = computed(() =>
-  CHAT_SOURCE_APPS.has(sourceApp.value)
+const participantLabel = computed(() =>
+  String(props.item?.meta?.participantLabel || '').trim()
+)
+const messageFallbackSender = computed(() =>
+  participantLabel.value ||
+  String(props.item?.title || props.item?.sourceLabel || 'Contact').trim()
+)
+const recentMessages = computed(() =>
+  normalizePreviewMessages(
+    Array.isArray(props.item?.meta?.recentMessages) ? props.item.meta.recentMessages : [],
+    messageFallbackSender.value
+  )
+)
+const recentInboundMessages = computed(() =>
+  recentMessages.value.filter((message) => message.direction === 'inbound')
 )
 const previewMessages = computed(() => {
   const latestPreviewText = String(props.item?.meta?.previewText || '').trim()
+  const latestInboundMessages = normalizePreviewMessages(
+    Array.isArray(props.item?.meta?.latestInboundBurst) ? props.item.meta.latestInboundBurst : [],
+    messageFallbackSender.value
+  )
 
-  if (!isChatSource.value) {
-    return latestPreviewText ? [latestPreviewText] : []
+  if (latestInboundMessages.length) {
+    return latestInboundMessages
   }
 
-  return Array.isArray(props.item?.meta?.latestInboundBurst)
-    ? props.item.meta.latestInboundBurst
-        .map((message) => String(message?.text || '').trim())
-        .filter(Boolean)
+  if (recentInboundMessages.value.length) {
+    return recentInboundMessages.value.slice(-4)
+  }
+
+  if (recentMessages.value.length) {
+    return recentMessages.value
+  }
+
+  return latestPreviewText
+    ? normalizePreviewMessages(
+        [{
+          text: latestPreviewText,
+          direction: 'inbound',
+          timestamp: liveMessageTimestamp.value,
+          senderName: messageFallbackSender.value,
+        }],
+        messageFallbackSender.value
+      )
     : []
+})
+const expandedMessages = computed(() => {
+  if (recentMessages.value.length > 1) {
+    return recentMessages.value
+  }
+  return previewMessages.value
 })
 const primaryPreviewMessage = computed(() => {
   const messages = previewMessages.value
-  return messages[messages.length - 1] || ''
+  return messages[messages.length - 1] || null
 })
 const collapsedPreviewText = computed(() =>
-  primaryPreviewMessage.value ||
+  primaryPreviewMessage.value?.text ||
+  String(props.item?.meta?.previewText || '').trim() ||
   String(props.item?.reason || '').trim() ||
   String(props.item?.suggestedNextAction || '').trim() ||
   String(props.item?.whyThisMatters || '').trim()
 )
 const hasAdditionalPreviewMessages = computed(() =>
-  previewMessages.value.length > 1
+  expandedMessages.value.length > 1
 )
 const moreMessagesLabel = computed(() => {
-  const extraCount = Math.max(previewMessages.value.length - 1, 0)
-  return `${extraCount} more message${extraCount === 1 ? '' : 's'}`
+  const extraCount = Math.max(expandedMessages.value.length - 1, 0)
+  if (!extraCount) return ''
+  return previewMessages.value.length > 1
+    ? `View ${extraCount} other new message${extraCount === 1 ? '' : 's'}`
+    : `View ${extraCount} recent message${extraCount === 1 ? '' : 's'}`
 })
 const showMessagePreview = computed(() =>
-  Boolean(primaryPreviewMessage.value) && (isChatSource.value || supportsInlineReply.value)
+  props.item?.category === 'communication' && Boolean(primaryPreviewMessage.value?.text)
+)
+const collapsedSenderLabel = computed(() => {
+  const sender = String(primaryPreviewMessage.value?.senderName || participantLabel.value || '').trim()
+  const title = String(props.item?.title || '').trim().toLowerCase()
+  if (!sender || sender.toLowerCase() === title) return ''
+  return sender
+})
+const collapsedTimeLabel = computed(() =>
+  formatMessageTimestamp(primaryPreviewMessage.value?.timestamp) || liveAgeLabel.value
+)
+const conversationMetaLabel = computed(() => collapsedSenderLabel.value)
+const totalVisibleMessageCount = computed(() => {
+  const unreadBurstCount = Number(props.item?.meta?.latestInboundBurstCount || 0)
+  if (unreadBurstCount > 0) return unreadBurstCount
+  if (expandedMessages.value.length > 0) return expandedMessages.value.length
+  return previewMessages.value.length
+})
+const collapsedCountLabel = computed(() => {
+  if (unreadCount.value > 0) {
+    return unreadCount.value === 1 ? '1 new' : `${unreadCount.value} unread`
+  }
+  if (totalVisibleMessageCount.value > 1) {
+    return `${totalVisibleMessageCount.value} messages`
+  }
+  return ''
+})
+const messageCountLabel = computed(() =>
+  collapsedCountLabel.value || (primaryPreviewMessage.value?.text ? 'Latest update' : '')
 )
 const gmailReplySupported = computed(() =>
   sourceApp.value === 'gmail' &&
@@ -425,7 +517,7 @@ const showMeetingPrimaryAction = computed(() =>
 const showOpenConversationAction = computed(() =>
   Boolean(props.item?.secondaryAction) && (supportsInlineReply.value || showMessagePreview.value)
 )
-const showMessageActionIcons = computed(() =>
+const showMessageActionRow = computed(() =>
   showMessagePreview.value && (supportsInlineReply.value || showOpenConversationAction.value)
 )
 const showExternalActionRow = computed(() =>
@@ -436,6 +528,9 @@ const showExpandedPanelActions = computed(() =>
 )
 const openConversationLabel = computed(() =>
   props.item?.secondaryAction?.label || 'Open Conversation'
+)
+const openConversationShortLabel = computed(() =>
+  showOpenConversationAction.value ? 'Open' : openConversationLabel.value
 )
 const replyPlaceholder = computed(() => {
   if (sourceApp.value === 'gmail') return 'Write your email reply...'
@@ -535,6 +630,73 @@ function applyLiveAgeToWhy(text, liveAge) {
     .replace(/\bis\s+less than an hour old\b/i, liveAge === 'just now' ? 'is only moments old' : `is ${liveAge.replace(/ ago$/, '')} old`)
     .replace(/\bis\s+\d+\s+hours?\s+old\b/i, liveAge === 'just now' ? 'is only moments old' : `is ${liveAge.replace(/ ago$/, '')} old`)
     .replace(/\bis\s+\d+\s+days?\s+old\b/i, liveAge === 'just now' ? 'is only moments old' : `is ${liveAge.replace(/ ago$/, '')} old`)
+}
+
+function normalizePreviewText(message = {}) {
+  const directText = String(message?.text || '').trim()
+  if (directText) return directText
+
+  const previewText = String(message?.previewText || '').trim()
+  if (previewText) return previewText
+
+  if (message?.hasAttachments) return 'Attachment'
+  return ''
+}
+
+function normalizePreviewMessages(messages = [], fallbackSender = '') {
+  return messages
+    .map((message) => {
+      const text = normalizePreviewText(message)
+      if (!text) return null
+
+      const direction = String(message?.direction || 'unknown').toLowerCase()
+      return {
+        id: message?.id ?? null,
+        text,
+        timestamp: message?.timestamp || null,
+        direction,
+        senderName:
+          String(message?.senderName || '').trim() ||
+          (direction === 'outbound' ? 'You' : fallbackSender),
+        hasAttachments: Boolean(message?.hasAttachments),
+      }
+    })
+    .filter(Boolean)
+}
+
+function formatMessageTimestamp(value) {
+  if (!value) return ''
+  const timestamp = new Date(value)
+  if (Number.isNaN(timestamp.getTime())) return ''
+
+  const now = new Date()
+  const sameDay = timestamp.toDateString() === now.toDateString()
+  if (sameDay) {
+    return timestamp.toLocaleTimeString([], {
+      hour: 'numeric',
+      minute: '2-digit',
+    })
+  }
+
+  const yesterday = new Date(now)
+  yesterday.setDate(now.getDate() - 1)
+  if (timestamp.toDateString() === yesterday.toDateString()) {
+    return 'Yesterday'
+  }
+
+  return timestamp.toLocaleDateString([], {
+    month: 'short',
+    day: 'numeric',
+  })
+}
+
+function messageSenderLabel(message = null) {
+  if (!message) return participantLabel.value || props.item?.sourceLabel || 'Message'
+  return String(message.senderName || '').trim() || participantLabel.value || props.item?.sourceLabel || 'Message'
+}
+
+function messageTimeLabel(message = null) {
+  return formatMessageTimestamp(message?.timestamp)
 }
 
 function toggleSnooze() {
@@ -637,14 +799,14 @@ function joinGoogleMeet() {
 .priority-card {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 18px;
-  border-radius: 24px;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 20px;
   border: 1px solid rgba(176, 201, 255, 0.1);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015)),
     rgba(8, 14, 30, 0.8);
-  box-shadow: 0 28px 64px rgba(2, 6, 23, 0.22);
+  box-shadow: 0 24px 56px rgba(2, 6, 23, 0.22);
   backdrop-filter: blur(20px);
   transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
 }
@@ -720,7 +882,6 @@ function joinGoogleMeet() {
 }
 
 .priority-card-meta,
-.priority-card-headline,
 .priority-controls,
 .priority-panel-actions,
 .priority-snooze-row {
@@ -736,12 +897,12 @@ function joinGoogleMeet() {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 34px;
-  padding: 0 13px;
+  min-height: 28px;
+  padding: 0 10px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
@@ -764,11 +925,11 @@ function joinGoogleMeet() {
 }
 
 .priority-source-icon {
-  width: 34px;
-  min-width: 34px;
+  width: 28px;
+  min-width: 28px;
   padding: 0;
   justify-content: center;
-  font-size: 15px;
+  font-size: 13px;
 }
 
 .priority-source-img {
@@ -798,9 +959,38 @@ function joinGoogleMeet() {
 }
 
 .priority-card-headline h4 {
-  font-size: 18px;
+  font-size: 15px;
   line-height: 1.35;
   color: var(--text-primary);
+  margin: 0;
+}
+
+.priority-card-headline {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+.priority-card-headline-main {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.priority-card-time,
+.priority-card-context {
+  color: rgba(148, 163, 184, 0.82);
+  font-size: 11px;
+}
+
+.priority-card-time {
+  white-space: nowrap;
+}
+
+.priority-card-context {
   margin: 0;
 }
 
@@ -816,12 +1006,29 @@ function joinGoogleMeet() {
   word-break: break-word;
 }
 
+.priority-collapsed-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.priority-collapsed-count {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(82, 212, 255, 0.08);
+  color: rgba(191, 226, 255, 0.92);
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .priority-expand-btn {
-  width: 34px;
-  height: 34px;
+  width: 28px;
+  height: 28px;
   margin-left: auto;
   border: 1px solid rgba(176, 201, 255, 0.12);
-  border-radius: 12px;
+  border-radius: 10px;
   background: rgba(255, 255, 255, 0.045);
   color: rgba(191, 226, 255, 0.82);
   display: inline-flex;
@@ -865,12 +1072,25 @@ function joinGoogleMeet() {
   flex-wrap: wrap;
 }
 
+.priority-message-stack-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .priority-message-label {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: rgba(148, 163, 184, 0.82);
+}
+
+.priority-message-count {
+  color: rgba(191, 226, 255, 0.92);
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .priority-message-toggle {
@@ -910,96 +1130,111 @@ function joinGoogleMeet() {
 .priority-message-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+}
+
+.priority-message-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 11px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(176, 201, 255, 0.08);
+  background: rgba(6, 12, 24, 0.36);
+}
+
+.priority-message-card.latest {
+  border-color: rgba(82, 212, 255, 0.2);
+  background: linear-gradient(180deg, rgba(82, 212, 255, 0.08), rgba(255, 255, 255, 0.03));
+}
+
+.priority-message-card.outbound {
+  border-color: rgba(139, 125, 255, 0.18);
+}
+
+.priority-message-card--single {
+  padding: 12px 13px;
+}
+
+.priority-message-meta-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.priority-message-sender,
+.priority-message-time {
+  font-size: 11px;
+}
+
+.priority-message-sender {
+  color: rgba(191, 226, 255, 0.96);
+  font-weight: 700;
+}
+
+.priority-message-time {
+  color: rgba(148, 163, 184, 0.82);
 }
 
 .priority-message-actions {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 8px;
   margin-top: 2px;
+  flex-wrap: wrap;
 }
 
-.priority-message-icon-action {
-  position: relative;
-  width: 34px;
-  height: 34px;
+.priority-message-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 13px;
   border-radius: 12px;
   border: 1px solid rgba(176, 201, 255, 0.12);
   background: rgba(255, 255, 255, 0.045);
   color: rgba(226, 232, 240, 0.84);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
   cursor: pointer;
   transition: transform 160ms ease, border-color 160ms ease, background 160ms ease, color 160ms ease;
 }
 
-.priority-message-icon-action::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 8px);
-  padding: 6px 9px;
-  border-radius: 999px;
-  border: 1px solid rgba(176, 201, 255, 0.14);
-  background: rgba(9, 16, 34, 0.96);
-  color: rgba(226, 232, 240, 0.84);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-  opacity: 0;
-  transform: translateY(4px);
-  pointer-events: none;
-  transition: opacity 160ms ease, transform 160ms ease;
-}
-
-.priority-message-icon-action:hover:not(:disabled),
-.priority-message-icon-action:focus-visible {
+.priority-message-action:hover:not(:disabled),
+.priority-message-action:focus-visible {
   transform: translateY(-1px);
   border-color: rgba(82, 212, 255, 0.26);
   background: rgba(82, 212, 255, 0.1);
   color: #f8fbff;
 }
 
-.priority-message-icon-action:hover:not(:disabled)::after,
-.priority-message-icon-action:focus-visible::after {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-.priority-message-icon-action.active {
+.priority-message-action.active {
   border-color: rgba(82, 212, 255, 0.28);
   background: linear-gradient(135deg, rgba(82, 212, 255, 0.18), rgba(139, 125, 255, 0.16));
   color: #eef2ff;
 }
 
+.priority-message-action--subtle {
+  color: rgba(191, 226, 255, 0.84);
+}
+
 .priority-message-line {
-  position: relative;
-  padding-left: 12px;
   color: rgba(226, 232, 240, 0.82);
 }
 
-.priority-message-line::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 0.55em;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: rgba(82, 212, 255, 0.72);
-}
-
-.priority-message-line.latest {
+.priority-message-card.latest .priority-message-line {
   color: var(--text-primary);
 }
 
-.priority-message-line.latest::before {
-  background: rgba(82, 212, 255, 0.96);
-  box-shadow: 0 0 0 4px rgba(82, 212, 255, 0.12);
+.priority-reply-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .priority-why strong {
@@ -1120,8 +1355,7 @@ function joinGoogleMeet() {
   background: linear-gradient(180deg, rgba(16, 24, 43, 0.96), rgba(10, 17, 32, 0.92));
 }
 
-.priority-reply-icon,
-.priority-reply-send {
+.priority-reply-icon {
   width: 34px;
   height: 34px;
   border-radius: 12px;
@@ -1136,25 +1370,12 @@ function joinGoogleMeet() {
   transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
 }
 
-.priority-reply-send {
-  border-color: rgba(82, 212, 255, 0.22);
-  background: linear-gradient(135deg, rgba(82, 212, 255, 0.18), rgba(139, 125, 255, 0.16));
-  color: #eef2ff;
-}
-
 .priority-reply-icon:hover:not(:disabled),
-.priority-reply-send:hover:not(:disabled),
-.priority-reply-icon:focus-visible,
-.priority-reply-send:focus-visible {
+.priority-reply-icon:focus-visible {
   transform: translateY(-1px);
   border-color: rgba(82, 212, 255, 0.28);
   background: rgba(82, 212, 255, 0.1);
   outline: none;
-}
-
-.priority-reply-send:hover:not(:disabled),
-.priority-reply-send:focus-visible {
-  background: linear-gradient(135deg, rgba(82, 212, 255, 0.24), rgba(139, 125, 255, 0.22));
 }
 
 .priority-reply-head {

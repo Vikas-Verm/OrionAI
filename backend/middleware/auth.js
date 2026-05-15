@@ -1,4 +1,3 @@
-const { auth } = require("googleapis/build/src/apis/abusiveexperiencereport");
 const jwt = require("jsonwebtoken");
 
 function authenticate(req, res, next) {
