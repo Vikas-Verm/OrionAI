@@ -47,6 +47,8 @@ const APP_META = {
   whatsapp: { label: "WhatsApp", icon: "🟢", module: "whatsapp" },
   jira: { label: "Jira", icon: "🔷", module: "jira" },
   google_calendar: { label: "Calendar", icon: "📅", module: "google_calendar" },
+  google_docs: { label: "Google Docs", icon: "📄", module: "google_docs" },
+  google_sheets: { label: "Google Sheets", icon: "📊", module: "google_sheets" },
   database: { label: "Database", icon: "🗄️", module: "database" },
 };
 
@@ -460,6 +462,14 @@ function buildAppShortcutAction(type) {
     });
   }
 
+  if (type === "google_docs") {
+    return createModuleAction("Open Google Docs", "google_docs");
+  }
+
+  if (type === "google_sheets") {
+    return createModuleAction("Open Google Sheets", "google_sheets");
+  }
+
   if (type === "database") {
     return createModuleAction("Open Database", "database");
   }
@@ -668,8 +678,9 @@ function mapCalendarEventToPriorityItem(event) {
 }
 
 async function buildJiraWorkspaceSignals(userId) {
-  const [myTicketsResult, overdueResult] = await Promise.allSettled([
-    toolGetMyTickets({ maxResults: 100 }, { userId }),
+  const [myTicketsResult, myOverdueTicketsResult, overdueResult] = await Promise.allSettled([
+    toolGetMyTickets({ maxResults: 100, allProjects: true }, { userId }),
+    toolGetMyTickets({ maxResults: 100, allProjects: true, overdueOnly: true }, { userId }),
     toolGetOverdueTickets({}, { userId }),
   ]);
 
@@ -681,6 +692,16 @@ async function buildJiraWorkspaceSignals(userId) {
     myTicketsResult.status === "fulfilled" && myTicketsResult.value?.success !== false
       ? Number(myTicketsResult.value?.count || myTickets.length)
       : myTickets.length;
+  const myOverdueTickets =
+    myOverdueTicketsResult.status === "fulfilled" &&
+    myOverdueTicketsResult.value?.success !== false
+      ? myOverdueTicketsResult.value?.tickets || []
+      : [];
+  const resolvedMyOverdueCount =
+    myOverdueTicketsResult.status === "fulfilled" &&
+    myOverdueTicketsResult.value?.success !== false
+      ? Number(myOverdueTicketsResult.value?.count || myOverdueTickets.length)
+      : null;
   const overdueInfo =
     overdueResult.status === "fulfilled" ? overdueResult.value || null : null;
 
@@ -696,7 +717,7 @@ async function buildJiraWorkspaceSignals(userId) {
   }
 
   upsertTickets(myTickets, { assignedToMe: true });
-  upsertTickets(overdueInfo?.myTickets || [], { assignedToMe: true, overdue: true });
+  upsertTickets(myOverdueTickets, { assignedToMe: true, overdue: true });
   upsertTickets(
     myTickets.filter((ticket) => isHighPriority(ticket.priority)),
     { assignedToMe: true, highPriority: true }
@@ -723,7 +744,8 @@ async function buildJiraWorkspaceSignals(userId) {
     insight: overdueInfo
       ? {
           myTotalCount,
-          myOverdueCount: overdueInfo.myCount || 0,
+          myOverdueCount:
+            resolvedMyOverdueCount ?? overdueInfo.myCount ?? 0,
           orgOverdueCount: overdueInfo.count || 0,
           blockedOverdueCount,
           highPriorityOverdueCount,

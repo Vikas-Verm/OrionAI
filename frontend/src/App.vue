@@ -408,6 +408,7 @@ const inputAreaRef = ref(null)
 const confirmRef = ref(null)
 let openTelegramListener = null
 let openModuleListener = null
+let openIntegrationsListener = null
 
 function resetSurfaceState() {
   activeOnboardingRoute.value = null
@@ -563,6 +564,11 @@ onMounted(async () => {
   }
   document.addEventListener('orion:open-module', openModuleListener)
 
+  openIntegrationsListener = (e) => {
+    onOpenIntegrations(e.detail?.focusType || null)
+  }
+  document.addEventListener('orion:open-integrations', openIntegrationsListener)
+
   if (store.token) {
     authBooting.value = true
     api.defaults.headers.common['Authorization'] = `Bearer ${store.token}`
@@ -585,6 +591,7 @@ onUnmounted(() => {
   document.removeEventListener('keydown', handleKeyboard)
   if (openTelegramListener) document.removeEventListener('orion:open-telegram', openTelegramListener)
   if (openModuleListener) document.removeEventListener('orion:open-module', openModuleListener)
+  if (openIntegrationsListener) document.removeEventListener('orion:open-integrations', openIntegrationsListener)
   window.removeEventListener('popstate', handlePopState)
   stop()
 })
@@ -875,13 +882,7 @@ async function onOnboardingStepComplete(status = null) {
 }
 
 .app-auth-loading__grid {
-  inset: 0;
-  background:
-    linear-gradient(rgba(127, 146, 194, 0.08) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(127, 146, 194, 0.08) 1px, transparent 1px);
-  background-size: 42px 42px;
-  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.9), transparent 100%);
-  opacity: 0.24;
+  display: none;
 }
 
 .app-auth-loading__card {
@@ -967,6 +968,14 @@ async function onOnboardingStepComplete(status = null) {
 
 .sidebar-shell-collapsed {
   width: 0;
+}
+
+.sidebar-shell-collapsed + .main {
+  padding-left: 124px;
+}
+
+.main {
+  transition: padding-left 180ms ease;
 }
 
 .sidebar-panel {

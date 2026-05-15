@@ -632,14 +632,7 @@ async function submitSignUp() {
 }
 
 .auth-grid {
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
-  background-size: 64px 64px;
-  mask-image: radial-gradient(circle at center, black, transparent 85%);
-  opacity: 0.32;
+  display: none;
 }
 
 .auth-card {

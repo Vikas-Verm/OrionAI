@@ -136,6 +136,18 @@ test("jira my tickets helpers honor assigneeName skill output", () => {
   assert.match(jql, /statusCategory != Done/);
 });
 
+test("jira my tickets helpers can search across all accessible projects", () => {
+  const jql = jiraToolTest.buildMyTicketsJql("ENGG", {
+    allProjects: true,
+    overdueOnly: true,
+  });
+
+  assert.doesNotMatch(jql, /project = ENGG/);
+  assert.match(jql, /assignee = currentUser\(\)/);
+  assert.match(jql, /statusCategory != Done/);
+  assert.match(jql, /duedate is not EMPTY/);
+});
+
 test("normalizeStepParams infers calendar details from natural language meeting requests", () => {
   const normalized = normalizeStepParams(
     { tool: "calendar_create", params: {} },

@@ -228,13 +228,26 @@ function summarizeDecisionText(value = "", maxLength = 200) {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1).trim()}...` : text;
 }
 
+function summarizeDecisionMessage(message = {}, maxLength = 220) {
+  const text = summarizeDecisionText(
+    message?.text || message?.previewText || "",
+    maxLength
+  );
+  if (text) return text;
+  if (message?.hasAttachments) return "Attachment";
+  return "";
+}
+
 function buildWorkspaceDecisionContext(conversation = {}) {
   const sortedMessages = [...(conversation.messages || [])]
     .map((message) => ({
       id: message?.id ?? null,
       direction: message?.direction || "unknown",
       timestamp: toTimestamp(message?.timestamp),
-      text: summarizeDecisionText(message?.text || message?.previewText || "", 220),
+      text: summarizeDecisionMessage(message, 220),
+      senderName: summarizeDecisionText(message?.senderName || "", 80),
+      senderType: normalizeText(message?.senderType || "").toLowerCase(),
+      hasAttachments: Boolean(message?.hasAttachments),
     }))
     .filter((message) => message.timestamp && message.text)
     .sort((a, b) => a.timestamp - b.timestamp);
@@ -1303,11 +1316,15 @@ function dedupeStates(states = []) {
 function toPublicRecentMessages(messages = []) {
   return messages
     .map((message) => ({
+      id: message?.id ?? null,
       direction: message?.direction || "unknown",
       timestamp: message?.timestamp
         ? new Date(message.timestamp).toISOString()
         : null,
-      text: summarizeDecisionText(message?.text || message?.previewText || "", 220),
+      text: summarizeDecisionMessage(message, 220),
+      senderName: summarizeDecisionText(message?.senderName || "", 80),
+      senderType: normalizeText(message?.senderType || "").toLowerCase(),
+      hasAttachments: Boolean(message?.hasAttachments),
     }))
     .filter((message) => message.text)
     .slice(-4);

@@ -228,13 +228,7 @@ onUnmounted(() => {
 }
 
 .sync-grid {
-  inset: 0;
-  background:
-    linear-gradient(rgba(127, 146, 194, 0.07) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(127, 146, 194, 0.07) 1px, transparent 1px);
-  background-size: 42px 42px;
-  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.92), transparent 100%);
-  opacity: 0.22;
+  display: none;
 }
 
 .sync-card {

@@ -158,9 +158,19 @@ function escapeJqlValue(value = "") {
 
 function buildMyTicketsJql(
   projectKey,
-  { showAll = false, resolvedUser = null, status = null } = {}
+  {
+    showAll = false,
+    resolvedUser = null,
+    status = null,
+    allProjects = false,
+    overdueOnly = false,
+  } = {}
 ) {
-  const clauses = [`project = ${projectKey}`];
+  const clauses = [];
+
+  if (!allProjects && projectKey) {
+    clauses.push(`project = ${projectKey}`);
+  }
 
   if (showAll) {
     clauses.push("assignee is not EMPTY");
@@ -179,6 +189,11 @@ function buildMyTicketsJql(
     clauses.push("statusCategory = Done");
   } else {
     clauses.push(`status = "${escapeJqlValue(normalizedStatus)}"`);
+  }
+
+  if (overdueOnly) {
+    clauses.push("duedate is not EMPTY");
+    clauses.push(`duedate < "${new Date().toISOString().split("T")[0]}"`);
   }
 
   return `
@@ -506,6 +521,8 @@ async function toolGetMyTickets(params, ctx) {
     maxResults = 100,
     showAll = false,
     status = null,
+    allProjects = false,
+    overdueOnly = false,
   } = params;
 
   const requestedAssignee = pickRequestedAssignee(params);
@@ -516,7 +533,7 @@ async function toolGetMyTickets(params, ctx) {
     );
 
   const { client, projectKey, domain } = await getJiraClient(ctx.userId);
-  const key = overrideKey || projectKey;
+  const key = allProjects ? null : overrideKey || projectKey;
 
   /* -------------------------------------------------- */
   /* 1️⃣ CONNECTION HEALTH CHECK */
@@ -571,6 +588,8 @@ async function toolGetMyTickets(params, ctx) {
     showAll: showEveryone,
     resolvedUser,
     status,
+    allProjects,
+    overdueOnly,
   });
 
   /* -------------------------------------------------- */
@@ -632,7 +651,9 @@ async function toolGetMyTickets(params, ctx) {
       tickets: [],
       count: 0,
       jiraDomain: domain,
-      summary: `✅ No open tickets for ${label} in ${key}!`,
+      summary: allProjects
+        ? `✅ No open tickets for ${label} across accessible Jira projects!`
+        : `✅ No open tickets for ${label} in ${key}!`,
     };
   }
 
@@ -651,7 +672,9 @@ async function toolGetMyTickets(params, ctx) {
     }
 
     const lines = [
-      `👥 *All open tickets in ${key}* — ${count} total`,
+      allProjects
+        ? `👥 *All open tickets across accessible Jira projects* — ${count} total`
+        : `👥 *All open tickets in ${key}* — ${count} total`,
       overdueTickets.length ? `⚠️ ${overdueTickets.length} overdue` : "",
     ];
 
@@ -692,7 +715,9 @@ async function toolGetMyTickets(params, ctx) {
   /* 6️⃣ SINGLE USER SUMMARY */
   /* -------------------------------------------------- */
   const lines = [
-    `👤 *${label}'s open tickets in ${key}* — ${count} total`,
+    allProjects
+      ? `👤 *${label}'s open tickets across accessible Jira projects* — ${count} total`
+      : `👤 *${label}'s open tickets in ${key}* — ${count} total`,
     overdueTickets.length ? `⚠️ ${overdueTickets.length} overdue` : "",
   ];
 
