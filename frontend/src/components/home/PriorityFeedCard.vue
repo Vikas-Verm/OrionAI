@@ -799,14 +799,14 @@ function joinGoogleMeet() {
 .priority-card {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 18px;
-  border-radius: 24px;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 20px;
   border: 1px solid rgba(176, 201, 255, 0.1);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015)),
     rgba(8, 14, 30, 0.8);
-  box-shadow: 0 28px 64px rgba(2, 6, 23, 0.22);
+  box-shadow: 0 24px 56px rgba(2, 6, 23, 0.22);
   backdrop-filter: blur(20px);
   transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
 }
@@ -897,12 +897,12 @@ function joinGoogleMeet() {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 34px;
-  padding: 0 13px;
+  min-height: 28px;
+  padding: 0 10px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
@@ -925,11 +925,11 @@ function joinGoogleMeet() {
 }
 
 .priority-source-icon {
-  width: 34px;
-  min-width: 34px;
+  width: 28px;
+  min-width: 28px;
   padding: 0;
   justify-content: center;
-  font-size: 15px;
+  font-size: 13px;
 }
 
 .priority-source-img {
@@ -959,7 +959,7 @@ function joinGoogleMeet() {
 }
 
 .priority-card-headline h4 {
-  font-size: 18px;
+  font-size: 15px;
   line-height: 1.35;
   color: var(--text-primary);
   margin: 0;
@@ -1024,11 +1024,11 @@ function joinGoogleMeet() {
 }
 
 .priority-expand-btn {
-  width: 34px;
-  height: 34px;
+  width: 28px;
+  height: 28px;
   margin-left: auto;
   border: 1px solid rgba(176, 201, 255, 0.12);
-  border-radius: 12px;
+  border-radius: 10px;
   background: rgba(255, 255, 255, 0.045);
   color: rgba(191, 226, 255, 0.82);
   display: inline-flex;

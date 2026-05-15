@@ -276,11 +276,11 @@
           </div>
 
           <template v-else-if="hasDocumentAppsConnected">
-            <div v-if="documentCards.length" class="list-grid">
+            <div v-if="documentCards.length" class="list-grid documents-grid">
               <article
                 v-for="item in documentCards"
                 :key="item.id"
-                class="list-card"
+                class="list-card documents-card"
               >
                 <div class="card-top">
                   <span class="source-badge">
@@ -713,7 +713,7 @@ const documentsSectionRef = ref(null)
 const followUpsSectionRef = ref(null)
 const focusAreasSectionRef = ref(null)
 const refreshingDashboard = ref(false)
-const { unreadByApp, refreshUnreadState } = useWebSocket()
+const { unreadByApp, refreshUnreadState, acknowledgeConversation } = useWebSocket()
 let liveRefreshTimer = null
 let latestLoadRequestId = 0
 let latestDocumentsRequestId = 0
@@ -870,10 +870,19 @@ const visiblePriorityItems = computed(() =>
 )
 
 function countItemsForFilter(feedItems = [], filterId = 'all') {
-  if (filterId === 'all') return feedItems.length
+  // Jira tasks have their own "Tasks" filter — don't include them in the
+  // "All" count or list so the default view stays focused.
+  if (filterId === 'all') {
+    return feedItems.filter((item) => item.category !== 'tasks').length
+  }
   if (filterId === 'urgent') {
+    // Jira tickets live under the dedicated "Tasks" filter — don't recount
+    // them here even if their priority is High.
     return feedItems.filter(
-      (item) => item.priority === 'High' && item.category !== 'meetings'
+      (item) =>
+        item.priority === 'High' &&
+        item.category !== 'meetings' &&
+        item.category !== 'tasks'
     ).length
   }
   if (filterId === 'communication') {
@@ -901,10 +910,18 @@ const filters = computed(() =>
 
 const filteredItems = computed(() => {
   const sortedItems = visiblePriorityItems.value
-  if (activeFilter.value === 'all') return sortedItems
+  if (activeFilter.value === 'all') {
+    // Jira tasks live under the dedicated "Tasks" filter — keep "All" tidy.
+    return sortedItems.filter((item) => item.category !== 'tasks')
+  }
   if (activeFilter.value === 'urgent') {
+    // Jira tasks are reachable via the dedicated "Tasks" filter, so keep
+    // Urgent focused on communications/meetings-adjacent items only.
     return sortedItems.filter(
-      (item) => item.priority === 'High' && item.category !== 'meetings'
+      (item) =>
+        item.priority === 'High' &&
+        item.category !== 'meetings' &&
+        item.category !== 'tasks'
     )
   }
   if (Object.values(ACTION_STATES).includes(activeFilter.value)) {
@@ -975,7 +992,7 @@ const allHeroStatsZero = computed(() =>
   heroStats.value.every((stat) => Number(stat.value || 0) === 0)
 )
 
-const displayedPriorityItems = computed(() => filteredItems.value.slice(0, 7))
+const displayedPriorityItems = computed(() => filteredItems.value.slice(0, 30))
 const hasPriorityCards = computed(() =>
   displayedPriorityItems.value.length > 0 || prioritySuggestionCards.value.length > 0
 )
@@ -1687,13 +1704,32 @@ async function sendPriorityReply(item, body) {
       throw new Error('Inline reply is not available for this item.')
     }
 
-    await saveFeedAction(
+    // Optimistically clear the unread badge for this conversation so the
+    // count drops everywhere immediately. The backend will confirm via
+    // the next notification push.
+    try {
+      acknowledgeConversation(sourceApp, {
+        conversationId,
+        threadId: openContext.threadId || item?.meta?.threadId,
+        chatId: openContext.chatId,
+        roomId: openContext.roomId,
+        dialogId: openContext.dialogId,
+        channelId: openContext.channelId,
+        latestMessageId: item?.meta?.latestMessageId,
+        itemId: item.id,
+      })
+    } catch (_) { /* optimistic only — never fail the send */ }
+
+    clearReplyDraftCache(item)
+
+    // Fire-and-forget the audit/persistence + cross-component refresh so
+    // the reply-send round-trip is bounded by the actual send API only.
+    saveFeedAction(
       item,
       'approved',
       { note: buildReplyAuditNote(trimmedBody) },
       { managePending: false }
-    )
-    clearReplyDraftCache(item)
+    ).catch(() => {})
 
     emitCommunicationPriorityRefresh('communication_replied', {
       sourceApp,
@@ -1758,7 +1794,10 @@ async function saveFeedAction(item, action, extras = {}, options = {}) {
     })
 
     applyActionResult(item.id, data.entry)
-    await loadDashboard({ silent: true, mode: 'replace' })
+    // Reconcile with the backend in the background so the UI returns control
+    // to the user instantly — the optimistic applyActionResult above already
+    // removed the item from view.
+    loadDashboard({ silent: true, mode: 'replace' }).catch(() => {})
   } catch (err) {
     console.error('Priority feed action failed:', err.message)
   } finally {
@@ -1840,9 +1879,12 @@ async function refreshDashboard() {
 
 function scheduleLiveRefresh() {
   clearTimeout(liveRefreshTimer)
+  // 30 ms is enough to coalesce a burst of WebSocket events arriving in the
+  // same tick, but short enough that the priority feed appears to update
+  // the moment a notification toast pops.
   liveRefreshTimer = setTimeout(() => {
     loadDashboard({ silent: true, mode: 'replace' })
-  }, 180)
+  }, 30)
 }
 
 function onPriorityRefreshNeeded(event) {
@@ -2448,11 +2490,91 @@ onUnmounted(() => {
 }
 
 .priority-grid {
-  grid-template-columns: repeat(auto-fit, minmax(255px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  /* Show ~3 rows (6 cards) before scrolling — keeps the briefing scannable. */
+  max-height: 70vh;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.priority-grid::-webkit-scrollbar {
+  width: 8px;
+}
+
+.priority-grid::-webkit-scrollbar-thumb {
+  background: rgba(176, 201, 255, 0.18);
+  border-radius: 999px;
+}
+
+.priority-grid::-webkit-scrollbar-thumb:hover {
+  background: rgba(176, 201, 255, 0.28);
+}
+
+@media (max-width: 720px) {
+  .priority-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .list-grid {
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+/* Bills & Documents — compact, scrollable variant of the shared list grid. */
+.documents-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.documents-grid::-webkit-scrollbar {
+  width: 8px;
+}
+
+.documents-grid::-webkit-scrollbar-thumb {
+  background: rgba(176, 201, 255, 0.18);
+  border-radius: 999px;
+}
+
+.documents-grid::-webkit-scrollbar-thumb:hover {
+  background: rgba(176, 201, 255, 0.28);
+}
+
+.documents-card {
+  padding: 12px !important;
+  gap: 8px !important;
+  border-radius: 16px;
+}
+
+.documents-card h5 {
+  font-size: 13px;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.documents-card .card-copy {
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.documents-card .card-meta {
+  font-size: 10.5px;
+}
+
+.documents-card .source-badge {
+  padding: 4px 8px;
+  font-size: 10.5px;
+}
+
+.documents-card .status-pill {
+  font-size: 10px;
+  padding: 3px 8px;
+}
+
+.documents-card .action-button {
+  padding: 6px 12px;
+  font-size: 11.5px;
 }
 
 .priority-card,

@@ -221,9 +221,20 @@ function getPriorityItemConversationKey(item = {}) {
 }
 
 function resolveCommunicationFallbackSources(communicationResult = null) {
+  // A source only counts as "covered" if the engine produced at least one
+  // actionable item for it — i.e. a state that buildCommunicationPriorityItems
+  // would actually render. If everything came back as NO_ACTION_NEEDED or
+  // RESOLVED, the engine effectively returned nothing for that app, so we
+  // still want the fallback chips (most visible symptom: WhatsApp chats with
+  // unread messages classified as "no action" never reached the feed).
   const coveredSources = new Set(
     Array.isArray(communicationResult?.allStates)
       ? communicationResult.allStates
+          .filter(
+            (state) =>
+              state?.actionState !== ACTION_STATES.NO_ACTION_NEEDED &&
+              state?.actionState !== ACTION_STATES.RESOLVED
+          )
           .map((state) => String(state?.sourceType || "").trim())
           .filter(Boolean)
       : []
@@ -361,6 +372,21 @@ function getPriorityItemActivityTime(item = {}) {
 
 function sortByLatestActivity(items = []) {
   return [...items].sort((a, b) => {
+    // Meetings should always be ordered by the nearest start time first.
+    // Without this clause, sorting by "latest activity" puts the furthest
+    // future meeting on top because its startsAt is the largest timestamp.
+    if (a.category === "meetings" && b.category === "meetings") {
+      const aStart = new Date(a.meta?.startsAt || 0).getTime();
+      const bStart = new Date(b.meta?.startsAt || 0).getTime();
+      if (
+        Number.isFinite(aStart) &&
+        Number.isFinite(bStart) &&
+        aStart !== bStart
+      ) {
+        return aStart - bStart;
+      }
+    }
+
     const activityDelta =
       getPriorityItemActivityTime(b) - getPriorityItemActivityTime(a);
     if (activityDelta !== 0) return activityDelta;
@@ -374,10 +400,19 @@ function sortByLatestActivity(items = []) {
 }
 
 function countItemsForFilter(items = [], filterId = "all", communicationSummary = null) {
-  if (filterId === "all") return items.length;
+  // Jira tasks have their own dedicated "Tasks" filter — keep the "All" view
+  // focused on communications / meetings / approvals so it stays scannable.
+  if (filterId === "all") {
+    return items.filter((item) => item.category !== "tasks").length;
+  }
   if (filterId === "urgent") {
+    // Jira tickets live under the dedicated "Tasks" filter even when their
+    // priority is High, so they should not double-count here.
     return items.filter(
-      (item) => item.priority === "High" && item.category !== "meetings"
+      (item) =>
+        item.priority === "High" &&
+        item.category !== "meetings" &&
+        item.category !== "tasks"
     ).length;
   }
   if (filterId === "communication") {
@@ -773,7 +808,9 @@ function mapJiraTicketToPriorityItem(ticket) {
   if (highPriority) score += 16;
   score = clamp(score, 0, 99);
 
-  const priority = toPriorityLevel(score);
+  // Honor the source Jira priority for the visible badge even when the
+  // computed score lands below the High threshold.
+  const priority = highPriority ? "High" : toPriorityLevel(score);
   const reasons = [];
   reasons.push("assigned to you");
   if (overdue) reasons.push(`${ticket.daysOverdue || 1}d overdue`);

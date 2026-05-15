@@ -53,8 +53,10 @@ test("buildPriorityFeedFilters includes counts for each priority feed chip", () 
 
   const byId = Object.fromEntries(filters.map((filter) => [filter.id, filter.count]));
 
+  // "All" intentionally excludes Jira tasks — they have their own dedicated
+  // "Tasks" chip and were making the default view noisy.
   assert.deepEqual(byId, {
-    all: 4,
+    all: 3,
     urgent: 1,
     communication: 2,
     needs_approval: 1,
@@ -275,7 +277,30 @@ test("effective communication summary keeps comm counts visible when fallback it
   assert.equal(summary.replyRequiredCount, 1);
 });
 
-test("fallback sources stay disabled when the shared communication engine already inspected that app", () => {
+test("fallback sources stay disabled when the engine produced actionable items for that app", () => {
+  const plan = resolveCommunicationFallbackSources({
+    allStates: [
+      {
+        id: "comm:gmail:thread-1",
+        sourceType: "gmail",
+        actionState: ACTION_STATES.WAITING_ON_YOUR_REPLY,
+      },
+      {
+        id: "comm:telegram:chat-1",
+        sourceType: "telegram",
+        actionState: ACTION_STATES.WAITING_ON_OTHERS,
+      },
+    ],
+  });
+
+  assert.equal(plan.includeGmailFallback, false);
+  assert.deepEqual(plan.messagingSources, ["slack", "signal", "whatsapp"]);
+});
+
+test("fallback sources re-enable when the engine only produced non-actionable states (NO_ACTION_NEEDED / RESOLVED)", () => {
+  // Regression: WhatsApp messages classified as NO_ACTION_NEEDED used to be
+  // treated as "covered" and never reached the feed via fallback. The engine
+  // running on a source is not the same as the engine surfacing it.
   const plan = resolveCommunicationFallbackSources({
     allStates: [
       {
@@ -284,15 +309,20 @@ test("fallback sources stay disabled when the shared communication engine alread
         actionState: ACTION_STATES.RESOLVED,
       },
       {
-        id: "comm:telegram:chat-1",
-        sourceType: "telegram",
+        id: "comm:whatsapp:chat-1",
+        sourceType: "whatsapp",
         actionState: ACTION_STATES.NO_ACTION_NEEDED,
       },
     ],
   });
 
-  assert.equal(plan.includeGmailFallback, false);
-  assert.deepEqual(plan.messagingSources, ["slack", "signal", "whatsapp"]);
+  assert.equal(plan.includeGmailFallback, true);
+  assert.deepEqual(plan.messagingSources, [
+    "slack",
+    "telegram",
+    "signal",
+    "whatsapp",
+  ]);
 });
 
 test("fallback messaging items include the latest message fingerprint in their identity", () => {
