@@ -49,6 +49,7 @@ const gifRoutes = require("./routes/gifRoutes");
 const googleDocsRoutes = require("./routes/googleDocsRoutes");
 const googleSheetsRoutes = require("./routes/googleSheetsRoutes");
 const onboardingRoutes = require("./routes/onboardingRoutes");
+const studyRoutes = require("./routes/studyRoutes");
 const {
   initErrorMonitoring,
   attachErrorMonitoringContext,
@@ -117,6 +118,7 @@ app.use("/api/gifs", gifRoutes);
 app.use("/api/whatsapp", whatsappRoutes);
 app.use("/api/automations", automationRoutes);
 app.use("/api/onboarding", authenticate, onboardingRoutes);
+app.use("/api/study", authenticate, studyRoutes);
 app.use("/auth/google", googleAuthRoutes);
 app.use("/api/health", authenticate, healthRoutes);
 app.get("/debug/gmail", async (req, res) => {
