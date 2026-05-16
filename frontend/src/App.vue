@@ -70,6 +70,19 @@
         <IntegrationsPage v-if="showingIntegrations" :key="`integrations-${store.user?.username || 'anon'}`" :focusType="integrationsFocusType" @close="showingIntegrations = false; activeModule = null; integrationsFocusType = null"
           @connected="sidebarRef?.refreshConnected?.($event)" @openModule="onOpenModuleFromSettings" />
 
+        <!-- ── Study Hub (URL: /study-learning and /study-learning/topics/:topicId) ── -->
+        <TopicLearningPage
+          v-else-if="showStudyHub && studyTopicId"
+          :key="`study-topic-${studyTopicId}`"
+          :topic-id="studyTopicId"
+          @back="closeStudyTopic"
+        />
+        <StudyHubPage
+          v-else-if="showStudyHub"
+          @open-topic="openStudyTopic"
+          @back="closeStudyHub"
+        />
+
         <!-- ── Module pages (inside main, sidebar stays visible) ── -->
         <TelegramPage v-else-if="activeModule === 'telegram'" @close="closeModule" />
         <GmailPage v-else-if="activeModule === 'gmail'" @close="closeModule" />
@@ -172,6 +185,8 @@ import SignalPage from './views/SignalPage.vue'
 import WhatsAppPage from './views/WhatsAppPage.vue'
 import DatabasePage from './views/DatabasePage.vue'
 import RazorpayPage from './views/RazorpayPage.vue'
+import StudyHubPage from './views/StudyHubPage.vue'
+import TopicLearningPage from './views/TopicLearningPage.vue'
 
 import AgentConfirmModal from './components/agent/AgentConfirmModal.vue'
 //Notifications
@@ -197,6 +212,8 @@ const ONBOARDING_PATH_TO_ROUTE = Object.freeze(
   Object.fromEntries(Object.entries(ONBOARDING_ROUTE_TO_PATH).map(([route, path]) => [path, route]))
 )
 const WORKSPACE_BRIEFING_PATH = '/workspace-briefing'
+const STUDY_HUB_PATH = '/study-learning'
+const STUDY_TOPIC_PATH_RE = /^\/study-learning\/topics\/([^/]+)$/
 const HOME_PATHS = new Set(['/', '', WORKSPACE_BRIEFING_PATH])
 
 // URL-based routing without vue-router. Pathnames map to UI state:
@@ -251,6 +268,8 @@ function readInitialRouteFromLocation() {
       isNewChat: true,
       onboardingRoute: null,
       isWorkspaceBriefingHome: false,
+      studyHub: false,
+      studyTopicId: null,
     }
   const pathname = normalizePathname(window.location?.pathname || '/')
   const onboardingRoute = ONBOARDING_PATH_TO_ROUTE[pathname]
@@ -262,6 +281,8 @@ function readInitialRouteFromLocation() {
       isNewChat: false,
       onboardingRoute,
       isWorkspaceBriefingHome: false,
+      studyHub: false,
+      studyTopicId: null,
     }
   }
   if (pathname === WORKSPACE_BRIEFING_PATH) {
@@ -272,6 +293,35 @@ function readInitialRouteFromLocation() {
       isNewChat: true,
       onboardingRoute: null,
       isWorkspaceBriefingHome: true,
+      studyHub: false,
+      studyTopicId: null,
+    }
+  }
+  const studyTopicMatch = pathname.match(STUDY_TOPIC_PATH_RE)
+  if (studyTopicMatch) {
+    let topicId = studyTopicMatch[1]
+    try { topicId = decodeURIComponent(topicId) } catch {}
+    return {
+      module: null,
+      integrations: false,
+      sessionId: null,
+      isNewChat: false,
+      onboardingRoute: null,
+      isWorkspaceBriefingHome: false,
+      studyHub: true,
+      studyTopicId: topicId,
+    }
+  }
+  if (pathname === STUDY_HUB_PATH) {
+    return {
+      module: null,
+      integrations: false,
+      sessionId: null,
+      isNewChat: false,
+      onboardingRoute: null,
+      isWorkspaceBriefingHome: false,
+      studyHub: true,
+      studyTopicId: null,
     }
   }
   if (pathname === '/integrations') {
@@ -282,6 +332,8 @@ function readInitialRouteFromLocation() {
       isNewChat: false,
       onboardingRoute: null,
       isWorkspaceBriefingHome: false,
+      studyHub: false,
+      studyTopicId: null,
     }
   }
   // /c/{id} — decode and restore that chat session.
@@ -296,6 +348,8 @@ function readInitialRouteFromLocation() {
       isNewChat: false,
       onboardingRoute: null,
       isWorkspaceBriefingHome: false,
+      studyHub: false,
+      studyTopicId: null,
     }
   }
   const slug = pathname.startsWith('/') ? pathname.slice(1) : pathname
@@ -307,6 +361,8 @@ function readInitialRouteFromLocation() {
       isNewChat: false,
       onboardingRoute: null,
       isWorkspaceBriefingHome: false,
+      studyHub: false,
+      studyTopicId: null,
     }
   }
   // "/" or any unknown route → fresh new chat home.
@@ -317,6 +373,8 @@ function readInitialRouteFromLocation() {
     isNewChat: true,
     onboardingRoute: null,
     isWorkspaceBriefingHome: false,
+    studyHub: false,
+    studyTopicId: null,
   }
 }
 
@@ -325,6 +383,8 @@ const activeOnboardingRoute = ref(initialRoute.onboardingRoute)
 const showingIntegrations = ref(initialRoute.integrations)
 const integrationsFocusType = ref(null)
 const activeModule = ref(initialRoute.module)
+const showStudyHub = ref(initialRoute.studyHub === true)
+const studyTopicId = ref(initialRoute.studyTopicId || null)
 
 function pushRouteIfChanged(targetPath) {
   if (typeof window === 'undefined') return
@@ -367,6 +427,7 @@ watch(
     if (messageCount <= 0) return
     if (activeOnboardingRoute.value) return
     if (activeModule.value || showingIntegrations.value) return
+    if (showStudyHub.value) return
     const currentPath = normalizePathname(window.location?.pathname || '/')
     if (HOME_PATHS.has(currentPath)) {
       pushRouteIfChanged(`/c/${encodeURIComponent(sessionId)}`)
@@ -382,12 +443,20 @@ async function handlePopState() {
     showingIntegrations.value = false
     activeModule.value = null
     integrationsFocusType.value = null
+    showStudyHub.value = false
+    studyTopicId.value = null
     setModuleContext(null)
     return
   }
   activeOnboardingRoute.value = null
   showingIntegrations.value = next.integrations
   activeModule.value = next.module
+  showStudyHub.value = next.studyHub === true
+  studyTopicId.value = next.studyTopicId || null
+  if (next.studyHub) {
+    setModuleContext(null)
+    return
+  }
   if (next.sessionId && next.sessionId !== store.currentSessionId) {
     try {
       await _switchSession(next.sessionId)
@@ -409,12 +478,15 @@ const confirmRef = ref(null)
 let openTelegramListener = null
 let openModuleListener = null
 let openIntegrationsListener = null
+let openStudyHubListener = null
 
 function resetSurfaceState() {
   activeOnboardingRoute.value = null
   showingIntegrations.value = false
   integrationsFocusType.value = null
   activeModule.value = null
+  showStudyHub.value = false
+  studyTopicId.value = null
   setModuleContext(null)
 }
 
@@ -423,9 +495,43 @@ function openOnboardingRoute(routeKey) {
   showingIntegrations.value = false
   integrationsFocusType.value = null
   activeModule.value = null
+  showStudyHub.value = false
+  studyTopicId.value = null
   setModuleContext(null)
   const path = ONBOARDING_ROUTE_TO_PATH[routeKey]
   if (path) pushRouteIfChanged(path)
+}
+
+function openStudyHub() {
+  resetSurfaceState()
+  showStudyHub.value = true
+  studyTopicId.value = null
+  pushRouteIfChanged(STUDY_HUB_PATH)
+}
+
+function openStudyTopic(topicId) {
+  if (!topicId) return
+  resetSurfaceState()
+  showStudyHub.value = true
+  studyTopicId.value = String(topicId)
+  pushRouteIfChanged(`${STUDY_HUB_PATH}/topics/${encodeURIComponent(topicId)}`)
+}
+
+function closeStudyTopic() {
+  studyTopicId.value = null
+  pushRouteIfChanged(STUDY_HUB_PATH)
+}
+
+async function closeStudyHub() {
+  showStudyHub.value = false
+  studyTopicId.value = null
+  activeModule.value = null
+  showingIntegrations.value = false
+  setModuleContext(null)
+  setMode('chat')
+  pushRouteIfChanged(WORKSPACE_BRIEFING_PATH)
+  // Land on a fresh new-chat draft so the WorkspaceBriefing empty state shows.
+  await startNewChat().catch(() => {})
 }
 
 async function refreshOnboardingStatus() {
@@ -452,15 +558,28 @@ async function enterMainApp(route = initialRoute) {
     isNewChat: route?.isNewChat !== false,
     onboardingRoute: null,
     isWorkspaceBriefingHome: route?.isWorkspaceBriefingHome === true,
+    studyHub: route?.studyHub === true,
+    studyTopicId: route?.studyTopicId || null,
   }
 
   activeOnboardingRoute.value = null
   showingIntegrations.value = nextRoute.integrations
   activeModule.value = nextRoute.module
+  showStudyHub.value = nextRoute.studyHub
+  studyTopicId.value = nextRoute.studyTopicId
   integrationsFocusType.value = null
   setModuleContext(null)
 
   await loadSessions()
+
+  if (nextRoute.studyHub) {
+    if (store.sessions.length > 0 && !store.currentSessionId) {
+      store.currentSessionId = store.sessions[0].sessionId
+    }
+    stop()
+    start()
+    return
+  }
 
   if (nextRoute.sessionId) {
     try {
@@ -543,6 +662,7 @@ onMounted(async () => {
   window.addEventListener('popstate', handlePopState)
   // Listen for TelegramRenderer "Open chat" button
   openTelegramListener = (e) => {
+    dismissStudyHubSurface()
     showingIntegrations.value = false
     setModuleContext({
       module: 'telegram',
@@ -554,6 +674,7 @@ onMounted(async () => {
   document.addEventListener('orion:open-telegram', openTelegramListener)
 
   openModuleListener = (e) => {
+    dismissStudyHubSurface()
     showingIntegrations.value = false
     const module = e.detail?.module || null
     setModuleContext(module ? {
@@ -568,6 +689,13 @@ onMounted(async () => {
     onOpenIntegrations(e.detail?.focusType || null)
   }
   document.addEventListener('orion:open-integrations', openIntegrationsListener)
+
+  openStudyHubListener = (e) => {
+    const topicId = e.detail?.topicId || null
+    if (topicId) openStudyTopic(topicId)
+    else openStudyHub()
+  }
+  document.addEventListener('orion:open-study-hub', openStudyHubListener)
 
   if (store.token) {
     authBooting.value = true
@@ -592,6 +720,7 @@ onUnmounted(() => {
   if (openTelegramListener) document.removeEventListener('orion:open-telegram', openTelegramListener)
   if (openModuleListener) document.removeEventListener('orion:open-module', openModuleListener)
   if (openIntegrationsListener) document.removeEventListener('orion:open-integrations', openIntegrationsListener)
+  if (openStudyHubListener) document.removeEventListener('orion:open-study-hub', openStudyHubListener)
   window.removeEventListener('popstate', handlePopState)
   stop()
 })
@@ -634,7 +763,15 @@ function openSidebar() {
 }
 
 // ── Navigation ────────────────────────────────────────────
+// Sidebar / module navigation always exits the Study Hub surface, otherwise
+// the v-else-if="showStudyHub" branch keeps StudyHubPage rendered.
+function dismissStudyHubSurface() {
+  showStudyHub.value = false
+  studyTopicId.value = null
+}
+
 function onOpenIntegrations(focusType) {
+  dismissStudyHubSurface()
   integrationsFocusType.value = focusType || null
   showingIntegrations.value = true
   setModuleContext(null)
@@ -642,6 +779,7 @@ function onOpenIntegrations(focusType) {
 }
 
 function onOpenIntegration(id) {
+  dismissStudyHubSurface()
   showingIntegrations.value = false
   setModuleContext(null)
   activeModule.value = id
@@ -652,12 +790,14 @@ function onOpenModuleFromSettings(id) {
 }
 
 function closeModule() {
+  dismissStudyHubSurface()
   activeModule.value = null
   setModuleContext(null)
   showingIntegrations.value = true   // go back to integrations settings
 }
 
 function openDatabaseWorkspace() {
+  dismissStudyHubSurface()
   activeModule.value = null
   showingIntegrations.value = false
   setModuleContext(null)
@@ -667,6 +807,7 @@ function openDatabaseWorkspace() {
 }
 
 function openRazorpayWorkspace(prompt = '') {
+  dismissStudyHubSurface()
   activeModule.value = null
   showingIntegrations.value = false
   setModuleContext(null)
@@ -680,6 +821,7 @@ function openRazorpayWorkspace(prompt = '') {
 
 // ── Session ───────────────────────────────────────────────
 async function switchSession(sessionId) {
+  dismissStudyHubSurface()
   activeModule.value = null   // ← close any open module
   showingIntegrations.value = false  // ← close settings too
   setModuleContext(null)
@@ -690,6 +832,7 @@ async function switchSession(sessionId) {
 }
 
 async function onNewChatRequested() {
+  dismissStudyHubSurface()
   activeModule.value = null
   showingIntegrations.value = false
   activeOnboardingRoute.value = null

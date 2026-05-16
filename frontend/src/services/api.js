@@ -127,6 +127,64 @@ export const googleSheetsAPI = {
     }),
 };
 
+// ── Study Hub ─────────────────────────────────────────────
+export const studyAPI = {
+  overview: () => api.get("/api/study/overview"),
+
+  listGoals: (params) => api.get("/api/study/goals", { params }),
+  createGoal: (payload) => api.post("/api/study/goals", payload),
+  updateGoal: (id, payload) => api.patch(`/api/study/goals/${id}`, payload),
+  suggestTopics: (goalId, payload = {}) =>
+    api.post(`/api/study/goals/${goalId}/suggest-topics`, payload),
+
+  listTopics: (params) => api.get("/api/study/topics", { params }),
+  getTopic: (id) => api.get(`/api/study/topics/${id}`),
+  createTopic: (payload) => api.post("/api/study/topics", payload),
+  createTopicsBulk: (payload) => api.post("/api/study/topics/bulk", payload),
+  updateTopic: (id, payload) => api.patch(`/api/study/topics/${id}`, payload),
+  completeTopic: (id) => api.post(`/api/study/topics/${id}/complete`),
+  moveTopicToTomorrow: (id) =>
+    api.post(`/api/study/topics/${id}/move-to-tomorrow`),
+
+  // Topic learning (Phase 2)
+  getTopicLearning: (topicId) =>
+    api.get(`/api/study/topics/${topicId}/learning`),
+  generateLesson: (topicId) =>
+    api.post(`/api/study/topics/${topicId}/generate-lesson`),
+  generateQuestions: (topicId, payload = {}) =>
+    api.post(`/api/study/topics/${topicId}/generate-questions`, payload),
+  updateQuestion: (id, payload) =>
+    api.patch(`/api/study/questions/${id}`, payload),
+  generateFlashcards: (topicId, payload = {}) =>
+    api.post(`/api/study/topics/${topicId}/generate-flashcards`, payload),
+  updateFlashcard: (id, payload) =>
+    api.patch(`/api/study/flashcards/${id}`, payload),
+  deleteFlashcard: (id) => api.delete(`/api/study/flashcards/${id}`),
+  createTopicMaterial: (topicId, payload) =>
+    api.post(`/api/study/topics/${topicId}/materials`, payload),
+  listMaterials: (params) =>
+    api.get("/api/study/materials", { params }),
+  updateMaterial: (id, payload) =>
+    api.patch(`/api/study/materials/${id}`, payload),
+  deleteMaterial: (id) => api.delete(`/api/study/materials/${id}`),
+  createNote: (topicId, payload) =>
+    api.post(`/api/study/topics/${topicId}/notes`, payload),
+  updateNote: (id, payload) => api.patch(`/api/study/notes/${id}`, payload),
+  deleteNote: (id) => api.delete(`/api/study/notes/${id}`),
+  updateTopicProgress: (topicId, payload) =>
+    api.patch(`/api/study/topics/${topicId}/progress`, payload),
+  topicDoubtChat: (topicId, payload) =>
+    api.post(`/api/study/topics/${topicId}/doubt-chat`, payload),
+
+  generateTodaysPlan: (payload = {}) =>
+    api.post("/api/study/plan/today", payload),
+
+  listRevisions: (params) => api.get("/api/study/revision", { params }),
+  completeRevision: (id) => api.post(`/api/study/revision/${id}/complete`),
+  snoozeRevision: (id, days = 1) =>
+    api.post(`/api/study/revision/${id}/snooze`, { days }),
+};
+
 export function streamAgentRun(steps, sessionId, userMessage) {
   const token = localStorage.getItem("token");
   return fetch(`${API_BASE}/api/agent/run`, {

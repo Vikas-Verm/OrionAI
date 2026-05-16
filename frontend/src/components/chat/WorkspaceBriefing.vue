@@ -406,6 +406,8 @@
             <p>OrionAI will show follow-ups here.</p>
           </div>
         </section>
+
+        <StudyBriefingCard v-if="showStudyBriefing" />
       </div>
 
       <aside class="today-rail">
@@ -649,6 +651,7 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import api, { agentAPI, googleDocsAPI, googleSheetsAPI, onboardingAPI } from '../../services/api'
 import { store, setUser } from '../../stores/app'
 import PriorityFeedCard from '../home/PriorityFeedCard.vue'
+import StudyBriefingCard from '../study/StudyBriefingCard.vue'
 import { emitCommunicationPriorityRefresh } from '../../composables/useCommunicationActions'
 import { useWebSocket } from '../../composables/useWebSocket'
 import { getAppFallbackEmoji, getAppIconUrl, getAppLabel } from '../../utils/appIcons'
@@ -746,6 +749,9 @@ const savedFocusAreas = computed(() => {
   return areas.filter(Boolean)
 })
 const showSavedFocusAreas = computed(() => savedFocusAreas.value.length > 0)
+const showStudyBriefing = computed(() =>
+  savedFocusAreas.value.some((area) => String(area).toLowerCase() === 'study & learning')
+)
 const messageAppsConnected = computed(() =>
   connectedAppIds.value.some((id) => MESSAGE_SOURCE_APPS.has(id))
 )
