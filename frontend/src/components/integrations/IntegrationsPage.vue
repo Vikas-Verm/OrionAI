@@ -1777,16 +1777,17 @@ async function removeIntegration(type) {
 
 <style scoped>
 .integrations-page {
-    position: fixed;
+    position: absolute;
     inset: 0;
-    left: var(--sidebar-width, 260px);
+    left: 0;
     background:
         radial-gradient(circle at 16% 10%, rgba(82, 212, 255, 0.1), transparent 24%),
         radial-gradient(circle at 82% 12%, rgba(139, 125, 255, 0.12), transparent 24%),
         linear-gradient(180deg, var(--bg-base-alt, var(--bg-base)), var(--bg-base));
     z-index: 100;
+    min-width: 0;
     overflow-y: auto;
-    padding: 34px 42px 72px;
+    padding: clamp(24px, 3vw, 34px) clamp(20px, 3.5vw, 42px) 72px;
 }
 
 .int-autofill-trap {
@@ -1802,9 +1803,10 @@ async function removeIntegration(type) {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 18px;
     margin-bottom: 30px;
 }
-.int-header-left { display: flex; align-items: center; gap: 16px; }
+.int-header-left { display: flex; align-items: center; gap: 16px; min-width: 0; }
 .int-back-btn {
     width: 42px; height: 42px; border-radius: 999px;
     border: 1px solid var(--border-default); background: rgba(255, 255, 255, 0.04);
@@ -1848,7 +1850,7 @@ async function removeIntegration(type) {
 }
 .int-search:focus { border-color: var(--border-strong); box-shadow: 0 0 0 4px rgba(82, 212, 255, 0.08); }
 
-.int-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 18px; }
+.int-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 18px; }
 .int-card {
     background: var(--surface-glass-strong); border: 1px solid var(--border-default);
     border-radius: 28px; overflow: hidden; cursor: pointer; transition: all 0.2s;
@@ -1868,7 +1870,7 @@ async function removeIntegration(type) {
         var(--surface-glass-strong);
 }
 .int-card.expanded { border-color: rgba(82, 212, 255, 0.24); box-shadow: 0 0 0 1px rgba(82, 212, 255, 0.12), var(--shadow-md); }
-.int-card-top { display: flex; align-items: center; gap: 16px; padding: 22px 22px; }
+.int-card-top { display: flex; align-items: center; gap: 16px; padding: 22px 22px; min-width: 0; }
 .int-card-icon {
     width: 54px; height: 54px; border-radius: 18px; display: flex; align-items: center; justify-content: center;
     flex-shrink: 0; padding: 10px; box-sizing: border-box; overflow: hidden;
@@ -1990,7 +1992,7 @@ select.int-input { cursor: pointer; }
     background: rgba(255, 255, 255, 0.035); border: 1px solid var(--border-subtle);
     border-radius: 22px; padding: 18px; margin-bottom: 14px;
 }
-.int-oauth-text { flex: 1; }
+.int-oauth-text { flex: 1; min-width: 0; }
 .int-oauth-title { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 2px; }
 .int-oauth-desc { font-size: 12px; color: var(--text-muted); }
 .int-signal-panel {
@@ -2054,7 +2056,7 @@ select.int-input { cursor: pointer; }
     margin: 0;
 }
 
-.int-actions { display: flex; gap: 8px; margin-top: 4px; }
+.int-actions { display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
 .int-btn {
     padding: 10px 16px; border-radius: 999px; font-size: 13px; font-weight: 600;
     cursor: pointer; border: 1px solid transparent; display: flex; align-items: center;
@@ -2246,6 +2248,125 @@ select.int-input { cursor: pointer; }
         width: min(100%, 240px);
         height: auto;
         aspect-ratio: 1;
+    }
+}
+
+@media (max-width: 1366px) {
+    .integrations-page {
+        padding-inline: clamp(18px, 2.5vw, 28px);
+    }
+
+    .int-grid {
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+    }
+}
+
+@media (max-width: 1024px) {
+    .integrations-page {
+        padding: 22px 18px calc(72px + env(safe-area-inset-bottom, 0px));
+    }
+
+    .int-header {
+        align-items: flex-start;
+        flex-wrap: wrap;
+        margin-bottom: 24px;
+    }
+
+    .int-header-left,
+    .int-header-badges {
+        width: 100%;
+    }
+
+    .int-header-badges {
+        flex-wrap: wrap;
+    }
+
+    .int-search-wrap {
+        max-width: none;
+    }
+
+    .int-card-top {
+        align-items: flex-start;
+        flex-wrap: wrap;
+    }
+
+    .int-card-right {
+        width: 100%;
+        justify-content: flex-start;
+        flex-wrap: wrap;
+    }
+
+    .int-field-row,
+    .int-signal-qr-preview {
+        grid-template-columns: 1fr;
+    }
+
+    .int-oauth-block,
+    .int-signal-panel-head {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .int-oauth-connected-row {
+        gap: 8px;
+    }
+
+    .int-oauth-reconnect-btn,
+    .int-btn-remove {
+        margin-left: 0;
+    }
+
+    .int-modal-backdrop {
+        padding: 18px;
+    }
+
+    .int-modal {
+        max-height: min(88dvh, 720px);
+        overflow: auto;
+    }
+}
+
+@media (max-width: 640px) {
+    .integrations-page {
+        padding: 18px 14px calc(64px + env(safe-area-inset-bottom, 0px));
+    }
+
+    .int-title {
+        font-size: 24px;
+    }
+
+    .int-subtitle {
+        line-height: 1.5;
+    }
+
+    .int-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .int-card,
+    .int-modal {
+        border-radius: 22px;
+    }
+
+    .int-card-top,
+    .int-card-form,
+    .int-oauth-block,
+    .int-signal-panel {
+        padding-left: 18px;
+        padding-right: 18px;
+    }
+
+    .int-actions > * {
+        flex: 1 1 100%;
+        justify-content: center;
+    }
+
+    .int-modal-head {
+        gap: 12px;
+    }
+
+    .int-modal-head h3 {
+        font-size: 20px;
     }
 }
 </style>

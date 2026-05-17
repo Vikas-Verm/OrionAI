@@ -199,6 +199,7 @@ function handleKeydown(event) {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
   border-radius: 18px;
   background: linear-gradient(180deg, rgba(18, 24, 38, 0.97), rgba(14, 20, 33, 0.97));
   border: 1px solid rgba(176, 201, 255, 0.06);
@@ -448,5 +449,31 @@ function handleKeydown(event) {
 .gd-ai-send:disabled {
   opacity: 0.55;
   cursor: default;
+}
+
+@media (max-width: 1320px) {
+  .gd-ai {
+    width: 100%;
+    max-height: min(44dvh, 420px);
+  }
+}
+
+@media (max-width: 640px) {
+  .gd-ai {
+    border-radius: 16px;
+  }
+
+  .gd-ai-tabs {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .gd-ai-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .gd-ai-input-wrap {
+    padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  }
 }
 </style>

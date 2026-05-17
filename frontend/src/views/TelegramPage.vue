@@ -474,10 +474,10 @@
     <!-- ══════════════════════════════════════════════
          MAIN APP
     ══════════════════════════════════════════════ -->
-    <div v-else class="tg-app">
+    <div v-else class="tg-app" :class="{ 'tg-app--mobile': isCompactLayout }">
 
       <!-- ── SIDEBAR ── -->
-      <div class="tg-sidebar">
+      <div v-if="showSidebarPane" class="tg-sidebar">
         <div class="tg-sidebar-head">
           <button class="tg-icon-btn" @click="showDrawer = true">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
@@ -592,7 +592,7 @@
       </div>
 
       <!-- ── CHAT PANE ── -->
-      <div class="tg-chat-pane">
+      <div v-if="showChatPane" class="tg-chat-pane">
 
         <!-- Empty state -->
         <div v-if="!selDlg" class="tg-empty-chat">
@@ -614,6 +614,15 @@
 
           <!-- Header -->
           <div class="tg-chat-head">
+            <button
+              v-if="isCompactLayout"
+              class="tg-hbtn tg-chat-head-back"
+              type="button"
+              title="Back to chats"
+              @click="selDlg = null; showInfoPanel = false; chatSearch = false; csQ = ''"
+            >
+              ←
+            </button>
             <div class="tg-chat-head-av-wrap" style="cursor:pointer" @click="showInfoPanel=true">
               <img v-if="photoCache[selDlg.id]" :src="photoCache[selDlg.id]" class="tg-chat-head-av-img"/>
               <div v-else class="tg-chat-head-av" :style="{ background: avatarColor(selDlg.name) }">{{ avatarInitials(selDlg.name) }}</div>
@@ -1022,12 +1031,17 @@ function notifyIntegrationsUpdated() {
   window.dispatchEvent(new CustomEvent('orion:integrations-updated'))
 }
 
+function handleViewportResize() {
+  viewportWidth.value = window.innerWidth
+}
+
 // ── Core data ──────────────────────────────────────────────────────────
 const me = ref(null)
 const dialogs = ref([]), dlgsLoading = ref(false)
 const msgs = ref([]), msgsLoading = ref(false)
 const loadingMore = ref(false), canMore = ref(false)
 const selDlg = ref(null)
+const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1280)
 const draft = ref(''), sending = ref(false)
 const dlgQ = ref(''), dlgFilter = ref('all')
 const photoCache = ref({})
@@ -1045,6 +1059,9 @@ const {
 // ── Modal & Drawer state ──────────────────────────────────────────────
 const showDrawer = ref(false)
 const modal = ref(null)   // null | 'contacts' | 'saved' | 'stories' | 'addAccount' | 'settings'
+const isCompactLayout = computed(() => viewportWidth.value <= 860)
+const showSidebarPane = computed(() => !isCompactLayout.value || !selDlg.value)
+const showChatPane = computed(() => !isCompactLayout.value || !!selDlg.value)
 
 // ── Compose dropdown ──────────────────────────────────────────────────
 const showCompose = ref(false), showMore = ref(false)
@@ -1233,6 +1250,7 @@ async function applyModuleContext() {
 }
 
 onMounted(async () => {
+  handleViewportResize()
   const a = ACCENTS.find(x => x.id === activeAccent.value) || ACCENTS[0]
   applyAccent(a)
 
@@ -1260,10 +1278,12 @@ onMounted(async () => {
   }
 
   document.addEventListener('click', docClick)
+  window.addEventListener('resize', handleViewportResize)
 })
 onUnmounted(() => {
   document.removeEventListener('click', docClick)
   stopPolling()
+  window.removeEventListener('resize', handleViewportResize)
   if (emojiPicker?.remove) emojiPicker.remove()
   emojiPicker = null
 })
@@ -2489,10 +2509,10 @@ function fIconCol(n = '') { return EX[(n.split('.').pop() || '').toLowerCase()] 
 .tg-auth-err { font-size: 12.5px; color: #ef4444; text-align: center; padding: 6px 12px; background: rgba(239,68,68,.08); border-radius: 8px; }
 
 /* ── MAIN LAYOUT ── */
-.tg-app { flex: 1; display: flex; overflow: hidden; }
+.tg-app { flex: 1; display: flex; overflow: hidden; min-width: 0; min-height: 0; }
 
 /* ── SIDEBAR ── */
-.tg-sidebar { width: 300px; flex-shrink: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border-subtle); background: rgba(8, 13, 28, 0.64); overflow: hidden; backdrop-filter: blur(20px); }
+.tg-sidebar { width: 300px; flex-shrink: 0; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border-subtle); background: rgba(8, 13, 28, 0.64); overflow: hidden; backdrop-filter: blur(20px); }
 .tg-sidebar-head { display: flex; align-items: center; gap: 6px; padding: 9px 10px 7px; border-bottom: 1px solid var(--border-subtle); }
 .tg-action-panel-wrap { padding: 0 10px 8px; }
 .tg-sidebar :deep(.comm-insights) { background: var(--bg-base); }
@@ -2562,6 +2582,7 @@ function fIconCol(n = '') { return EX[(n.split('.').pop() || '').toLowerCase()] 
 .tg-chat-head-name { font-size: 14px; font-weight: 700; }
 .tg-chat-head-sub { font-size: 11.5px; color: var(--text-muted); margin-top: 1px; }
 .tg-chat-head-btns { display: flex; gap: 3px; }
+.tg-chat-head-back { flex-shrink: 0; }
 .tg-hbtn { width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--border-subtle); background: transparent; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all .15s; }
 .tg-hbtn:hover, .tg-hbtn.on { background: var(--bg-elevated); color: var(--text-primary); }
 .tg-more-wrap { position: relative; }
@@ -3249,5 +3270,101 @@ function fIconCol(n = '') { return EX[(n.split('.').pop() || '').toLowerCase()] 
 .tg-stories-own-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
 .tg-stories-section-title { font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .6px; padding: 12px 16px 6px; }
 .tg-stories-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 32px 16px; color: var(--text-muted); font-size: 13px; }
+
+@media (max-width: 1366px) {
+  .tg-sidebar {
+    width: 280px;
+  }
+
+  .tg-info-panel {
+    width: 300px;
+  }
+}
+
+@media (max-width: 1024px) {
+  .tg-chat-head-btns {
+    flex-wrap: wrap;
+  }
+
+  .tg-bubble-wrap {
+    max-width: 78%;
+  }
+
+  .tg-info-panel {
+    width: min(320px, 100%);
+  }
+
+  .tg-input-bar {
+    padding: 10px 14px 16px;
+  }
+}
+
+@media (max-width: 860px) {
+  .tg-app {
+    flex-direction: column;
+  }
+
+  .tg-sidebar {
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+    max-height: none;
+    border-right: none;
+  }
+
+  .tg-chat-pane {
+    min-height: 0;
+  }
+
+  .tg-chat-head,
+  .tg-csearch,
+  .tg-input-bar {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .tg-input-bar {
+    padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .tg-bubble-wrap {
+    max-width: min(100%, 84vw);
+  }
+
+  .tg-emoji-picker {
+    left: 12px;
+    right: 12px;
+    height: min(340px, 46dvh);
+  }
+
+  .tg-info-panel {
+    position: fixed;
+    inset: auto 0 0 0;
+    width: 100%;
+    max-height: min(72dvh, 620px);
+    border-left: none;
+    border-top: 1px solid var(--border-subtle);
+    box-shadow: 0 -22px 54px rgba(2, 8, 24, 0.42);
+  }
+}
+
+@media (max-width: 640px) {
+  .tg-drawer {
+    width: min(86vw, 320px);
+  }
+
+  .tg-sidebar-head,
+  .tg-stories-bar,
+  .tg-chat-head,
+  .tg-csearch {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  .tg-emoji-picker {
+    left: 8px;
+    right: 8px;
+  }
+}
 
 </style>
