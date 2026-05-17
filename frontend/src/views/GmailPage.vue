@@ -1,5 +1,5 @@
 <template>
-  <div class="gm-root">
+  <div class="gm-root" :class="{ 'gm-root--mobile': isMobileLayout }">
 
     <!-- ══ SIDEBAR ══ -->
     <div :class="['gm-sidebar', !sidebarOpen && 'gm-sidebar--collapsed']">
@@ -92,7 +92,7 @@
     </div>
 
     <!-- ══ LIST PANE ══ -->
-    <div class="gm-list-pane">
+    <div v-if="showListPane" class="gm-list-pane">
       <!-- Toggle + Search row -->
       <div class="gm-list-topbar">
         <button class="gm-toggle-btn" @click="sidebarOpen = !sidebarOpen" :title="sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'">
@@ -233,7 +233,7 @@
     </div>
 
     <!-- ══ DETAIL PANE ══ -->
-    <div class="gm-detail">
+    <div v-if="showDetailPane" class="gm-detail">
 
       <!-- Empty -->
       <div v-if="!selectedEmail" class="gm-detail-empty">
@@ -248,6 +248,15 @@
         <!-- Header — subject only, sender info moves into thread cards -->
         <div class="gm-detail-head">
           <div class="gm-detail-subj-row">
+            <button
+              v-if="isMobileLayout"
+              class="gm-back-btn"
+              type="button"
+              title="Back to emails"
+              @click="selectedEmail = null"
+            >
+              ←
+            </button>
             <h2 class="gm-detail-subj">{{ selectedEmail.subject }}</h2>
             <div class="gm-detail-btns">
               <button class="gm-icon-btn" title="Star">
@@ -567,6 +576,7 @@ const replyCC     = ref('')
 const showReplyCC = ref(false)
 const sentinelRef    = ref(null)
 const threadScrollRef = ref(null)
+const viewportWidth   = ref(typeof window !== 'undefined' ? window.innerWidth : 1280)
 const labelCounts    = ref({ inbox: 0, starred: 0, sent: 0, drafts: 0 })
 const sidebarOpen    = ref(true)
 const threadMessages = ref([])
@@ -658,6 +668,9 @@ const replyTargetDisplay = computed(() => {
 })
 const replyTargetAddress = computed(() => extractEmail(replyTargetDisplay.value))
 const replyTargetName = computed(() => senderName(replyTargetDisplay.value || selectedEmail.value?.from || selectedEmail.value?.to || ''))
+const isMobileLayout = computed(() => viewportWidth.value <= 860)
+const showListPane = computed(() => !isMobileLayout.value || !selectedEmail.value)
+const showDetailPane = computed(() => !isMobileLayout.value || !!selectedEmail.value)
 
 function formatCompactCount(value) {
   const count = Number(value || 0)
@@ -874,6 +887,7 @@ function applyBriefingContext() {
 async function openEmail(email) {
   selectedId.value    = email.id
   selectedEmail.value = email
+  if (viewportWidth.value <= 1024) sidebarOpen.value = false
   showReply.value     = false
   replyDraft.value    = ''
   replySent.value     = false
@@ -1581,7 +1595,13 @@ function renderEmailBody(text) {
   return output.join('\n')
 }
 
+function handleViewportResize() {
+  viewportWidth.value = window.innerWidth
+}
+
 onMounted(async () => {
+  handleViewportResize()
+  if (viewportWidth.value <= 1024) sidebarOpen.value = false
   applyBriefingContext()
   fetchLabelCounts()
   fetchGmailProfile()
@@ -1593,6 +1613,7 @@ onMounted(async () => {
   window.addEventListener('message', onFrameMessage)
   window.addEventListener('focus', onWindowFocus)
   document.addEventListener('visibilitychange', onVisibilityChange)
+  window.addEventListener('resize', handleViewportResize)
 })
 onUnmounted(() => {
   if (observer) observer.disconnect()
@@ -1601,6 +1622,7 @@ onUnmounted(() => {
   window.removeEventListener('message', onFrameMessage)
   window.removeEventListener('focus', onWindowFocus)
   document.removeEventListener('visibilitychange', onVisibilityChange)
+  window.removeEventListener('resize', handleViewportResize)
 })
 </script>
 
@@ -1610,6 +1632,8 @@ onUnmounted(() => {
   height:100%;
   display:flex;
   overflow:hidden;
+  min-width:0;
+  position:relative;
   background:
     radial-gradient(circle at 14% 12%, rgba(82, 212, 255, 0.08), transparent 24%),
     linear-gradient(180deg, var(--bg-base-alt, var(--bg-base)), var(--bg-base));
@@ -1620,7 +1644,7 @@ onUnmounted(() => {
   width:212px; flex-shrink:0; display:flex; flex-direction:column;
   background:rgba(8, 13, 28, 0.62); border-right:1px solid var(--border-subtle);
   padding-bottom:16px; overflow:hidden;
-  transition:width .22s cubic-bezier(.4,0,.2,1);
+  transition:width .22s cubic-bezier(.4,0,.2,1), transform .22s cubic-bezier(.4,0,.2,1), box-shadow .22s cubic-bezier(.4,0,.2,1);
   backdrop-filter:blur(20px);
 }
 .gm-sidebar--collapsed { width:0; border-right:none; }
@@ -1674,6 +1698,7 @@ onUnmounted(() => {
   border-right:1px solid var(--border-subtle);
   background:rgba(7, 11, 24, 0.42);
   backdrop-filter:blur(18px);
+  min-width:0;
 }
 .gm-insights-wrap { padding: 0 12px 8px; }
 .gm-list-topbar {
@@ -1848,7 +1873,7 @@ onUnmounted(() => {
 .gm-done-label { font-size:11px; color:var(--text-muted); }
 
 /* ══ DETAIL ══ */
-.gm-detail { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+.gm-detail { flex:1; display:flex; flex-direction:column; overflow:hidden; min-width:0; min-height:0; }
 
 .gm-detail-empty {
   flex:1; display:flex; flex-direction:column;
@@ -1873,6 +1898,22 @@ onUnmounted(() => {
 .gm-detail-subj {
   font-size:20px; font-weight:700; color:var(--text-primary);
   margin:0; line-height:1.3; flex:1;
+}
+.gm-back-btn {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: rgba(255,255,255,.04);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  flex-shrink: 0;
 }
 .gm-detail-btns { display:flex; gap:3px; flex-shrink:0; }
 .gm-icon-btn {
@@ -2383,4 +2424,169 @@ onUnmounted(() => {
 .gm-slide-down-leave-active { transition: all 0.15s ease; }
 .gm-slide-down-enter-from  { opacity: 0; transform: translateY(-10px); }
 .gm-slide-down-leave-to    { opacity: 0; transform: translateY(-6px); }
+
+@media (max-width: 1366px) {
+  .gm-sidebar { width: 196px; }
+  .gm-list-pane { width: 280px; }
+  .gm-detail-head,
+  .gm-thread-msg,
+  .gm-detail-body,
+  .gm-reply-dock { padding-left: 20px; padding-right: 20px; }
+  .gm-thread-divider { margin-left: 20px; margin-right: 20px; }
+  .gm-detail-subj { font-size: 18px; }
+}
+
+@media (max-width: 1024px) {
+  .gm-sidebar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(280px, calc(100vw - 24px));
+    z-index: 8;
+    box-shadow: 0 24px 54px rgba(2, 8, 24, 0.38);
+  }
+
+  .gm-sidebar--collapsed {
+    width: min(280px, calc(100vw - 24px));
+    border-right: 1px solid var(--border-subtle);
+    transform: translateX(calc(-100% - 14px));
+    box-shadow: none;
+  }
+
+  .gm-list-pane {
+    width: min(320px, 38vw);
+  }
+
+  .gm-row-line1,
+  .gm-detail-subj-row,
+  .gm-detail-sender {
+    gap: 10px;
+  }
+
+  .gm-detail-head,
+  .gm-thread-msg,
+  .gm-detail-body,
+  .gm-reply-dock {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+
+  .gm-thread-divider {
+    margin-left: 18px;
+    margin-right: 18px;
+  }
+
+  .gm-tm-body,
+  .gm-tm-atts {
+    margin-left: 44px;
+  }
+
+  .gm-compose-modal {
+    width: min(100%, 560px);
+  }
+}
+
+@media (max-width: 860px) {
+  .gm-root {
+    flex-direction: column;
+  }
+
+  .gm-list-pane {
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+    border-right: none;
+  }
+
+  .gm-detail {
+    width: 100%;
+  }
+
+  .gm-row-line1,
+  .gm-detail-subj-row,
+  .gm-detail-sender,
+  .gm-detail-to,
+  .gm-rc-header,
+  .gm-cm-top {
+    flex-wrap: wrap;
+  }
+
+  .gm-row-line1-meta,
+  .gm-detail-meta-right,
+  .gm-detail-btns {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .gm-row-from,
+  .gm-row-subject,
+  .gm-row-snippet,
+  .gm-detail-subj {
+    white-space: normal;
+  }
+
+  .gm-thread-msg,
+  .gm-detail-body {
+    padding-top: 16px;
+  }
+
+  .gm-tm-body,
+  .gm-tm-atts {
+    margin-left: 0;
+  }
+
+  .gm-att-chip {
+    max-width: 100%;
+  }
+
+  .gm-reply-dock {
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .gm-compose-overlay {
+    align-items: flex-end;
+  }
+
+  .gm-compose-modal {
+    width: 100%;
+    max-width: none;
+    border-radius: 22px 22px 0 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .gm-brand,
+  .gm-list-topbar,
+  .gm-tab-row,
+  .gm-insights-wrap,
+  .gm-new-email-banner {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  .gm-detail-head,
+  .gm-thread-msg,
+  .gm-detail-body,
+  .gm-reply-dock {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .gm-thread-divider {
+    margin-left: 14px;
+    margin-right: 14px;
+  }
+
+  .gm-detail-subj {
+    font-size: 17px;
+  }
+
+  .gm-icon-btn,
+  .gm-refresh-btn,
+  .gm-toggle-btn {
+    width: 34px;
+    height: 34px;
+  }
+}
 </style>

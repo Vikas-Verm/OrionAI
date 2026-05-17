@@ -20,10 +20,24 @@
         <span class="app-auth-loading__spinner"></span>
       </div>
     </div>
-    <div v-else class="app">
+    <div
+      v-else
+      class="app"
+      :class="{
+        'app-mobile-nav': isNavigationOverlayMode,
+        'app-sidebar-open': !sidebarCollapsed,
+      }"
+    >
       <div class="app-aurora app-aurora-cyan" aria-hidden="true"></div>
       <div class="app-aurora app-aurora-violet" aria-hidden="true"></div>
       <div class="app-grid-glow" aria-hidden="true"></div>
+      <button
+        v-if="isNavigationOverlayMode && !sidebarCollapsed"
+        class="sidebar-backdrop"
+        type="button"
+        aria-label="Close navigation"
+        @click="closeSidebar"
+      ></button>
       <div class="sidebar-shell" :class="{ 'sidebar-shell-collapsed': sidebarCollapsed }">
         <Sidebar
           ref="sidebarRef"
@@ -37,7 +51,7 @@
           @logout="logout"
           @openIntegrations="onOpenIntegrations"
           @openIntegration="onOpenIntegration"
-          @closeSidebar="sidebarCollapsed = true"
+          @closeSidebar="closeSidebar"
         />
 
         <div v-if="sidebarCollapsed" class="sidebar-float-dock">
@@ -202,7 +216,14 @@ const { handleAgentMessage, provideMissingParams, pendingParams } = useAgent()
 const { start, stop, unreadNotifCount, hasUrgent } = useWebSocket()
 // Refs
 const sidebarRef = ref(null)
-const sidebarCollapsed = ref(false)
+const NAV_OVERLAY_BREAKPOINT = 1024
+const viewportWidth = ref(typeof window === 'undefined' ? 1440 : window.innerWidth || 1440)
+const desktopSidebarCollapsed = ref(false)
+const mobileSidebarOpen = ref(false)
+const isNavigationOverlayMode = computed(() => viewportWidth.value <= NAV_OVERLAY_BREAKPOINT)
+const sidebarCollapsed = computed(() =>
+  isNavigationOverlayMode.value ? !mobileSidebarOpen.value : desktopSidebarCollapsed.value
+)
 
 const ONBOARDING_ROUTE_TO_PATH = Object.freeze({
   'connect-apps': '/onboarding/connect-apps',
@@ -250,6 +271,11 @@ ROUTE_TO_MODULE.calendar = 'google_calendar'
 
 function normalizePathname(pathname = '/') {
   return String(pathname || '/').replace(/\/+$/, '') || '/'
+}
+
+function updateViewportWidth() {
+  if (typeof window === 'undefined') return
+  viewportWidth.value = window.innerWidth || 1440
 }
 
 function pathFor({ module = null, integrations = false, sessionId = null } = {}) {
@@ -651,6 +677,7 @@ async function handleAuthenticatedEntry({
 
 // ── Init ──────────────────────────────────────────────────
 onMounted(async () => {
+  updateViewportWidth()
   window.copyCode = (btn) => {
     const code = btn.closest('.code-block').querySelector('code').innerText
     navigator.clipboard.writeText(code)
@@ -660,6 +687,7 @@ onMounted(async () => {
   document.addEventListener('keydown', handleKeyboard)
   document.addEventListener('click', () => inputAreaRef.value?.closeMenus())
   window.addEventListener('popstate', handlePopState)
+  window.addEventListener('resize', updateViewportWidth, { passive: true })
   // Listen for TelegramRenderer "Open chat" button
   openTelegramListener = (e) => {
     dismissStudyHubSurface()
@@ -722,7 +750,13 @@ onUnmounted(() => {
   if (openIntegrationsListener) document.removeEventListener('orion:open-integrations', openIntegrationsListener)
   if (openStudyHubListener) document.removeEventListener('orion:open-study-hub', openStudyHubListener)
   window.removeEventListener('popstate', handlePopState)
+  window.removeEventListener('resize', updateViewportWidth)
   stop()
+})
+
+watch(isNavigationOverlayMode, (isOverlay) => {
+  if (!isOverlay) return
+  mobileSidebarOpen.value = false
 })
 
 // ── Auth ──────────────────────────────────────────────────
@@ -759,7 +793,24 @@ function logout() {
 }
 
 function openSidebar() {
-  sidebarCollapsed.value = false
+  if (isNavigationOverlayMode.value) {
+    mobileSidebarOpen.value = true
+    return
+  }
+  desktopSidebarCollapsed.value = false
+}
+
+function closeSidebar() {
+  if (isNavigationOverlayMode.value) {
+    mobileSidebarOpen.value = false
+    return
+  }
+  desktopSidebarCollapsed.value = true
+}
+
+function maybeCollapseSidebarAfterNavigation() {
+  if (!isNavigationOverlayMode.value) return
+  mobileSidebarOpen.value = false
 }
 
 // ── Navigation ────────────────────────────────────────────
@@ -772,6 +823,7 @@ function dismissStudyHubSurface() {
 
 function onOpenIntegrations(focusType) {
   dismissStudyHubSurface()
+  maybeCollapseSidebarAfterNavigation()
   integrationsFocusType.value = focusType || null
   showingIntegrations.value = true
   setModuleContext(null)
@@ -780,6 +832,7 @@ function onOpenIntegrations(focusType) {
 
 function onOpenIntegration(id) {
   dismissStudyHubSurface()
+  maybeCollapseSidebarAfterNavigation()
   showingIntegrations.value = false
   setModuleContext(null)
   activeModule.value = id
@@ -798,6 +851,7 @@ function closeModule() {
 
 function openDatabaseWorkspace() {
   dismissStudyHubSurface()
+  maybeCollapseSidebarAfterNavigation()
   activeModule.value = null
   showingIntegrations.value = false
   setModuleContext(null)
@@ -808,6 +862,7 @@ function openDatabaseWorkspace() {
 
 function openRazorpayWorkspace(prompt = '') {
   dismissStudyHubSurface()
+  maybeCollapseSidebarAfterNavigation()
   activeModule.value = null
   showingIntegrations.value = false
   setModuleContext(null)
@@ -822,6 +877,7 @@ function openRazorpayWorkspace(prompt = '') {
 // ── Session ───────────────────────────────────────────────
 async function switchSession(sessionId) {
   dismissStudyHubSurface()
+  maybeCollapseSidebarAfterNavigation()
   activeModule.value = null   // ← close any open module
   showingIntegrations.value = false  // ← close settings too
   setModuleContext(null)
@@ -833,6 +889,7 @@ async function switchSession(sessionId) {
 
 async function onNewChatRequested() {
   dismissStudyHubSurface()
+  maybeCollapseSidebarAfterNavigation()
   activeModule.value = null
   showingIntegrations.value = false
   activeOnboardingRoute.value = null
@@ -1095,16 +1152,21 @@ async function onOnboardingStepComplete(status = null) {
 
 .app {
   display: flex;
-  height: 100vh;
+  width: 100%;
+  height: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
   overflow: hidden;
   background: var(--bg-base);
   position: relative;
   isolation: isolate;
+  min-width: 0;
 }
 
 .sidebar-shell {
   position: relative;
   flex-shrink: 0;
+  width: var(--sidebar-width);
   z-index: 2;
   transition: width 180ms ease;
 }
@@ -1114,7 +1176,7 @@ async function onOnboardingStepComplete(status = null) {
 }
 
 .sidebar-shell-collapsed + .main {
-  padding-left: 124px;
+  padding-left: var(--sidebar-dock-offset);
 }
 
 .main {
@@ -1123,6 +1185,7 @@ async function onOnboardingStepComplete(status = null) {
 
 .sidebar-panel {
   position: relative;
+  height: 100%;
   transition: transform 180ms ease, opacity 180ms ease;
 }
 
@@ -1136,8 +1199,8 @@ async function onOnboardingStepComplete(status = null) {
 }
 
 .sidebar-float-dock {
-  position: absolute;
-  top: 14px;
+  position: fixed;
+  top: calc(env(safe-area-inset-top) + 14px);
   left: 14px;
   display: flex;
   align-items: center;
@@ -1252,6 +1315,16 @@ async function onOnboardingStepComplete(status = null) {
   z-index: 1;
 }
 
+.sidebar-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  border: 0;
+  background: rgba(3, 8, 20, 0.62);
+  backdrop-filter: blur(4px);
+  cursor: pointer;
+}
+
 .split-view {
   flex: 1;
   display: flex;
@@ -1303,5 +1376,48 @@ async function onOnboardingStepComplete(status = null) {
     radial-gradient(circle at 58% 12%, rgba(82, 212, 255, 0.08), transparent 22%),
     radial-gradient(circle at 82% 82%, rgba(139, 125, 255, 0.08), transparent 24%);
   opacity: 0.8;
+}
+
+@media (max-width: 1024px) {
+  .sidebar-shell,
+  .sidebar-shell-collapsed {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: auto;
+    z-index: 30;
+  }
+
+  .sidebar-shell-collapsed + .main {
+    padding-left: 0;
+  }
+
+  .sidebar-panel {
+    width: min(var(--sidebar-mobile-width), calc(100vw - 16px));
+    border-radius: 0 24px 24px 0;
+    box-shadow: var(--shadow-lg);
+  }
+
+  .sidebar-float-dock {
+    top: calc(env(safe-area-inset-top) + 12px);
+    left: 12px;
+  }
+}
+
+@media (max-width: 640px) {
+  .sidebar-panel {
+    width: min(var(--sidebar-mobile-width), calc(100vw - 12px));
+    border-radius: 0 20px 20px 0;
+  }
+
+  .sidebar-float-brand,
+  .sidebar-float-bell {
+    width: 42px;
+    height: 42px;
+    border-radius: 15px;
+  }
+
+  .sidebar-float-brand-mark {
+    font-size: 18px;
+  }
 }
 </style>

@@ -74,6 +74,22 @@
                 <button class="gs-icon-btn" type="button" title="Open in Google Sheets" @click="openSpreadsheetInGoogle">⧉</button>
                 <button class="gs-icon-btn" type="button" title="Refresh" @click="refreshWorkbook">↻</button>
                 <button
+                  v-if="isPhoneLayout"
+                  class="gs-mobile-pill"
+                  type="button"
+                  @click="showFormulaBar = !showFormulaBar"
+                >
+                  {{ showFormulaBar ? "fx hide" : "fx" }}
+                </button>
+                <button
+                  v-if="isPhoneLayout"
+                  class="gs-mobile-pill"
+                  type="button"
+                  @click="aiPanelOpen = !aiPanelOpen"
+                >
+                  {{ aiPanelOpen ? "Hide AI" : "AI" }}
+                </button>
+                <button
                   v-if="currentPermissions.canShare"
                   class="gs-share-btn"
                   type="button"
@@ -550,6 +566,7 @@ const {
 const pageError = ref("");
 const titleInputRef = ref(null);
 const gridFocusRef = ref(null);
+const viewportWidth = ref(typeof window !== "undefined" ? window.innerWidth : 1280);
 const activeMenu = ref("");
 const moreMenuOpen = ref(false);
 const aiPanelOpen = ref(true);
@@ -612,6 +629,7 @@ const filterDraft = reactive({
   value: "",
 });
 const filtersBySheet = reactive({});
+const isPhoneLayout = computed(() => viewportWidth.value <= 640);
 
 // const workspaceTabs = computed(() => [
 //   { id: "agent", label: "Chat", icon: "C", accent: "#344155", active: false },
@@ -2872,6 +2890,21 @@ function handleSheetMenuPointerDown(event) {
   }
 }
 
+function handleViewportResize() {
+  viewportWidth.value = window.innerWidth;
+}
+
+function applyResponsiveViewDefaults() {
+  handleViewportResize();
+  if (!isPhoneLayout.value) return;
+  aiPanelOpen.value = false;
+  showFormulaBar.value = false;
+  moreMenuOpen.value = false;
+  activeMenu.value = "";
+  sheetListOpen.value = false;
+  closeSheetMenu();
+}
+
 watch(
   () => [currentWorkbook.value?.spreadsheetId, currentWorkbook.value?.activeSheetId, currentWorkbook.value?.title],
   ([spreadsheetId, activeSheetId], [previousSpreadsheetId, previousActiveSheetId]) => {
@@ -2908,9 +2941,11 @@ watch(
 );
 
 onMounted(async () => {
+  applyResponsiveViewDefaults();
   document.addEventListener("click", handleOutsideClick);
   document.addEventListener("pointerdown", handleSheetMenuPointerDown, true);
   window.addEventListener("resize", syncOpenSheetMenuPosition);
+  window.addEventListener("resize", handleViewportResize);
   await boot();
 });
 
@@ -2918,6 +2953,7 @@ onBeforeUnmount(() => {
   document.removeEventListener("click", handleOutsideClick);
   document.removeEventListener("pointerdown", handleSheetMenuPointerDown, true);
   window.removeEventListener("resize", syncOpenSheetMenuPosition);
+  window.removeEventListener("resize", handleViewportResize);
 });
 </script>
 
@@ -3135,7 +3171,8 @@ onBeforeUnmount(() => {
 .gs-tab-plain,
 .gs-sheet-tab,
 .gs-share-btn,
-.gs-plus-btn {
+.gs-plus-btn,
+.gs-mobile-pill {
   border: 1px solid rgba(176, 201, 255, 0.08);
   background: rgba(255, 255, 255, 0.035);
   color: rgba(228, 236, 250, 0.82);
@@ -3161,6 +3198,11 @@ onBeforeUnmount(() => {
   background: #2d6df6;
   color: white;
   border-color: rgba(45, 109, 246, 0.6);
+}
+
+.gs-mobile-pill {
+  min-height: 32px;
+  padding: 0 12px;
 }
 
 .gs-plus-btn {
@@ -3679,6 +3721,167 @@ onBeforeUnmount(() => {
 
   .gs-grid-wrap {
     min-height: 360px;
+  }
+}
+
+@media (max-width: 1366px) {
+  .gs-shell {
+    padding: 10px 12px 12px;
+  }
+
+  .gs-docbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .gs-docbar-right {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .gs-chart-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  }
+}
+
+@media (max-width: 1024px) {
+  .gs-shell {
+    gap: 8px;
+    padding: 8px 10px 10px;
+  }
+
+  .gs-top-shell {
+    padding: 10px 8px 8px;
+  }
+
+  .gs-docbar {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .gs-docbar-left,
+  .gs-docbar-center,
+  .gs-docbar-right,
+  .gs-formula-bar,
+  .gs-tabsbar,
+  .gs-tabsbar-right {
+    flex-wrap: wrap;
+  }
+
+  .gs-docbar-center,
+  .gs-docbar-right {
+    justify-self: start;
+    width: 100%;
+  }
+
+  .gs-doc-title-input {
+    width: 100%;
+  }
+
+  .gs-menubar {
+    gap: 10px;
+    overflow-x: auto;
+  }
+
+  .gs-name-box {
+    width: 72px;
+  }
+
+  .gs-modal-backdrop {
+    padding: 16px;
+  }
+
+  .gs-modal {
+    max-height: min(88dvh, 720px);
+    overflow: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .gs-shell {
+    padding: 8px;
+  }
+
+  .gs-top-shell {
+    padding: 8px;
+    border-radius: 16px 16px 12px 12px;
+  }
+
+  .gs-docbar {
+    gap: 8px;
+  }
+
+  .gs-doc-meta {
+    flex: 1;
+  }
+
+  .gs-doc-breadcrumb {
+    flex-wrap: wrap;
+    white-space: normal;
+  }
+
+  .gs-docbar-center {
+    order: 3;
+    width: 100%;
+    justify-self: start;
+    font-size: 10px;
+  }
+
+  .gs-docbar-right {
+    width: 100%;
+    justify-self: start;
+  }
+
+  .gs-menubar {
+    display: none;
+  }
+
+  .gs-formula-bar {
+    gap: 8px;
+  }
+
+  .gs-name-box {
+    width: 58px;
+  }
+
+  .gs-sheet-card {
+    padding: 6px;
+    gap: 8px;
+  }
+
+  .gs-grid-wrap {
+    min-height: 320px;
+  }
+
+  .gs-tabsbar {
+    gap: 8px;
+    padding-inline: 0;
+  }
+
+  .gs-tabsbar-right {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .gs-chart-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .gs-modal {
+    width: 100%;
+    padding: 16px;
+    border-radius: 20px;
+  }
+
+  .gs-modal-actions {
+    flex-direction: column;
+  }
+
+  .gs-modal-btn {
+    width: 100%;
+  }
+
+  .gs-recent-list {
+    max-height: min(46dvh, 360px);
   }
 }
 </style>

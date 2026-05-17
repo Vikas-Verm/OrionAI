@@ -690,7 +690,9 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  height: 100vh;
+  height: 100%;
+  min-height: 0;
+  max-width: min(var(--sidebar-width), 100vw);
   overflow: hidden;
   padding: 14px 12px;
   gap: 10px;
@@ -1860,5 +1862,105 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   flex-shrink: 0;
   box-shadow: 0 0 8px rgba(255, 107, 127, 0.6);
   animation: health-pulse 2s infinite;
+}
+
+@media (max-width: 1366px) {
+  .sidebar {
+    padding: 12px 10px;
+  }
+
+  .sidebar-brand,
+  .sidebar-footer,
+  .int-section {
+    border-radius: 20px;
+  }
+}
+
+@media (max-width: 1024px) {
+  .sidebar {
+    width: min(var(--sidebar-mobile-width), calc(100vw - 16px));
+    max-width: calc(100vw - 16px);
+    padding: 12px 10px calc(14px + env(safe-area-inset-bottom));
+    border-right: 0;
+  }
+
+  .sidebar-brand {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background:
+      linear-gradient(180deg, rgba(18, 27, 49, 0.98), rgba(11, 17, 34, 0.94)),
+      rgba(7, 12, 26, 0.92);
+  }
+
+  .sidebar-brand-name {
+    font-size: 16px;
+  }
+
+  .sidebar-beta {
+    display: none;
+  }
+
+  .sidebar-quick-btn::after {
+    display: none;
+  }
+
+  .session-item,
+  .int-row-inner,
+  .int-settings-row,
+  .user-info {
+    min-height: 44px;
+  }
+
+  .int-list-scroll {
+    max-height: min(32vh, 240px);
+  }
+}
+
+@media (max-width: 640px) {
+  .sidebar {
+    width: min(var(--sidebar-mobile-width), calc(100vw - 12px));
+    max-width: calc(100vw - 12px);
+    padding-inline: 8px;
+    gap: 8px;
+  }
+
+  .sidebar-brand,
+  .sidebar-footer,
+  .int-section {
+    border-radius: 18px;
+  }
+
+  .sidebar-brand {
+    padding: 10px;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .sidebar-brand-actions {
+    gap: 4px;
+  }
+
+  .sidebar-bell,
+  .sidebar-close,
+  .sidebar-quick-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 12px;
+  }
+
+  .sidebar-search-shell {
+    height: 36px;
+    border-radius: 14px;
+  }
+
+  .shortcuts-hint {
+    flex-wrap: wrap;
+  }
+
+  .bell-panel {
+    width: calc(100% - 16px);
+    margin-inline: 8px;
+    max-height: min(44vh, 340px);
+  }
 }
 </style>

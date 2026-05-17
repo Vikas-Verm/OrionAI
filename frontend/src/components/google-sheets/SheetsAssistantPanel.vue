@@ -476,6 +476,26 @@ function handleKeydown(event) {
   .gsa-panel {
     width: 100%;
     min-width: 0;
+    max-height: min(44dvh, 420px);
+  }
+}
+
+@media (max-width: 640px) {
+  .gsa-panel {
+    border-radius: 16px;
+  }
+
+  .gsa-tabs {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .gsa-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .gsa-input-wrap {
+    padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
   }
 }
 </style>

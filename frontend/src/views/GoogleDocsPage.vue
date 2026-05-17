@@ -93,6 +93,22 @@
               <div class="gd-docbar-right">
                 <button class="gd-icon-btn" type="button" title="Open in Google Docs" @click="openDocumentInGoogle">⧉</button>
                 <button class="gd-icon-btn" type="button" title="Version history" @click="openDocumentInGoogle">🕘</button>
+                <button
+                  v-if="isPhoneLayout"
+                  class="gd-mobile-pill"
+                  type="button"
+                  @click="outlineCollapsed = !outlineCollapsed"
+                >
+                  {{ outlineCollapsed ? "Outline" : "Hide tabs" }}
+                </button>
+                <button
+                  v-if="isPhoneLayout"
+                  class="gd-mobile-pill"
+                  type="button"
+                  @click="aiPanelOpen = !aiPanelOpen"
+                >
+                  {{ aiPanelOpen ? "Hide AI" : "AI" }}
+                </button>
                 <div v-if="currentPermissions.canDownload" class="gd-menu-wrap">
                   <button
                     class="gd-icon-btn"
@@ -182,6 +198,7 @@
 
         <div class="gd-workspace" :class="{ 'gd-workspace--ai-closed': !aiPanelOpen }">
           <GoogleDocsOutlinePanel
+            v-if="!isPhoneLayout || !outlineCollapsed"
             :collapsed="outlineCollapsed"
             :documents="documents"
             :active-document-id="currentDocument?.documentId || ''"
@@ -544,6 +561,7 @@ const emit = defineEmits(["close", "open-integrations"]);
 const editorRef = ref(null);
 const localImageInputRef = ref(null);
 const titleInputRef = ref(null);
+const viewportWidth = ref(typeof window !== "undefined" ? window.innerWidth : 1280);
 const outlineCollapsed = ref(false);
 const aiPanelOpen = ref(true);
 const activeAiTab = ref("chat");
@@ -581,6 +599,7 @@ const pageError = ref("");
 const pageMetrics = ref({ pageCount: 1, currentPage: 1 });
 const aiMessages = ref([]);
 const aiRequestCounter = ref(0);
+const isPhoneLayout = computed(() => viewportWidth.value <= 640);
 
 // const workspaceTabs = [
 //   { label: "Chat", iconLabel: "◔", iconClass: "gd-app-tab-icon--chat", active: false },
@@ -1552,13 +1571,27 @@ watch(
   }
 );
 
+function handleViewportResize() {
+  viewportWidth.value = window.innerWidth;
+}
+
 onMounted(async () => {
+  handleViewportResize();
+  if (isPhoneLayout.value) {
+    outlineCollapsed.value = true;
+    aiPanelOpen.value = false;
+    activeHeaderMenu.value = "";
+    exportMenuOpen.value = false;
+    moreMenuOpen.value = false;
+  }
   document.addEventListener("click", handleOutsideClick);
+  window.addEventListener("resize", handleViewportResize);
   await boot();
 });
 
 onBeforeUnmount(() => {
   document.removeEventListener("click", handleOutsideClick);
+  window.removeEventListener("resize", handleViewportResize);
   editorRef.value?.cancelActiveStream?.();
 });
 </script>
@@ -1826,7 +1859,8 @@ onBeforeUnmount(() => {
 .gd-plus-btn,
 .gd-share-btn,
 .gd-state-btn,
-.gd-zoom-btn {
+.gd-zoom-btn,
+.gd-mobile-pill {
   border: 1px solid rgba(176, 201, 255, 0.08);
   background: rgba(255, 255, 255, 0.035);
   color: rgba(228, 236, 250, 0.82);
@@ -1848,6 +1882,11 @@ onBeforeUnmount(() => {
   width: 32px;
   min-width: 32px;
   padding: 0;
+}
+
+.gd-mobile-pill {
+  min-height: 32px;
+  padding: 0 12px;
 }
 
 .gd-share-btn,
@@ -2308,6 +2347,149 @@ onBeforeUnmount(() => {
 
   .gd-dialog-select,
   .gd-dialog-btn {
+    width: 100%;
+  }
+}
+
+@media (max-width: 1366px) {
+  .gd-shell {
+    padding: 10px 12px 12px;
+  }
+
+  .gd-docbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .gd-docbar-right {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 1320px) {
+  .gd-outline,
+  .gd-outline--collapsed,
+  .gd-ai {
+    width: 100%;
+    max-width: none;
+  }
+
+  .gd-center--wide .gd-center-surface {
+    padding-right: 0;
+  }
+}
+
+@media (max-width: 1024px) {
+  .gd-shell {
+    gap: 8px;
+    padding: 8px 10px 10px;
+  }
+
+  .gd-top-shell {
+    padding: 10px 8px 8px;
+  }
+
+  .gd-app-tabs {
+    padding-inline: 0;
+    gap: 4px;
+  }
+
+  .gd-docbar {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .gd-docbar-left,
+  .gd-docbar-center,
+  .gd-docbar-right,
+  .gd-statusbar-left,
+  .gd-statusbar-right {
+    flex-wrap: wrap;
+  }
+
+  .gd-docbar-center,
+  .gd-docbar-right {
+    justify-self: start;
+    width: 100%;
+  }
+
+  .gd-doc-title-input {
+    width: 100%;
+  }
+
+  .gd-menubar,
+  .gd-statusbar {
+    gap: 10px;
+    overflow-x: auto;
+  }
+
+  .gd-statusbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .gd-dialog-backdrop {
+    padding: 16px;
+  }
+
+  .gd-dialog {
+    max-height: min(88dvh, 720px);
+    overflow: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .gd-shell {
+    padding: 8px;
+  }
+
+  .gd-top-shell {
+    padding: 8px;
+    border-radius: 16px 16px 12px 12px;
+  }
+
+  .gd-docbar {
+    gap: 8px;
+  }
+
+  .gd-doc-meta {
+    flex: 1;
+  }
+
+  .gd-docbar-center {
+    order: 3;
+    width: 100%;
+    justify-self: start;
+    font-size: 10px;
+  }
+
+  .gd-docbar-right {
+    width: 100%;
+    justify-self: start;
+  }
+
+  .gd-doc-breadcrumb {
+    flex-wrap: wrap;
+    white-space: normal;
+  }
+
+  .gd-menubar {
+    display: none;
+  }
+
+  .gd-docbar-right,
+  .gd-dialog-head,
+  .gd-dialog-actions {
+    align-items: stretch;
+  }
+
+  .gd-dialog {
+    width: 100%;
+    padding: 16px;
+    border-radius: 20px;
+  }
+
+  .gd-dialog-btn,
+  .gd-dialog-select {
     width: 100%;
   }
 }

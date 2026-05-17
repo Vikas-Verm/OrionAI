@@ -1,13 +1,13 @@
 <template>
-  <div class="wa-shell" :class="{ 'is-collapsed': sidebarCollapsed }">
-    <aside class="wa-sidebar" :class="{ collapsed: sidebarCollapsed }">
+  <div class="wa-shell" :class="{ 'is-collapsed': isSidebarCollapsed, 'wa-shell--mobile': isCompactLayout }">
+    <aside v-if="showSidebarPane" class="wa-sidebar" :class="{ collapsed: isSidebarCollapsed }">
       <div class="wa-sidebar-head">
         <button
           class="wa-brand wa-brand-btn"
           type="button"
-          :disabled="!sidebarCollapsed && !isConnected"
-          :title="sidebarCollapsed ? 'Expand sidebar' : (isConnected ? 'View your WhatsApp profile' : 'WhatsApp not connected')"
-          @click="sidebarCollapsed ? (sidebarCollapsed = false) : toggleProfilePanel()"
+          :disabled="!isSidebarCollapsed && !isConnected"
+          :title="isSidebarCollapsed ? 'Expand sidebar' : (isConnected ? 'View your WhatsApp profile' : 'WhatsApp not connected')"
+          @click="isSidebarCollapsed ? (sidebarCollapsed = false) : toggleProfilePanel()"
         >
           <div class="wa-brand-icon">
             <img
@@ -21,13 +21,13 @@
               {{ avatarInitials(status.profile?.displayName || status.profile?.phone || 'WhatsApp') }}
             </span>
           </div>
-          <div v-if="!sidebarCollapsed" class="wa-brand-copy">
+          <div v-if="!isSidebarCollapsed" class="wa-brand-copy">
             <strong>WhatsApp</strong>
             <span>{{ isConnected ? (status.profile?.displayName || 'Connected') : 'Connect WhatsApp in Integrations' }}</span>
           </div>
         </button>
 
-        <div v-if="!sidebarCollapsed" class="wa-head-actions">
+        <div v-if="!isSidebarCollapsed" class="wa-head-actions">
           <button
             class="wa-icon-btn"
             :disabled="syncingContacts || !isConnected"
@@ -52,6 +52,7 @@
             </svg>
           </button>
           <button
+            v-if="!isCompactLayout"
             class="wa-icon-btn"
             title="Collapse sidebar"
             @click="sidebarCollapsed = true"
@@ -63,7 +64,7 @@
         </div>
       </div>
 
-      <div v-if="showProfilePanel && isConnected && !sidebarCollapsed" class="wa-profile-popover">
+      <div v-if="showProfilePanel && isConnected && !isSidebarCollapsed" class="wa-profile-popover">
         <div class="wa-profile-card">
           <div class="wa-profile-actions">
             <button class="wa-icon-btn wa-icon-btn--ghost" title="Close profile" @click="showProfilePanel = false">
@@ -113,7 +114,7 @@
         </div>
       </div>
 
-      <div v-if="isConnected && !sidebarCollapsed" class="wa-action-panel-wrap">
+      <div v-if="isConnected && !isSidebarCollapsed" class="wa-action-panel-wrap">
         <CommunicationInsightsWidget
           title="OrionAI insights"
           panel-title="Reply / Action Required"
@@ -133,7 +134,7 @@
         />
       </div>
 
-      <div v-if="!sidebarCollapsed" class="wa-search-wrap">
+      <div v-if="!isSidebarCollapsed" class="wa-search-wrap">
         <svg class="wa-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="11" cy="11" r="7" />
           <path d="m20 20-3.5-3.5" />
@@ -147,7 +148,7 @@
         />
       </div>
 
-      <div v-if="!sidebarCollapsed" class="wa-filter-row">
+      <div v-if="!isSidebarCollapsed" class="wa-filter-row">
         <button
           v-for="filter in CHAT_FILTERS"
           :key="filter.id"
@@ -160,17 +161,17 @@
         </button>
       </div>
 
-      <div v-if="loadingChats && chats.length === 0" class="wa-list-state" :class="{ compact: sidebarCollapsed }">
-        <div v-for="n in sidebarCollapsed ? 6 : 5" :key="`chat-skeleton-${n}`" class="wa-chat-skeleton" :class="{ compact: sidebarCollapsed }">
+      <div v-if="loadingChats && chats.length === 0" class="wa-list-state" :class="{ compact: isSidebarCollapsed }">
+        <div v-for="n in isSidebarCollapsed ? 6 : 5" :key="`chat-skeleton-${n}`" class="wa-chat-skeleton" :class="{ compact: isSidebarCollapsed }">
           <span class="wa-chat-skeleton-avatar"></span>
-          <span v-if="!sidebarCollapsed" class="wa-chat-skeleton-lines">
+          <span v-if="!isSidebarCollapsed" class="wa-chat-skeleton-lines">
             <span></span>
             <span></span>
           </span>
         </div>
       </div>
 
-      <div v-else-if="!isConnected && !sidebarCollapsed" class="wa-list-empty">
+      <div v-else-if="!isConnected && !isSidebarCollapsed" class="wa-list-empty">
         <div class="wa-empty-orb">
           <span>QR</span>
         </div>
@@ -186,7 +187,7 @@
         <button class="wa-primary-btn" @click="emit('open-integrations')">Open Integrations</button>
       </div>
 
-      <div v-else-if="filteredChats.length === 0 && !sidebarCollapsed" class="wa-list-empty">
+      <div v-else-if="filteredChats.length === 0 && !isSidebarCollapsed" class="wa-list-empty">
         <div class="wa-empty-orb">
           <span>0</span>
         </div>
@@ -198,12 +199,12 @@
         </p>
       </div>
 
-      <div v-else class="wa-chat-list" :class="{ compact: sidebarCollapsed }">
+      <div v-else class="wa-chat-list" :class="{ compact: isSidebarCollapsed }">
         <button
           v-for="chat in filteredChats"
           :key="chat.roomId || chat.id"
           class="wa-chat-row"
-          :class="{ active: currentRoomId(chat) === currentRoomId(selectedChat), compact: sidebarCollapsed }"
+          :class="{ active: currentRoomId(chat) === currentRoomId(selectedChat), compact: isSidebarCollapsed }"
           :title="chat.title || chat.name"
           @click="selectChat(chat)"
         >
@@ -217,7 +218,7 @@
             <span v-else>{{ avatarInitials(chat.title || chat.name) }}</span>
           </div>
 
-          <template v-if="!sidebarCollapsed">
+          <template v-if="!isSidebarCollapsed">
             <div class="wa-chat-copy">
               <div class="wa-chat-title-row">
                 <strong>{{ chat.title || chat.name }}</strong>
@@ -240,7 +241,7 @@
       </div>
     </aside>
 
-    <main class="wa-main">
+    <main v-if="showMainPane" class="wa-main">
       <template v-if="!isConnected">
         <section class="wa-state-panel">
           <div class="wa-state-hero">
@@ -290,6 +291,15 @@
 
       <template v-else>
         <header class="wa-chat-head">
+          <button
+            v-if="isCompactLayout"
+            class="wa-icon-btn wa-chat-back"
+            type="button"
+            title="Back to chats"
+            @click="selectedChat = null; showInfoPanel = false; searchInChatOpen = false; messageQuery = ''"
+          >
+            <span aria-hidden="true">←</span>
+          </button>
           <button class="wa-chat-head-main wa-chat-head-main-btn" type="button" @click="showInfoPanel = !showInfoPanel">
             <div class="wa-chat-head-avatar">
               <img
@@ -909,6 +919,7 @@ const failedImages = ref({})
 const showInfoPanel = ref(false)
 const showProfilePanel = ref(false)
 const sidebarCollapsed = ref(false)
+const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1280)
 const localReadCutoffs = ref({})
 
 const fileInputEl = ref(null)
@@ -937,6 +948,16 @@ const { unreadByApp } = useWebSocket()
 
 const isConnected = computed(() =>
   Boolean(status.value.connected || status.value.loginState === 'connected')
+)
+const isCompactLayout = computed(() => viewportWidth.value <= 860)
+const isSidebarCollapsed = computed(() => !isCompactLayout.value && sidebarCollapsed.value)
+const showSidebarPane = computed(() => {
+  if (!isCompactLayout.value) return true
+  if (!isConnected.value) return false
+  return !selectedChat.value
+})
+const showMainPane = computed(() =>
+  !isCompactLayout.value || !isConnected.value || !!selectedChat.value
 )
 const canRecordVoice = computed(() =>
   typeof window !== 'undefined' &&
@@ -2330,6 +2351,10 @@ function toggleMessageSearch() {
   }
 }
 
+function handleViewportResize() {
+  viewportWidth.value = window.innerWidth
+}
+
 function startVoiceCall() {
   const phone = callPhoneNumber.value
   if (!phone) {
@@ -2396,11 +2421,14 @@ watch(
 )
 
 onMounted(async () => {
+  handleViewportResize()
   await refreshAll()
   startPolling()
+  window.addEventListener('resize', handleViewportResize)
 })
 
 onUnmounted(() => {
+  window.removeEventListener('resize', handleViewportResize)
   stopPolling()
   stopRecordingTimer()
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
@@ -2565,6 +2593,10 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.wa-chat-back {
+  flex-shrink: 0;
 }
 
 .wa-profile-actions {
@@ -4028,11 +4060,15 @@ onUnmounted(() => {
 
   .wa-sidebar,
   .wa-sidebar.collapsed {
-    min-height: 40vh;
-    height: auto;
+    flex: 1;
+    min-height: 0;
+    height: 100%;
     border-right: 0;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
     padding-inline: 14px;
+  }
+
+  .wa-main {
+    min-height: 0;
   }
 
   .wa-chat-row.compact {
@@ -4058,6 +4094,39 @@ onUnmounted(() => {
 }
 
 @media (max-width: 640px) {
+  .wa-sidebar {
+    gap: 8px;
+    padding: 12px;
+  }
+
+  .wa-state-panel {
+    padding: 20px 16px;
+  }
+
+  .wa-state-hero {
+    gap: 20px;
+  }
+
+  .wa-state-illustration {
+    min-height: 220px;
+  }
+
+  .wa-state-card {
+    inset: 28px 12px 12px 28px;
+    padding: 18px;
+  }
+
+  .wa-empty-orb {
+    width: 64px;
+    height: 64px;
+    border-radius: 22px;
+    font-size: 18px;
+  }
+
+  .wa-list-empty {
+    padding: 22px 16px;
+  }
+
   .wa-chat-head,
   .wa-composer-shell,
   .wa-thread-scroll {

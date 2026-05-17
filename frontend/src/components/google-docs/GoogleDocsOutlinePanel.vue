@@ -277,6 +277,7 @@ watch(
   background: linear-gradient(180deg, rgba(19, 25, 39, 0.96), rgba(14, 20, 32, 0.96));
   border: 1px solid rgba(176, 201, 255, 0.06);
   min-height: 0;
+  min-width: 0;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
 }
 
@@ -507,5 +508,35 @@ watch(
 
 .gd-outline-empty--docs {
   padding-inline: 2px;
+}
+
+@media (max-width: 1320px) {
+  .gd-outline,
+  .gd-outline--collapsed {
+    width: 100%;
+  }
+
+  .gd-outline-docs {
+    max-height: min(28dvh, 280px);
+  }
+}
+
+@media (max-width: 640px) {
+  .gd-outline {
+    padding: 14px 10px 12px;
+    border-radius: 16px;
+  }
+
+  .gd-outline-head {
+    flex-wrap: wrap;
+  }
+
+  .gd-outline-actions {
+    margin-left: auto;
+  }
+
+  .gd-outline-search-input {
+    min-height: 40px;
+  }
 }
 </style>
