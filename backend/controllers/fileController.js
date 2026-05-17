@@ -11,6 +11,39 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
 });
 
+function inferUploadType(file, requestedType) {
+  const requested = String(requestedType || "").trim().toLowerCase();
+  if (requested) return requested;
+
+  const name = String(file?.originalname || "").toLowerCase();
+  if (name.endsWith(".csv")) return "csv";
+  if (name.endsWith(".doc") || name.endsWith(".docx")) return "docx";
+  if (name.endsWith(".xls") || name.endsWith(".xlsx")) return "xlsx";
+  if (file?.mimetype?.startsWith("image/")) return "image";
+  return "file";
+}
+
+function isPlainTextUpload(fileType, mimetype) {
+  return (
+    fileType === "csv" ||
+    fileType === "txt" ||
+    mimetype?.startsWith("text/") ||
+    mimetype === "application/json"
+  );
+}
+
+function extractGenericUploadText(file, fileType) {
+  if (isPlainTextUpload(fileType, file.mimetype)) {
+    return file.buffer.toString("utf-8");
+  }
+
+  return [
+    `Uploaded ${fileType} file: ${file.originalname}.`,
+    `MIME type: ${file.mimetype || "unknown"}.`,
+    `Size: ${file.size} bytes.`,
+  ].join(" ");
+}
+
 // Upload and process PDF
 async function uploadPDF(req, res) {
   if (!req.file) return res.status(400).json({ error: "No file uploaded" });
@@ -54,12 +87,13 @@ async function uploadCSV(req, res) {
   const userId = req.user.username;
 
   try {
-    const text = req.file.buffer.toString("utf-8");
+    const fileType = inferUploadType(req.file, req.body.type);
+    const text = extractGenericUploadText(req.file, fileType);
 
     const result = await processFile(
       text,
       req.file.originalname,
-      "csv",
+      fileType,
       sessionId,
       userId,
       req.file.size

@@ -5,7 +5,10 @@ const fileSchema = new mongoose.Schema({
   sessionId: { type: String, required: true, index: true },
   userId: { type: String, required: true },
   filename: { type: String, required: true },
-  fileType: { type: String, enum: ["pdf", "csv", "image"] },
+  fileType: {
+    type: String,
+    enum: ["pdf", "csv", "image", "docx", "xlsx", "file", "txt", "json"],
+  },
   fileSize: { type: Number },
   totalChunks: { type: Number },
   status: {

@@ -37,6 +37,25 @@
       <button @click="onSend" :disabled="store.loading || !input.trim()" class="send-btn">➤</button>
     </div>
 
+    <div class="input-mode-row" aria-label="Composer modes">
+      <button
+        type="button"
+        class="input-mode-toggle"
+        :class="{ active: store.mode === 'agent' && !store.webMode }"
+        @click="toggleAgentMode"
+      >
+        Agent
+      </button>
+      <button
+        type="button"
+        class="input-mode-toggle"
+        :class="{ active: store.webMode }"
+        @click="toggleWebSearch"
+      >
+        Web
+      </button>
+    </div>
+
     <p class="input-hint">Enter to send · Shift+Enter for new line</p>
   </div>
 </template>
@@ -71,6 +90,22 @@ function autoResize() {
     textareaRef.value.style.height = 'auto'
     textareaRef.value.style.height = Math.min(textareaRef.value.scrollHeight, 200) + 'px'
   }
+}
+
+function toggleAgentMode() {
+  if (store.mode === 'agent' && !store.webMode) {
+    setMode('chat')
+    store.webMode = false
+    return
+  }
+
+  setMode('agent')
+  store.webMode = false
+}
+
+function toggleWebSearch() {
+  store.webMode = !store.webMode
+  store.mode = 'chat'
 }
 
 function closeMenus() { attachMenuRef.value?.closeMenu() }

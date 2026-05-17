@@ -5,7 +5,11 @@ const documentChunkSchema = new mongoose.Schema({
   userId: { type: String, required: true },
   fileId: { type: String, required: true }, // groups chunks from same file
   filename: { type: String, required: true },
-  fileType: { type: String, enum: ["pdf", "csv", "image"], required: true },
+  fileType: {
+    type: String,
+    enum: ["pdf", "csv", "image", "docx", "xlsx", "file", "txt", "json"],
+    required: true,
+  },
   chunkIndex: { type: Number, required: true },
   content: { type: String, required: true },
   embedding: { type: [Number], required: true }, // 384-dim vector

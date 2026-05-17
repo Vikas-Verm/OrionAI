@@ -1,5 +1,11 @@
 const { randomUUID } = require("crypto");
-const { getEmbedding, cosineSimilarity } = require("./embeddingService");
+const {
+  getEmbedding,
+  cosineSimilarity,
+  isSentenceSimilarityMode,
+  scoreSentences,
+  placeholderEmbedding,
+} = require("./embeddingService");
 
 let documentChunks = []; // { id, content, embedding, index }
 
@@ -25,10 +31,13 @@ async function ingestDocument(text, filename) {
   // Generate embedding for each chunk
   // We do this one by one to avoid rate limits
   const chunksWithEmbeddings = [];
+  const sentenceMode = isSentenceSimilarityMode();
 
   for (let i = 0; i < chunks.length; i++) {
     console.log(`🔢 Embedding chunk ${i + 1}/${chunks.length}...`);
-    const embedding = await getEmbedding(chunks[i]);
+    const embedding = sentenceMode
+      ? placeholderEmbedding()
+      : await getEmbedding(chunks[i]);
     chunksWithEmbeddings.push({
       id: randomUUID(),
       content: chunks[i],
@@ -47,6 +56,22 @@ async function ingestDocument(text, filename) {
 // Semantic search — find chunks most similar in MEANING to the query
 async function retrieveRelevantChunks(query, topK = 3) {
   if (documentChunks.length === 0) return [];
+
+  if (isSentenceSimilarityMode()) {
+    const scores = await scoreSentences(
+      query,
+      documentChunks.map((chunk) => chunk.content)
+    );
+
+    return documentChunks
+      .map((chunk, index) => ({
+        ...chunk,
+        score: scores[index] || 0,
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, topK);
+  }
+
   // Convert query to vector
   console.log(`🔍 Embedding query for semantic search...`);
   const queryEmbedding = await getEmbedding(query);

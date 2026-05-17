@@ -11,6 +11,7 @@ export function useFiles() {
       const fd = new FormData();
       fd.append("file", file);
       fd.append("sessionId", store.currentSessionId);
+      fd.append("type", type);
 
       const res = type === "pdf" ? await filesAPI.uploadPDF(fd) : await filesAPI.uploadCSV(fd);
 
