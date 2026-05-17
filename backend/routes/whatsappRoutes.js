@@ -31,7 +31,10 @@ const whatsappUpload = multer({
 
 router.post("/connect", async (req, res) => {
   try {
-    const result = await connectWhatsAppIntegration(req.user?.username, req.body || {});
+    const result = await connectWhatsAppIntegration(
+      req.user?.username,
+      req.body || {}
+    );
     res.json({
       ok: true,
       integration: result.clientIntegration || result.integration || null,
@@ -48,7 +51,9 @@ router.get("/status", async (req, res) => {
     const status = await getWhatsAppStatus(req.user?.username);
     res.json({
       ...status,
-      status: status.connected ? "connected" : status.loginState || "disconnected",
+      status: status.connected
+        ? "connected"
+        : status.loginState || "disconnected",
       qrImage: status.qrImageUrl || null,
     });
   } catch (err) {
@@ -141,7 +146,8 @@ router.get("/rooms/:roomId/messages", async (req, res) => {
 
 router.post("/messages", async (req, res) => {
   try {
-    const roomRef = req.body?.chatId || req.body?.roomId || req.body?.contact || "";
+    const roomRef =
+      req.body?.chatId || req.body?.roomId || req.body?.contact || "";
     const result = await getWhatsAppRoomTimeline(req.user?.username, roomRef, {
       limit: Number(req.body?.limit || 30),
     });
@@ -163,9 +169,14 @@ router.post("/send", async (req, res) => {
   try {
     const roomRef = req.body?.to || req.body?.chatId || req.body?.roomId || "";
     const text = req.body?.message || req.body?.text || "";
-    const result = await sendWhatsAppMessage(req.user?.username, roomRef, text, {
-      replyToEventId: req.body?.replyToEventId || null,
-    });
+    const result = await sendWhatsAppMessage(
+      req.user?.username,
+      roomRef,
+      text,
+      {
+        replyToEventId: req.body?.replyToEventId || null,
+      }
+    );
     res.json({
       ok: true,
       chatId: result.roomId,
@@ -198,43 +209,49 @@ router.post("/rooms/:roomId/send", async (req, res) => {
   }
 });
 
-router.post("/rooms/:roomId/upload", whatsappUpload.single("file"), async (req, res) => {
-  try {
-    const { base64, fileName, mimeType, caption, replyToEventId } = req.body || {};
-    const uploadedFile = req.file || null;
-    const normalizedFileName =
-      String(uploadedFile?.originalname || fileName || "").trim() || "";
-    const normalizedMimeType =
-      String(uploadedFile?.mimetype || mimeType || "application/octet-stream").trim() ||
-      "application/octet-stream";
+router.post(
+  "/rooms/:roomId/upload",
+  whatsappUpload.single("file"),
+  async (req, res) => {
+    try {
+      const { base64, fileName, mimeType, caption, replyToEventId } =
+        req.body || {};
+      const uploadedFile = req.file || null;
+      const normalizedFileName =
+        String(uploadedFile?.originalname || fileName || "").trim() || "";
+      const normalizedMimeType =
+        String(
+          uploadedFile?.mimetype || mimeType || "application/octet-stream"
+        ).trim() || "application/octet-stream";
 
-    const buffer = Buffer.isBuffer(uploadedFile?.buffer)
-      ? uploadedFile.buffer
-      : base64
+      const buffer = Buffer.isBuffer(uploadedFile?.buffer)
+        ? uploadedFile.buffer
+        : base64
         ? Buffer.from(String(base64), "base64")
         : null;
 
-    if (!buffer || !normalizedFileName) {
-      return res.status(400).json({ error: "file upload is required" });
-    }
-
-    const result = await uploadWhatsAppMedia(
-      req.user?.username,
-      req.params.roomId,
-      buffer,
-      normalizedFileName,
-      normalizedMimeType,
-      {
-        caption: caption || "",
-        replyToEventId: replyToEventId || null,
+      if (!buffer || !normalizedFileName) {
+        return res.status(400).json({ error: "file upload is required" });
       }
-    );
-    res.json(result);
-  } catch (err) {
-    console.error("WhatsApp upload error:", err.message);
-    res.status(400).json({ error: err.message });
+
+      const result = await uploadWhatsAppMedia(
+        req.user?.username,
+        req.params.roomId,
+        buffer,
+        normalizedFileName,
+        normalizedMimeType,
+        {
+          caption: caption || "",
+          replyToEventId: replyToEventId || null,
+        }
+      );
+      res.json(result);
+    } catch (err) {
+      console.error("WhatsApp upload error:", err.message);
+      res.status(400).json({ error: err.message });
+    }
   }
-});
+);
 
 // Delete a single message. The Matrix redaction propagates through the
 // mautrix-whatsapp bridge as WhatsApp's "Delete for everyone" — the
@@ -250,14 +267,12 @@ router.post("/rooms/:roomId/messages/:eventId/redact", async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error("WhatsApp redact error:", err.message);
-    res
-      .status(err?.response?.status === 403 ? 403 : 400)
-      .json({
-        error:
-          err?.response?.status === 403
-            ? "You don't have permission to delete that message."
-            : err.message,
-      });
+    res.status(err?.response?.status === 403 ? 403 : 400).json({
+      error:
+        err?.response?.status === 403
+          ? "You don't have permission to delete that message."
+          : err.message,
+    });
   }
 });
 
@@ -295,8 +310,13 @@ router.get("/media", async (req, res) => {
   try {
     const mxc = String(req.query.mxc || "").trim();
     const thumbnail = String(req.query.thumbnail || "").trim() === "1";
-    const media = await fetchWhatsAppMedia(req.user?.username, mxc, { thumbnail });
-    res.setHeader("Content-Type", media.contentType || "application/octet-stream");
+    const media = await fetchWhatsAppMedia(req.user?.username, mxc, {
+      thumbnail,
+    });
+    res.setHeader(
+      "Content-Type",
+      media.contentType || "application/octet-stream"
+    );
     if (media.contentDisposition) {
       res.setHeader("Content-Disposition", media.contentDisposition);
     }

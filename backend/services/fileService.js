@@ -1,7 +1,13 @@
 const { randomUUID } = require("crypto");
 const DocumentChunk = require("../models/documentChunk");
 const File = require("../models/file");
-const { getEmbedding, cosineSimilarity } = require("./embeddingService");
+const {
+  getEmbedding,
+  cosineSimilarity,
+  isSentenceSimilarityMode,
+  scoreSentences,
+  placeholderEmbedding,
+} = require("./embeddingService");
 
 // ── Text chunking ──────────────────────────────────────────
 function chunkText(text, chunkSize = 100, overlap = 20) {
@@ -41,11 +47,14 @@ async function processFile(
 
   try {
     const chunks = chunkText(text);
+    const sentenceMode = isSentenceSimilarityMode();
 
     // Generate embeddings for all chunks
     const chunkDocs = [];
     for (let i = 0; i < chunks.length; i++) {
-      const embedding = await getEmbedding(chunks[i]);
+      const embedding = sentenceMode
+        ? placeholderEmbedding()
+        : await getEmbedding(chunks[i]);
       chunkDocs.push({
         sessionId,
         userId,
@@ -88,6 +97,23 @@ async function retrieveChunks(query, sessionId, topK = 8, fileId = null) {
 
   const allChunks = await DocumentChunk.find(filter);
   if (allChunks.length === 0) return [];
+
+  if (isSentenceSimilarityMode()) {
+    const scores = await scoreSentences(
+      query,
+      allChunks.map((chunk) => chunk.content)
+    );
+
+    return allChunks
+      .map((chunk, index) => ({
+        content: chunk.content,
+        filename: chunk.filename,
+        fileId: chunk.fileId,
+        score: scores[index] || 0,
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, topK);
+  }
 
   const queryEmbedding = await getEmbedding(query);
 

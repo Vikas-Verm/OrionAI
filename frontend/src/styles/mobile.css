@@ -3,7 +3,7 @@
     .sidebar { width: 100% !important; height: auto; flex-direction: row; overflow-x: auto; }
     .main { flex: 1; overflow: hidden; }
    
-    .input-area { padding: 8px 12px 20px; }
+    .input-area { padding: 8px 12px 6px; }
     .input-box  { border-radius: 16px; }
     textarea    { font-size: 16px !important; } 
    
@@ -15,5 +15,5 @@
     .gm-list-pane { width: 100% !important; }
     .gm-detail { display: none; } 
    
-    .input-area { padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
+    .input-area { padding-bottom: calc(6px + env(safe-area-inset-bottom)); }
   }
