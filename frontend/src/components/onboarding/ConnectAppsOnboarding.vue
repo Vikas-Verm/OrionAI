@@ -451,10 +451,8 @@ onUnmounted(() => {
 <style scoped>
 .connect-shell {
   position: relative;
-  height: 100vh;
-  height: 100svh;
-  min-height: 100vh;
-  min-height: 100svh;
+  height: 100%;
+  min-height: 0;
   box-sizing: border-box;
   overflow-y: auto;
   overflow-x: hidden;
@@ -499,8 +497,9 @@ onUnmounted(() => {
   position: relative;
   z-index: 1;
   width: min(1180px, 100%);
+  min-width: 0;
   margin: 0 auto;
-  padding: clamp(26px, 4vw, 38px);
+  padding: clamp(22px, 4vw, 38px);
   border-radius: 32px;
   border: 1px solid rgba(134, 155, 212, 0.18);
   background:
@@ -514,6 +513,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 14px;
+  min-width: 0;
 }
 
 .connect-logo {
@@ -546,6 +546,11 @@ onUnmounted(() => {
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+  min-width: 0;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .connect-header {
@@ -554,14 +559,15 @@ onUnmounted(() => {
   align-items: flex-start;
   justify-content: space-between;
   gap: 18px;
+  min-width: 0;
 }
 
 .connect-header h1 {
   margin: 0;
   color: #f8fbff;
-  font-size: clamp(34px, 5vw, 54px);
+  font-size: 48px;
   line-height: 0.98;
-  letter-spacing: -0.04em;
+  letter-spacing: 0;
 }
 
 .connect-header p {
@@ -640,6 +646,7 @@ onUnmounted(() => {
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 16px;
+  min-width: 0;
 }
 
 .connect-section__head h2 {
@@ -656,18 +663,19 @@ onUnmounted(() => {
 
 .connect-grid-cards {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
   gap: 16px;
 }
 
 .connect-grid-cards--compact {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
 }
 
 .connect-app-card {
   display: flex;
   flex-direction: column;
   gap: 18px;
+  min-width: 0;
   min-height: 220px;
   padding: 20px;
   border-radius: 26px;
@@ -698,6 +706,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  min-width: 0;
 }
 
 .connect-app-icon {
@@ -734,6 +743,7 @@ onUnmounted(() => {
   color: rgba(222, 233, 255, 0.76);
   font-size: 12px;
   font-weight: 600;
+  flex-shrink: 0;
 }
 
 .connect-status--connected {
@@ -749,6 +759,7 @@ onUnmounted(() => {
   margin: 0;
   color: #f8fbff;
   font-size: 20px;
+  overflow-wrap: anywhere;
 }
 
 .connect-app-copy p {
@@ -756,6 +767,7 @@ onUnmounted(() => {
   color: rgba(198, 209, 233, 0.72);
   font-size: 14px;
   line-height: 1.65;
+  overflow-wrap: anywhere;
 }
 
 .connect-app-action,
@@ -808,6 +820,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-shrink: 0;
 }
 
 .connect-secondary,
@@ -839,8 +852,9 @@ onUnmounted(() => {
   position: fixed;
   inset: 0;
   z-index: 60;
-  padding: 20px;
+  padding: clamp(10px, 2vw, 20px);
   overflow: auto;
+  overscroll-behavior: contain;
   background: rgba(3, 8, 19, 0.8);
   backdrop-filter: blur(14px);
 }
@@ -849,6 +863,7 @@ onUnmounted(() => {
   width: min(1320px, 100%);
   margin: 0 auto;
   position: relative;
+  min-width: 0;
 }
 
 .connect-modal__close {
@@ -875,20 +890,39 @@ onUnmounted(() => {
 }
 
 @media (max-width: 1100px) {
-  .connect-grid-cards,
-  .connect-grid-cards--compact {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .connect-header h1 {
+    font-size: 40px;
   }
 }
 
 @media (max-width: 760px) {
   .connect-shell {
-    padding: 18px 14px;
+    padding: 12px;
   }
 
   .connect-card {
-    border-radius: 26px;
-    padding: 22px 18px;
+    border-radius: 22px;
+    padding: 18px 14px;
+  }
+
+  .connect-brand {
+    gap: 10px;
+  }
+
+  .connect-logo {
+    width: 48px;
+    height: 48px;
+    border-radius: 16px;
+    font-size: 24px;
+    flex-shrink: 0;
+  }
+
+  .connect-badge {
+    height: auto;
+    min-height: 32px;
+    padding: 7px 10px;
+    white-space: normal;
+    line-height: 1.35;
   }
 
   .connect-header,
@@ -901,16 +935,62 @@ onUnmounted(() => {
   .connect-summary {
     text-align: left;
     min-width: 0;
+    padding: 14px 16px;
+  }
+
+  .connect-header h1 {
+    font-size: 34px;
+    line-height: 1.05;
+  }
+
+  .connect-header p {
+    margin-top: 12px;
+    font-size: 14px;
+    line-height: 1.55;
+  }
+
+  .connect-section {
+    margin-top: 22px;
+  }
+
+  .connect-section__head h2 {
+    font-size: 19px;
+  }
+
+  .connect-section__head p {
+    line-height: 1.5;
   }
 
   .connect-grid-cards,
   .connect-grid-cards--compact {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .connect-app-card,
+  .connect-app-card--compact {
+    min-height: 0;
+    gap: 14px;
+    padding: 16px;
+    border-radius: 20px;
+  }
+
+  .connect-app-icon {
+    width: 46px;
+    height: 46px;
+    border-radius: 15px;
+  }
+
+  .connect-status {
+    max-width: 42%;
+    justify-content: center;
+    text-align: center;
   }
 
   .connect-footer__actions {
     flex-direction: column-reverse;
     align-items: stretch;
+    width: 100%;
   }
 
   .connect-primary,
@@ -919,7 +999,49 @@ onUnmounted(() => {
   }
 
   .connect-modal {
-    padding: 12px;
+    padding: 8px;
+  }
+
+  .connect-modal__close {
+    top: 8px;
+    min-height: 40px;
+    margin-bottom: 8px;
+  }
+}
+
+@media (max-width: 420px) {
+  .connect-shell {
+    padding: 8px;
+  }
+
+  .connect-card {
+    padding: 16px 12px;
+  }
+
+  .connect-header h1 {
+    font-size: 30px;
+  }
+
+  .connect-summary {
+    border-radius: 18px;
+  }
+
+  .connect-app-card__top {
+    align-items: flex-start;
+  }
+
+  .connect-status {
+    max-width: 50%;
+    height: auto;
+    min-height: 28px;
+    padding-block: 5px;
+    line-height: 1.25;
+  }
+}
+
+@supports (height: 100dvh) {
+  .connect-shell {
+    height: 100dvh;
   }
 }
 </style>

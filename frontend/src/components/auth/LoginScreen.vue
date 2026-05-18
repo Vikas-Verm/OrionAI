@@ -49,6 +49,7 @@
         <div v-if="GOOGLE_CLIENT_ID" class="auth-google-stack">
           <div
             id="google-signin-btn"
+            ref="googleButtonHost"
             class="auth-google-host"
             :class="{ 'auth-google-host--hidden': !googleReady }"
           ></div>
@@ -116,7 +117,7 @@
               @click="showSignInPassword = !showSignInPassword"
             >
               <svg
-                v-if="showSignInPassword"
+                v-if="!showSignInPassword"
                 class="auth-visibility-icon"
                 viewBox="0 0 24 24"
                 fill="none"
@@ -229,7 +230,7 @@
               @click="showSignUpPassword = !showSignUpPassword"
             >
               <svg
-                v-if="showSignUpPassword"
+                v-if="!showSignUpPassword"
                 class="auth-visibility-icon"
                 viewBox="0 0 24 24"
                 fill="none"
@@ -283,7 +284,7 @@
               @click="showConfirmPassword = !showConfirmPassword"
             >
               <svg
-                v-if="showConfirmPassword"
+                v-if="!showConfirmPassword"
                 class="auth-visibility-icon"
                 viewBox="0 0 24 24"
                 fill="none"
@@ -330,7 +331,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import api from '../../services/api'
 import { setAuth } from '../../stores/app'
 
@@ -342,6 +343,7 @@ const signUpLoading = ref(false)
 const googleLoading = ref(false)
 const googleReady = ref(false)
 const googleLoadFailed = ref(false)
+const googleButtonHost = ref(null)
 
 const feedback = ref({ tone: 'error', message: '' })
 const fieldErrors = ref({})
@@ -365,6 +367,8 @@ const showSignUpPassword = ref(false)
 const showConfirmPassword = ref(false)
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID
+let googleResizeObserver = null
+let googleRenderFrame = 0
 
 const isBusy = computed(
   () => signInLoading.value || signUpLoading.value || googleLoading.value
@@ -407,24 +411,54 @@ onMounted(async () => {
       cancel_on_tap_outside: true,
     })
 
-    window.google.accounts.id.renderButton(
-      document.getElementById('google-signin-btn'),
-      {
-        type: 'standard',
-        theme: 'filled_black',
-        size: 'large',
-        width: 360,
-        text: 'continue_with',
-        shape: 'pill',
-        logo_alignment: 'left',
-      }
-    )
-
-    googleReady.value = true
+    await nextTick()
+    renderGoogleButton()
+    if (window.ResizeObserver && googleButtonHost.value) {
+      googleResizeObserver = new ResizeObserver(scheduleGoogleButtonRender)
+      googleResizeObserver.observe(googleButtonHost.value)
+    }
   } catch {
     googleLoadFailed.value = true
   }
 })
+
+onBeforeUnmount(() => {
+  googleResizeObserver?.disconnect()
+  if (googleRenderFrame) cancelAnimationFrame(googleRenderFrame)
+})
+
+function getGoogleButtonWidth() {
+  const host = googleButtonHost.value
+  if (!host) return 320
+  const width = Math.floor(host.getBoundingClientRect().width)
+  return Math.max(240, Math.min(420, width || 320))
+}
+
+function scheduleGoogleButtonRender() {
+  if (googleRenderFrame) cancelAnimationFrame(googleRenderFrame)
+  googleRenderFrame = requestAnimationFrame(() => {
+    googleRenderFrame = 0
+    renderGoogleButton()
+  })
+}
+
+function renderGoogleButton() {
+  const host = googleButtonHost.value
+  if (!host || !window.google?.accounts?.id) return
+
+  host.innerHTML = ''
+  window.google.accounts.id.renderButton(host, {
+    type: 'standard',
+    theme: 'filled_black',
+    size: 'large',
+    width: getGoogleButtonWidth(),
+    text: 'continue_with',
+    shape: 'pill',
+    logo_alignment: 'left',
+  })
+
+  googleReady.value = true
+}
 
 function loadGoogleScript() {
   return new Promise((resolve, reject) => {
@@ -596,11 +630,13 @@ async function submitSignUp() {
 <style scoped>
 .auth-shell {
   position: relative;
-  min-height: 100vh;
-  min-height: 100svh;
+  height: 100%;
+  min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   display: flex;
+  align-items: flex-start;
   justify-content: center;
   padding: clamp(20px, 4vh, 40px) 24px;
   background:
@@ -766,12 +802,19 @@ async function submitSignUp() {
 .auth-google-stack {
   position: relative;
   min-height: 46px;
+  width: 100%;
 }
 
 .auth-google-host {
   display: flex;
   justify-content: center;
+  width: 100%;
   min-height: 44px;
+}
+
+.auth-google-host :deep(div),
+.auth-google-host :deep(iframe) {
+  max-width: 100%;
 }
 
 .auth-google-host--hidden {
@@ -852,6 +895,7 @@ async function submitSignUp() {
   display: flex;
   flex-direction: column;
   gap: 7px;
+  min-width: 0;
 }
 
 .auth-field--wide {
@@ -868,6 +912,7 @@ async function submitSignUp() {
 
 .auth-field input {
   width: 100%;
+  min-width: 0;
   min-height: 48px;
   padding: 0 14px;
   border-radius: 14px;
@@ -992,16 +1037,40 @@ async function submitSignUp() {
 
 @media (max-width: 640px) {
   .auth-shell {
-    padding: 16px;
+    padding: 12px;
   }
 
   .auth-card {
-    padding: 26px 18px 20px;
+    width: 100%;
+    margin: 0;
+    padding: 22px 16px 18px;
     border-radius: 22px;
+  }
+
+  .auth-brand {
+    margin-bottom: 18px;
+  }
+
+  .auth-logo {
+    width: 60px;
+    height: 60px;
+    margin-bottom: 12px;
+    border-radius: 20px;
+  }
+
+  .auth-tabs {
+    gap: 6px;
+    margin-bottom: 14px;
+  }
+
+  .auth-tab {
+    min-height: 44px;
+    padding: 10px;
   }
 
   .auth-grid-fields {
     grid-template-columns: 1fr;
+    gap: 14px;
   }
 
   .auth-field--wide {
@@ -1014,6 +1083,64 @@ async function submitSignUp() {
 
   .auth-support {
     font-size: 0.9rem;
+  }
+}
+
+@media (max-height: 820px) {
+  .auth-shell {
+    padding-block: 14px;
+  }
+
+  .auth-card {
+    margin: 0;
+    padding-block: 22px 18px;
+  }
+
+  .auth-brand {
+    margin-bottom: 16px;
+  }
+
+  .auth-logo {
+    width: 58px;
+    height: 58px;
+    margin-bottom: 10px;
+    border-radius: 20px;
+  }
+
+  .auth-title {
+    font-size: 2rem;
+  }
+
+  .auth-tagline {
+    margin-block: 6px;
+  }
+
+  .auth-support {
+    line-height: 1.45;
+  }
+
+  .auth-tabs,
+  .auth-divider {
+    margin-block: 12px;
+  }
+
+  .auth-form,
+  .auth-grid-fields {
+    gap: 12px;
+  }
+
+  .auth-field input {
+    min-height: 44px;
+  }
+
+  .auth-submit {
+    min-height: 46px;
+  }
+}
+
+@supports (height: 100dvh) {
+  .auth-shell {
+    height: 100dvh;
   }
 }
 </style>

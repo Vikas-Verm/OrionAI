@@ -1,8 +1,12 @@
 <template>
-  <div v-if="showActions" class="main-header-actions main-header-actions-floating">
-    <button v-if="store.canvasCode" @click="store.showCanvas = !store.showCanvas" class="canvas-toggle-btn">
+  <div
+    v-if="showActions"
+    class="main-header-actions main-header-actions-floating"
+    :class="{ 'main-header-actions-preview-open': store.showCanvas && store.canvasCode }"
+  >
+    <!-- <button v-if="store.canvasCode" @click="store.showCanvas = !store.showCanvas" class="canvas-toggle-btn">
       {{ store.showCanvas ? '← Close Preview' : '⬡ Open Preview' }}
-    </button>
+    </button> -->
     <button v-if="store.messages.length > 0" @click="emit('exportPDF')" class="export-btn">
       ⬇ Export PDF
     </button>

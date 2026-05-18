@@ -140,7 +140,12 @@
         <!-- ── Normal chat view ── -->
         <template v-else>
           <MainHeader @exportPDF="exportChatPDF" @openModule="onOpenModuleFromSettings" />
-          <div class="split-view">
+          <div
+            class="split-view"
+            :class="{
+              'split-view--with-header-actions': store.canvasCode || store.messages.length > 0,
+            }"
+          >
             <div class="chat-pane">
               <DocPanel />
               <MessageList ref="messageListRef" @usePrompt="usePrompt" @regenerate="onRegenerate" />

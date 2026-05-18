@@ -38,7 +38,7 @@
           Raw query
         </button>
         <button class="settings-btn" @click="emit('open-integrations')">Settings</button>
-        <button class="btn-open-data" @click="emit('open-data-mode')">Open in Data mode</button>
+        <!-- <button class="btn-open-data" @click="emit('open-data-mode')">Open in Data mode</button> -->
       </div>
     </div>
 

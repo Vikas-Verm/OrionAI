@@ -6,11 +6,21 @@ const {
 const { loadMemory, saveMemory } = require("../services/memoryService");
 const { chatStream, chatComplete } = require("../services/llmService");
 const { retrieveChunks, getSessionFiles } = require("../services/fileService");
+const User = require("../models/user");
+const Integration = require("../models/Integration");
+const {
+  buildOrionIdentitySystemPrompt,
+  getPublicDeploymentConfig,
+} = require("../config/orionIdentity");
+const {
+  detectIntroMetaIntent,
+  buildIntroMetaResponse,
+} = require("../services/orionIntroService");
 
-const SYSTEM_PROMPT = `You are OrionAI — an intelligent assistant that helps with any topic.
-You explain concepts clearly with practical examples.
-You format responses beautifully using markdown.
-You are helpful, accurate, and concise.`;
+const CHAT_BEHAVIOR_PROMPT = `You help OrionAI users with clear, practical answers.
+Explain concepts with useful examples when helpful.
+Format responses using readable markdown.
+Stay helpful, accurate, and concise.`;
 
 const SUMMARY_THRESHOLD = 10;
 const RECENT_MESSAGES_TO_KEEP = 4;
@@ -159,6 +169,67 @@ async function buildFileContext(message, sessionId, sessionFiles) {
   return buildRagContext(goodChunks, fileNames);
 }
 
+function writeSseHeaders(res) {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+}
+
+async function saveCompletedChatReply(sessionId, conversationHistory, message, reply) {
+  conversationHistory.push({ role: "user", content: message });
+  conversationHistory.push({ role: "assistant", content: reply });
+
+  const userMessageCount = conversationHistory.filter(
+    (m) => m.role === "user"
+  ).length;
+
+  if (userMessageCount === 1) {
+    const title = message.substring(0, 40) + (message.length > 40 ? "..." : "");
+    await updateSessionTitle(sessionId, title);
+  }
+
+  await saveConversation(sessionId, conversationHistory);
+  return userMessageCount;
+}
+
+async function sendControlledIntroResponse({
+  req,
+  res,
+  message,
+  sessionId,
+  userId,
+  intent,
+}) {
+  const deploymentConfig = getPublicDeploymentConfig();
+  const [conversationHistory, user, integrations, sessionFiles] = await Promise.all([
+    loadConversation(sessionId),
+    req.user?.userId
+      ? User.findById(req.user.userId).lean().catch(() => null)
+      : Promise.resolve(null),
+    userId ? Integration.find({ userId }).lean().catch(() => []) : Promise.resolve([]),
+    getSessionFiles(sessionId).catch(() => []),
+  ]);
+
+  const reply = buildIntroMetaResponse(intent, {
+    user,
+    integrations,
+    sessionFiles,
+    deploymentConfig,
+  });
+
+  writeSseHeaders(res);
+  res.write(`data: ${JSON.stringify({ token: reply })}\n\n`);
+  res.write("data: [DONE]\n\n");
+
+  try {
+    await saveCompletedChatReply(sessionId, conversationHistory, message, reply);
+  } catch (error) {
+    console.error("Controlled intro save failed:", error.message);
+  }
+
+  res.end();
+}
+
 // ── Main chat handler ─────────────────────────────────────
 async function handleChat(req, res) {
   const {
@@ -168,16 +239,39 @@ async function handleChat(req, res) {
   } = req.body; // ← added useWebSearch
 
   const userId = req.user.username;
+  const userMessage = String(message || "").trim();
+
+  if (!userMessage) {
+    return res.status(400).json({ error: "Message is required" });
+  }
+
+  const introIntent = detectIntroMetaIntent(userMessage);
+  if (introIntent) {
+    try {
+      await sendControlledIntroResponse({
+        req,
+        res,
+        message: userMessage,
+        sessionId,
+        userId,
+        intent: introIntent,
+      });
+    } catch (error) {
+      console.error("Controlled intro response failed:", error.message);
+      res.status(500).json({ error: "Something went wrong" });
+    }
+    return;
+  }
 
   let searchContext = "";
 
   if (useWebSearch) {
     try {
       const { webSearch } = require("../services/searchService");
-      const { answer, results } = await webSearch(message); // ← Tavily returns { answer, results }
+      const { answer, results } = await webSearch(userMessage); // ← Tavily returns { answer, results }
 
       if (results.length > 0) {
-        searchContext = `\n\nWeb search results for: "${message}"\n`;
+        searchContext = `\n\nWeb search results for: "${userMessage}"\n`;
 
         if (answer) {
           searchContext += `Quick answer: ${answer}\n\n`;
@@ -200,7 +294,7 @@ async function handleChat(req, res) {
   }
 
   const wantsContext = continueKeywords.some((kw) =>
-    message.toLowerCase().includes(kw)
+    userMessage.toLowerCase().includes(kw)
   );
 
   const [conversationHistory, userMemory, sessionFiles] = await Promise.all([
@@ -209,20 +303,20 @@ async function handleChat(req, res) {
     getSessionFiles(sessionId),
   ]);
 
-  const ragContext = await buildFileContext(message, sessionId, sessionFiles);
+  const ragContext = await buildFileContext(userMessage, sessionId, sessionFiles);
 
-  conversationHistory.push({ role: "user", content: message });
+  conversationHistory.push({ role: "user", content: userMessage });
 
-  const dynamicSystemPrompt = `${SYSTEM_PROMPT}${
+  const dynamicSystemPrompt = `${buildOrionIdentitySystemPrompt({
+    deploymentConfig: getPublicDeploymentConfig(),
+  })}\n\n${CHAT_BEHAVIOR_PROMPT}${
     userMemory ? `\n\nContext from previous sessions:\n${userMemory}` : ""
   }${ragContext}${searchContext}`; // ← searchContext injected here
 
   try {
     const smartContext = await getSmartContext(conversationHistory);
 
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
+    writeSseHeaders(res);
 
     const response = await chatStream([
       { role: "system", content: dynamicSystemPrompt },
@@ -267,7 +361,7 @@ async function handleChat(req, res) {
 
       if (userMessageCount === 1) {
         const title =
-          message.substring(0, 40) + (message.length > 40 ? "..." : "");
+          userMessage.substring(0, 40) + (userMessage.length > 40 ? "..." : "");
         await updateSessionTitle(sessionId, title);
       }
 

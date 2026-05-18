@@ -694,6 +694,10 @@ body::after {
   pointer-events: auto;
 }
 
+.main-header-actions-preview-open {
+  right: calc(var(--canvas-width) + 28px);
+}
+
 .export-btn {
   display: flex; align-items: center; gap: 6px;
   background: rgba(255, 255, 255, 0.04);
@@ -725,6 +729,10 @@ body::after {
   padding: 28px 0 36px;
   scroll-behavior: auto;
   display: flex; flex-direction: column;
+}
+
+.split-view--with-header-actions .messages {
+  padding-top: 70px;
 }
    
    .messages::-webkit-scrollbar { width: 4px; }
@@ -1660,6 +1668,10 @@ body::after {
 @media (max-width: 1180px) {
   .split-view {
     flex-direction: column;
+  }
+
+  .main-header-actions-preview-open {
+    right: 28px;
   }
 
   .canvas-pane {
