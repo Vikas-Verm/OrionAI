@@ -54,6 +54,42 @@ function resolveDialog(dialogs = [], contact = "", options = {}) {
   return includeGroups ? null : fuzzyFind(dialogs, contact);
 }
 
+async function resolveTelegramContact(params = {}, ctx) {
+  const contact = clean(params.contact);
+  if (!contact) {
+    return {
+      ok: false,
+      contact,
+      summary: "Telegram contact name required",
+    };
+  }
+
+  const dialogs = await tg.getDialogs(ctx.userId, 80);
+  const dialog = resolveDialog(dialogs, contact, {
+    includeGroups: Boolean(params.includeGroups),
+  });
+
+  if (!dialog) {
+    return {
+      ok: false,
+      contact,
+      summary: `No Telegram contact found for: ${contact}`,
+    };
+  }
+
+  return {
+    ok: true,
+    contact,
+    chatId: String(dialog.id),
+    name: dialog.name,
+    username: dialog.username || null,
+    type: dialog.type || null,
+    unreadCount: dialog.unreadCount || 0,
+    dialog,
+    summary: `${dialog.name} (${dialog.type || "chat"})`,
+  };
+}
+
 // get most recent chat fallback
 function mostRecent(dialogs) {
   return dialogs.sort((a, b) => new Date(b.lastDate) - new Date(a.lastDate))[0];
@@ -148,14 +184,17 @@ async function toolTelegramSendMessage(params = {}, ctx) {
 
   if (!message) throw new Error("telegram_send_message: message required");
 
-  const dialogs = await tg.getDialogs(ctx.userId, 80);
-
-  const dialog = contact
-    ? resolveDialog(dialogs, contact, { includeGroups })
-    : filterTelegramDialogs(dialogs, { includeGroups })[0] || null;
-
-  if (contact && !dialog) {
-    throw new Error(`No Telegram contact found for: ${contact}`);
+  let dialog = null;
+  if (contact) {
+    const resolved = await resolveTelegramContact(
+      { contact, includeGroups },
+      ctx
+    );
+    if (!resolved.ok) throw new Error(resolved.summary);
+    dialog = resolved.dialog;
+  } else {
+    const dialogs = await tg.getDialogs(ctx.userId, 80);
+    dialog = filterTelegramDialogs(dialogs, { includeGroups })[0] || null;
   }
 
   if (!dialog) {
@@ -338,30 +377,19 @@ async function toolTelegramReplyMessage(params = {}, ctx) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function toolTelegramGetContactInfo(params = {}, ctx) {
-  const contact = clean(params.contact);
+  const resolved = await resolveTelegramContact(
+    { contact: params.contact, includeGroups: false },
+    ctx
+  );
 
-  if (!contact)
-    return {
-      ok: false,
-      summary: "Contact name required",
-    };
-
-  const dialogs = await tg.getDialogs(ctx.userId, 80);
-  const dialog = resolveDialog(dialogs, contact, { includeGroups: false });
-
-  if (!dialog) {
-    return {
-      ok: false,
-      summary: `No Telegram contact found`,
-    };
-  }
+  if (!resolved.ok) return resolved;
 
   return {
     ok: true,
-    name: dialog.name,
-    username: dialog.username || null,
-    unreadCount: dialog.unreadCount || 0,
-    summary: `${dialog.name} (${dialog.type})`,
+    name: resolved.name,
+    username: resolved.username || null,
+    unreadCount: resolved.unreadCount || 0,
+    summary: resolved.summary,
   };
 }
 
@@ -373,4 +401,5 @@ module.exports = {
   toolTelegramSearchMessages,
   toolTelegramReplyMessage,
   toolTelegramGetContactInfo,
+  resolveTelegramContact,
 };

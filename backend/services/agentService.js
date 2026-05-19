@@ -3,8 +3,8 @@ const twilio = require("twilio");
 const { PDFDocument, rgb, StandardFonts } = require("pdf-lib");
 const { chatCompleteNoSystem } = require("./llmService");
 const { SCHEMA_DESCRIPTION, ALLOWED_COLLECTIONS } = require("./dbQueryService");
-const { toolSlack } = require("./tools/toolSlack");
-const { toolWhatsApp } = require("./tools/toolWhatsapp");
+const { toolSlack, resolveSlackConversation } = require("./tools/toolSlack");
+const { toolWhatsApp, resolveWhatsAppTarget } = require("./tools/toolWhatsapp");
 const {
   toolGetBacklog,
   toolGetOverdueTickets,
@@ -48,6 +48,7 @@ const {
   toolTelegramSearchMessages,
   toolTelegramReplyMessage,
   toolTelegramGetContactInfo,
+  resolveTelegramContact,
 } = require("./tools/toolTelegram");
 const { toolDatabaseQuery } = require("./tools/toolDatabase");
 const {
@@ -147,6 +148,22 @@ function presentStep(toolName, index, TOOL_REGISTRY) {
     icon: tool.icon || "⚙️",
     label: tool.label || toolName,
   };
+}
+
+async function preflightMessagingSend(tool, params = {}, ctx) {
+  if (tool === "telegram_send_message") {
+    return resolveTelegramContact(params, ctx);
+  }
+
+  if (tool === "slack_send_message") {
+    return resolveSlackConversation(params, ctx);
+  }
+
+  if (tool === "whatsapp_send_message") {
+    return resolveWhatsAppTarget(params, ctx);
+  }
+
+  return null;
 }
 // ── Build classifier prompt dynamically from DB skills ───────────────────────
 async function buildClassifierPrompt(userMessage) {
@@ -890,13 +907,47 @@ async function runAgent(steps, db, onProgress, userId, sessionId = "default") {
   for (const step of steps) {
     const runtimeStep = resolveRuntimeStep(step, results, ctx);
     const { tool, params } = runtimeStep;
+    // Resolve stepUI once per step — used in progress events
+    const stepUI = presentStep(tool, results.length, TOOL_REGISTRY);
+
+    try {
+      const messagingPreflight = await preflightMessagingSend(tool, params, ctx);
+      if (messagingPreflight) {
+        if (!messagingPreflight.ok) {
+          throw new Error(
+            messagingPreflight.summary || "Messaging contact not found"
+          );
+        }
+      }
+    } catch (err) {
+      if (
+        [
+          "telegram_send_message",
+          "slack_send_message",
+          "whatsapp_send_message",
+        ].includes(tool)
+      ) {
+        results.push({
+          tool,
+          status: "error",
+          error: err.message,
+        });
+        await onProgress({
+          tool,
+          status: "error",
+          error: err.message,
+          label: stepUI.label,
+          icon: stepUI.icon,
+        });
+        continue;
+      }
+    }
+
     const { needsConfirm, preview } = checkNeedsConfirmation(
       tool,
       params,
       results
     );
-    // Resolve stepUI once per step — used in both running + done progress events
-    const stepUI = presentStep(tool, results.length, TOOL_REGISTRY);
 
     if (needsConfirm) {
       await onProgress({ status: "confirm_needed", tool, preview });

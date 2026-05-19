@@ -22,8 +22,35 @@ const DESTRUCTIVE_TOOLS = new Set([
 
 const BATCH_THRESHOLD = 3;
 
+const EXACT_MESSAGE_SEND_TOOLS = new Set([
+  "telegram_send_message",
+  "slack_send_message",
+  "whatsapp_send_message",
+]);
+
+function hasExactSendTarget(tool, params = {}) {
+  if (tool === "telegram_send_message") return Boolean(params.contact);
+  if (tool === "slack_send_message") return Boolean(params.channel);
+  if (tool === "whatsapp_send_message") {
+    return Boolean(
+      params.to || params.contact || params.phone || params.chatId || params.roomId
+    );
+  }
+  return false;
+}
+
 function checkNeedsConfirmation(tool, params, previousResults = []) {
   if (!DESTRUCTIVE_TOOLS.has(tool)) {
+    return { needsConfirm: false };
+  }
+
+  if (
+    EXACT_MESSAGE_SEND_TOOLS.has(tool) &&
+    hasExactSendTarget(tool, params) &&
+    Boolean(params?.message) &&
+    params?.messageSource === "user_exact" &&
+    params?.skipConfirmation === true
+  ) {
     return { needsConfirm: false };
   }
 
@@ -35,6 +62,7 @@ function checkNeedsConfirmation(tool, params, previousResults = []) {
     "send_email",
     "whatsapp_send_message",
     "telegram_send_message",
+    "slack_send_message",
     "jira_notify_overdue",
     "calendar_delete",
     "razorpay_create_payout",

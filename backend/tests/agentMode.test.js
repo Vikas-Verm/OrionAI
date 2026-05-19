@@ -14,8 +14,14 @@ const {
   __test: runtimeContextTest,
 } = require("../services/agentRuntimeContext");
 const {
+  checkNeedsConfirmation,
+} = require("../services/confirmationService");
+const {
   __test: jiraToolTest,
 } = require("../services/tools/toolJira");
+const {
+  __test: whatsappToolTest,
+} = require("../services/tools/toolWhatsapp");
 
 test("meeting prep requests are upgraded from plain calendar lookup to retrieval plus synthesis", () => {
   const plan = plannerTest.normalizePlannedSteps(
@@ -161,6 +167,40 @@ test("normalizeStepParams infers calendar details from natural language meeting 
   assert.equal(normalized.params.addMeet, true);
 });
 
+test("normalizeStepParams recovers calendar delete title from natural language", () => {
+  const normalized = normalizeStepParams(
+    { tool: "calendar_delete", params: {} },
+    "Cancel my standup meeting",
+    { baseDate: new Date("2026-03-29T08:00:00+05:30") }
+  );
+
+  assert.equal(normalized.params.title, "standup");
+  assert.equal(normalized.params.eventId, undefined);
+});
+
+test("normalizeStepParams scopes calendar delete by mentioned date", () => {
+  const normalized = normalizeStepParams(
+    { tool: "calendar_delete", params: {} },
+    "Remove tomorrow's meeting with Rahul at 5pm",
+    { baseDate: new Date("2026-03-29T08:00:00+05:30") }
+  );
+
+  assert.equal(normalized.params.title, "Rahul");
+  assert.equal(normalized.params.dateFrom, "2026-03-30");
+  assert.equal(normalized.params.dateTo, "2026-03-30");
+});
+
+test("normalizeStepParams replaces generic calendar delete titles", () => {
+  const normalized = normalizeStepParams(
+    { tool: "calendar_delete", params: { title: "meeting" } },
+    "Delete the meeting about launch review tomorrow",
+    { baseDate: new Date("2026-03-29T08:00:00+05:30") }
+  );
+
+  assert.equal(normalized.params.title, "launch review");
+  assert.equal(normalized.params.dateFrom, "2026-03-30");
+});
+
 test("normalizeStepParams prefers the user's local today wording over a stale ISO date from the planner", () => {
   const normalized = normalizeStepParams(
     {
@@ -196,6 +236,161 @@ test("normalizeStepParams infers Telegram contact from agent phrasing", () => {
   );
 
   assert.equal(normalized.params.contact, "Aradhangini");
+});
+
+test("normalizeStepParams marks exact Telegram message text as user supplied", () => {
+  const normalized = normalizeStepParams(
+    { tool: "telegram_send_message", params: {} },
+    "send hii message to pikuu in telegram"
+  );
+
+  assert.equal(normalized.params.contact, "pikuu");
+  assert.equal(normalized.params.message, "hii");
+  assert.equal(normalized.params.messageSource, "user_exact");
+  assert.equal(normalized.params.skipConfirmation, true);
+});
+
+test("normalizeStepParams marks exact Slack message text as user supplied", () => {
+  const normalized = normalizeStepParams(
+    { tool: "slack_send_message", params: {} },
+    "send hii message to rahul in slack"
+  );
+
+  assert.equal(normalized.params.channel, "rahul");
+  assert.equal(normalized.params.message, "hii");
+  assert.equal(normalized.params.messageSource, "user_exact");
+  assert.equal(normalized.params.skipConfirmation, true);
+});
+
+test("normalizeStepParams marks exact WhatsApp message text as user supplied", () => {
+  const normalized = normalizeStepParams(
+    { tool: "whatsapp_send_message", params: {} },
+    "send hii message to pikuu in whatsapp"
+  );
+
+  assert.equal(normalized.params.contact, "pikuu");
+  assert.equal(normalized.params.to, "pikuu");
+  assert.equal(normalized.params.message, "hii");
+  assert.equal(normalized.params.messageSource, "user_exact");
+  assert.equal(normalized.params.skipConfirmation, true);
+});
+
+test("normalizeStepParams keeps topic Telegram messages confirmable", () => {
+  const normalized = normalizeStepParams(
+    {
+      tool: "telegram_send_message",
+      params: { contact: "pikuu", message: "romantic" },
+    },
+    "send romantic message to pikuu in telegram"
+  );
+
+  assert.equal(normalized.params.contact, "pikuu");
+  assert.equal(normalized.params.message, "romantic");
+  assert.equal(normalized.params.messageSource, undefined);
+  assert.equal(normalized.params.skipConfirmation, undefined);
+});
+
+test("normalizeStepParams keeps topic Slack and WhatsApp messages confirmable", () => {
+  const slack = normalizeStepParams(
+    {
+      tool: "slack_send_message",
+      params: { channel: "rahul", message: "romantic" },
+    },
+    "send romantic message to rahul in slack"
+  );
+
+  const whatsapp = normalizeStepParams(
+    {
+      tool: "whatsapp_send_message",
+      params: { contact: "pikuu", to: "pikuu", message: "romantic" },
+    },
+    "send romantic message to pikuu in whatsapp"
+  );
+
+  assert.equal(slack.params.channel, "rahul");
+  assert.equal(slack.params.message, "romantic");
+  assert.equal(slack.params.messageSource, undefined);
+  assert.equal(slack.params.skipConfirmation, undefined);
+  assert.equal(whatsapp.params.contact, "pikuu");
+  assert.equal(whatsapp.params.message, "romantic");
+  assert.equal(whatsapp.params.messageSource, undefined);
+  assert.equal(whatsapp.params.skipConfirmation, undefined);
+});
+
+test("messaging exact sends skip confirmation but drafted sends still require it", () => {
+  assert.deepEqual(
+    checkNeedsConfirmation("telegram_send_message", {
+      contact: "pikuu",
+      message: "hii",
+      messageSource: "user_exact",
+      skipConfirmation: true,
+    }),
+    { needsConfirm: false }
+  );
+
+  assert.deepEqual(
+    checkNeedsConfirmation("slack_send_message", {
+      channel: "rahul",
+      message: "hii",
+      messageSource: "user_exact",
+      skipConfirmation: true,
+    }),
+    { needsConfirm: false }
+  );
+
+  assert.deepEqual(
+    checkNeedsConfirmation("whatsapp_send_message", {
+      contact: "pikuu",
+      to: "pikuu",
+      message: "hii",
+      messageSource: "user_exact",
+      skipConfirmation: true,
+    }),
+    { needsConfirm: false }
+  );
+
+  assert.equal(
+    checkNeedsConfirmation("telegram_send_message", {
+      contact: "pikuu",
+      message: "Here is a romantic message...",
+    }).needsConfirm,
+    true
+  );
+
+  assert.equal(
+    checkNeedsConfirmation("slack_send_message", {
+      channel: "rahul",
+      message: "Here is a romantic message...",
+    }).needsConfirm,
+    true
+  );
+
+  assert.equal(
+    checkNeedsConfirmation("whatsapp_send_message", {
+      contact: "pikuu",
+      message: "Here is a romantic message...",
+    }).needsConfirm,
+    true
+  );
+});
+
+test("messaging exact extractor avoids document delivery commands", () => {
+  assert.equal(
+    normalizerTest.extractMessagingExactMessage(
+      "send latest invoice to client and notify billing on slack",
+      "slack"
+    ),
+    null
+  );
+});
+
+test("WhatsApp target matching does not treat a typo as an existing shorter contact", () => {
+  const chat = whatsappToolTest.pickWhatsAppTargetChat(
+    [{ title: "piku", name: "piku", roomId: "!piku:orion.local" }],
+    "pikuu"
+  );
+
+  assert.equal(chat, null);
 });
 
 test("runtime context auto-fills follow-up Telegram messages from a created meeting", () => {
