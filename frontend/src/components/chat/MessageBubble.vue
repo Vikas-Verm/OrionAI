@@ -264,6 +264,16 @@
           <SlackRenderer :steps="msg.steps || []" :msg="msg" />
         </template>
 
+        <!-- ── GOOGLE DOCS — delegated to GoogleDocsRenderer ── -->
+        <template v-else-if="hasGoogleDocsStep">
+          <GoogleDocsRenderer :steps="msg.steps || []" :msg="msg" />
+        </template>
+
+        <!-- ── GOOGLE SHEETS — delegated to GoogleSheetsRenderer ── -->
+        <template v-else-if="hasGoogleSheetsStep">
+          <GoogleSheetsRenderer :steps="msg.steps || []" :msg="msg" />
+        </template>
+
         <!-- Fallback plain text -->
         <div v-else-if="msg.content" class="agent-text-content" v-html="formattedContent"></div>
 
@@ -374,6 +384,8 @@ import { store } from '../../stores/app'
 import TelegramRenderer from '../../components/agent/renderers/TelegramRenderer.vue'
 import CalendarRenderer from '../../components/agent/renderers/CalendarRenderer.vue'
 import SlackRenderer    from '../../components/agent/renderers/SlackRenderer.vue'
+import GoogleDocsRenderer   from '../../components/agent/renderers/GoogleDocsRenderer.vue'
+import GoogleSheetsRenderer from '../../components/agent/renderers/GoogleSheetsRenderer.vue'
 
 const props = defineProps({
   msg: { type: Object, required: true },
@@ -519,6 +531,26 @@ const SLACK_TOOLS = [
 ]
 const hasSlackStep = computed(() =>
   (props.msg.steps || []).some(s => SLACK_TOOLS.includes(s.tool))
+)
+
+// ── Google Docs ───────────────────────────────────────────────────────────
+const GDOCS_TOOLS = [
+  'google_docs_list', 'google_docs_get', 'google_docs_create',
+  'google_docs_update', 'google_docs_share', 'google_docs_delete',
+  'google_docs_search',
+]
+const hasGoogleDocsStep = computed(() =>
+  (props.msg.steps || []).some(s => GDOCS_TOOLS.includes(s.tool))
+)
+
+// ── Google Sheets ─────────────────────────────────────────────────────────
+const GSHEETS_TOOLS = [
+  'google_sheets_list', 'google_sheets_get', 'google_sheets_create',
+  'google_sheets_rename', 'google_sheets_share', 'google_sheets_delete',
+  'google_sheets_search', 'google_sheets_duplicate',
+]
+const hasGoogleSheetsStep = computed(() =>
+  (props.msg.steps || []).some(s => GSHEETS_TOOLS.includes(s.tool))
 )
 
 // ── Gmail helpers ──────────────────────────────────────────────────────────

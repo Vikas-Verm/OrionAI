@@ -12,6 +12,8 @@ import JiraRenderer from "./renderers/JiraRenderer.vue";
 import CalendarRenderer from "./renderers/CalendarRenderer.vue";
 import TelegramRenderer from "./renderers/TelegramRenderer.vue";
 import SlackRenderer from "./renderers/SlackRenderer.vue";
+import GoogleDocsRenderer from "./renderers/GoogleDocsRenderer.vue";
+import GoogleSheetsRenderer from "./renderers/GoogleSheetsRenderer.vue";
 
 export const TOOL_RENDERERS = [
   {
@@ -83,6 +85,35 @@ export const TOOL_RENDERERS = [
     ],
     richFields: ["richTelegramMessages", "telegramUnreadChats", "telegramChats", "telegramSent"],
     component: TelegramRenderer,
+  },
+  {
+    name: "google_docs",
+    tools: [
+      "google_docs_list",
+      "google_docs_get",
+      "google_docs_create",
+      "google_docs_update",
+      "google_docs_share",
+      "google_docs_delete",
+      "google_docs_search",
+    ],
+    richFields: ["richGoogleDocs", "richGoogleDoc", "richGoogleDocShare"],
+    component: GoogleDocsRenderer,
+  },
+  {
+    name: "google_sheets",
+    tools: [
+      "google_sheets_list",
+      "google_sheets_get",
+      "google_sheets_create",
+      "google_sheets_rename",
+      "google_sheets_share",
+      "google_sheets_delete",
+      "google_sheets_search",
+      "google_sheets_duplicate",
+    ],
+    richFields: ["richGoogleSheets", "richGoogleSheet", "richGoogleSheetShare"],
+    component: GoogleSheetsRenderer,
   },
 ];
 

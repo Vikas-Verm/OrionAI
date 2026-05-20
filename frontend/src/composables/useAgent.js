@@ -213,6 +213,16 @@ export function useAgent() {
           slackMessage: event.slackMessage || null,
           totalUnread: event.totalUnread || null,
 
+          // ── Google Docs ────────────────────────────────
+          richGoogleDocs: event.richGoogleDocs || null,
+          richGoogleDoc: event.richGoogleDoc || null,
+          richGoogleDocShare: event.richGoogleDocShare || null,
+
+          // ── Google Sheets ───────────────────────────────
+          richGoogleSheets: event.richGoogleSheets || null,
+          richGoogleSheet: event.richGoogleSheet || null,
+          richGoogleSheetShare: event.richGoogleSheetShare || null,
+
           // ── WhatsApp ──────────────────────────────────
           richWhatsAppMessages: event.richWhatsAppMessages || null,
           richWhatsAppUnread: event.richWhatsAppUnread || null,
