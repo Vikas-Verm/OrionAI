@@ -76,6 +76,11 @@ async function saveIntegration(req, res) {
       });
     }
 
+    if (type === "database") {
+      const { testDatabaseConnection } = require("../services/connectedDatabaseService");
+      await testDatabaseConnection(payload.database || {});
+    }
+
     const doc = await Integration.findOneAndUpdate(
       { userId, type },
       {

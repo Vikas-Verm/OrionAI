@@ -103,6 +103,83 @@ test("agent planner keeps document delivery flows on fetch_document", () => {
   assert.deepEqual(plan, originalPlan);
 });
 
+test("agent planner reroutes 'fetch latest whatsapp messages' multi-step plan to whatsapp_get_unread", () => {
+  const plan = plannerTest.normalizePlannedSteps("fetch latest message from whatsapp", {
+    isAgentTask: true,
+    confidence: 0.8,
+    intent: "Fetch latest WhatsApp messages",
+    steps: [
+      { tool: "whatsapp_list_chats", params: {} },
+      { tool: "whatsapp_get_messages", params: { contact: "{{firstChat}}" } },
+    ],
+  });
+
+  assert.equal(plan.isAgentTask, true);
+  assert.deepEqual(plan.steps, [
+    { tool: "whatsapp_get_unread", params: {} },
+  ]);
+});
+
+test("agent planner reroutes single whatsapp_list_chats when user wants latest messages", () => {
+  const plan = plannerTest.normalizePlannedSteps("show new whatsapp messages", {
+    isAgentTask: true,
+    confidence: 0.8,
+    intent: "Show new WhatsApp",
+    steps: [{ tool: "whatsapp_list_chats", params: {} }],
+  });
+
+  assert.deepEqual(plan.steps, [
+    { tool: "whatsapp_get_unread", params: {} },
+  ]);
+});
+
+test("agent planner leaves whatsapp send/get_messages with a real contact alone", () => {
+  const sendPlan = plannerTest.normalizePlannedSteps(
+    "send latest update on whatsapp to rahul",
+    {
+      isAgentTask: true,
+      confidence: 0.9,
+      intent: "Send update on WhatsApp",
+      steps: [
+        {
+          tool: "whatsapp_send_message",
+          params: { to: "rahul", message: "latest update" },
+        },
+      ],
+    }
+  );
+  assert.equal(sendPlan.steps[0].tool, "whatsapp_send_message");
+  assert.equal(sendPlan.steps[0].params.to, "rahul");
+
+  const fetchPlan = plannerTest.normalizePlannedSteps(
+    "fetch latest whatsapp messages from rahul",
+    {
+      isAgentTask: true,
+      confidence: 0.9,
+      intent: "Fetch Rahul WhatsApp messages",
+      steps: [
+        { tool: "whatsapp_get_messages", params: { contact: "rahul" } },
+      ],
+    }
+  );
+  assert.equal(fetchPlan.steps[0].tool, "whatsapp_get_messages");
+  assert.equal(fetchPlan.steps[0].params.contact, "rahul");
+});
+
+test("agent planner does not touch non-whatsapp plans", () => {
+  const originalPlan = {
+    isAgentTask: true,
+    confidence: 0.9,
+    intent: "Get unread Telegram",
+    steps: [{ tool: "telegram_get_unread", params: {} }],
+  };
+  const plan = plannerTest.normalizePlannedSteps(
+    "fetch latest telegram messages",
+    originalPlan
+  );
+  assert.deepEqual(plan, originalPlan);
+});
+
 test("assignee extractor handles lowercase Jira requests from agent chat", () => {
   assert.equal(
     normalizerTest.extractAssigneeFromMessage("show rahul tickets"),

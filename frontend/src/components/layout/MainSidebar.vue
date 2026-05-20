@@ -43,7 +43,15 @@
           <div v-for="n in bellNotifications.slice(0, 15)" :key="n.id" class="bell-history-row"
             :class="{ 'bell-unread': !n.read }">
             <div class="bell-history-main" @click="openBellNotification(n)">
-              <span class="bell-history-icon">{{ n.icon }}</span>
+              <img
+                v-if="bellIconUrl(n) && !brokenBellIconIds.has(n.id)"
+                :src="bellIconUrl(n)"
+                :alt="n.label || ''"
+                class="bell-history-app-icon"
+                loading="lazy"
+                @error="brokenBellIconIds.add(n.id)"
+              />
+              <span v-else class="bell-history-icon">{{ n.icon }}</span>
               <div class="bell-history-body">
                 <div class="bell-history-text">{{ n.summary }}</div>
                 <div class="bell-history-meta">{{ bellMeta(n) }}</div>
@@ -654,6 +662,13 @@ function bellMeta(notification) {
   const time = bellTimeAgo(notification?.time)
   if (time) parts.push(time)
   return parts.join(' · ')
+}
+
+const brokenBellIconIds = reactive(new Set())
+function bellIconUrl(notification) {
+  const key = notification?.app || notification?.route
+  if (!key) return ''
+  return getAppIconUrl(key)
 }
 
 const { getStatus, getErrorMessage, startAutoCheck, stopAutoCheck, checkHealth } = useIntegrationHealth()
@@ -1721,6 +1736,15 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   font-size: 14px;
   flex-shrink: 0;
   margin-top: 1px;
+}
+
+.bell-history-app-icon {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  flex-shrink: 0;
+  margin-top: 1px;
+  border-radius: 3px;
 }
 
 .bell-history-body {

@@ -246,7 +246,8 @@ class SQLAdapter {
       const params = schema ? [schema] : [];
       const [rows] = await handle.query(
         `
-        SELECT c.table_schema, c.table_name, c.column_name, c.data_type,
+        SELECT c.table_schema AS table_schema, c.table_name AS table_name,
+          c.column_name AS column_name, c.data_type AS data_type,
           c.is_nullable = 'YES' AS is_nullable,
           CASE WHEN k.constraint_name = 'PRIMARY' THEN 1 ELSE 0 END AS is_pk
         FROM information_schema.columns c
@@ -286,9 +287,12 @@ class SQLAdapter {
   _groupToObjects(rows) {
     const map = new Map();
     for (const row of rows) {
-      const tableKey = row.table_schema
-        ? `${row.table_schema}.${row.table_name}`
-        : row.table_name;
+      const schema = row.table_schema || row.TABLE_SCHEMA;
+      const table  = row.table_name   || row.TABLE_NAME;
+      const column = row.column_name  || row.COLUMN_NAME;
+      const dtype  = row.data_type    || row.DATA_TYPE;
+
+      const tableKey = schema ? `${schema}.${table}` : table;
       if (!map.has(tableKey)) {
         map.set(tableKey, {
           name: tableKey,
@@ -299,13 +303,13 @@ class SQLAdapter {
       }
       const obj = map.get(tableKey);
       obj.fields.push({
-        name: row.column_name,
-        type: row.data_type || "text",
+        name: column,
+        type: dtype || "text",
         nullable: Boolean(row.is_nullable),
         is_primary_key: Boolean(row.is_pk),
         is_foreign_key: false,
       });
-      if (row.is_pk) obj.primary_keys.push(row.column_name);
+      if (row.is_pk) obj.primary_keys.push(column);
     }
     return [...map.values()];
   }

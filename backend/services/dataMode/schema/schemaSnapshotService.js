@@ -11,9 +11,9 @@ const crypto = require("crypto");
 function computeFingerprint(objects = []) {
   const normalized = objects
     .map((obj) => ({
-      name: obj.name,
+      name: String(obj.name || ""),
       fields: (obj.fields || [])
-        .map((f) => ({ n: f.name, t: String(f.type || "").toLowerCase() }))
+        .map((f) => ({ n: String(f.name || ""), t: String(f.type || "").toLowerCase() }))
         .sort((a, b) => a.n.localeCompare(b.n)),
       pks: (obj.primary_keys || []).slice().sort(),
     }))
