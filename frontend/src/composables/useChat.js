@@ -25,6 +25,7 @@ async function refreshSessions() {
 
 export function useChat() {
   const isTyping = ref(false);
+  let chatAbortController = null;
 
   function revealCurrentSession(userMessage, priorUserMessageCount) {
     if (!store.currentSessionId || priorUserMessageCount > 0) return;
@@ -137,7 +138,8 @@ export function useChat() {
       }
 
       // Chat streaming
-      const response = await streamChat(userMessage, store.currentSessionId, store.webMode);
+      chatAbortController = new AbortController();
+      const response = await streamChat(userMessage, store.currentSessionId, store.webMode, chatAbortController.signal);
 
       if (!response.ok) throw new Error(`Server error: ${response.status}`);
 
@@ -199,6 +201,7 @@ export function useChat() {
     } finally {
       store.loading = false;
       isTyping.value = false;
+      chatAbortController = null;
       scrollToBottom?.();
     }
 
@@ -237,10 +240,17 @@ export function useChat() {
     }
   }
 
+  function stopChat() {
+    if (chatAbortController) {
+      chatAbortController.abort();
+    }
+  }
+
   return {
     isTyping,
     sendMessage,
     regenerate,
+    stopChat,
     renderMarkdown,
     detectCanvas,
     hasRenderableCode,

@@ -78,6 +78,7 @@ const { toolMeetingPrep } = require("./meetingPrepService");
 const Skill = require("../models/skill");
 const { checkNeedsConfirmation } = require("./confirmationService");
 const { waitForConfirmation } = require("./agentConfirmationStore");
+const { waitForDisambiguation } = require("./agentDisambiguationStore");
 const { withRetry } = require("./retryHelper");
 const { resolveRuntimeStep } = require("./agentRuntimeContext");
 // ─────────────────────────────────────────────────────────────────────────────
@@ -301,10 +302,12 @@ async function buildClassifierPrompt(userMessage) {
     "TYPE G — GOOGLE DOCS: user mentions google docs, documents, doc, create doc, share doc, edit doc.",
     "ALSO use TYPE G when user says 'fetch X doc', 'find X document', 'get X doc', 'search X doc' WITHOUT mentioning an ERP collection (invoice, bill, PO, etc).",
     ...googleDocsLines,
+    "CRITICAL: 'send X document' / 'send X doc' means SEARCH for an existing doc named X, NOT create a new one. Only use google_docs_create when user says 'create', 'new', or 'make'.",
+    "- send X doc to Y on Z → google_docs_search {query:'X'} then Z_send_message (NEVER google_docs_create)",
     "- list my google docs / show my documents / recent docs → google_docs_list {limit:12}",
     "- fetch X doc / find doc about X / search google docs for X → google_docs_search {query:'X'}",
     "- open google doc X / read doc X / get doc X → google_docs_get {documentId:'DOC_ID'}",
-    "- create a google doc / new doc titled X → google_docs_create {title:'X'}",
+    "- create a google doc / new doc titled X → google_docs_create {title:'X'} (ONLY when user explicitly says create/new/make)",
     "- update / edit google doc → google_docs_update {documentId:'DOC_ID', title:'new title', content:'<p>HTML content</p>'}",
     "- share google doc with X → google_docs_share {documentId:'DOC_ID', email:'x@example.com', role:'writer'}",
     "- delete google doc X → google_docs_delete {documentId:'DOC_ID'}",
@@ -317,16 +320,65 @@ async function buildClassifierPrompt(userMessage) {
     "TYPE H — GOOGLE SHEETS: user mentions google sheets, spreadsheet, spreadsheets, sheet, create sheet, share sheet.",
     "ALSO use TYPE H when user says 'fetch X sheet', 'find X spreadsheet', 'get X sheet', 'search X sheet'.",
     ...googleSheetsLines,
+    "CRITICAL: 'send X sheet' means SEARCH for an existing sheet named X, NOT create a new one. Only use google_sheets_create when user says 'create', 'new', or 'make'.",
+    "- send X sheet to Y on Z → google_sheets_search {query:'X'} then Z_send_message (NEVER google_sheets_create)",
     "- list my google sheets / show my spreadsheets / recent sheets → google_sheets_list {limit:14}",
     "- fetch X sheet / find spreadsheet about X / search google sheets for X → google_sheets_search {query:'X'}",
     "- open google sheet X / read sheet X → google_sheets_get {spreadsheetId:'SHEET_ID'}",
-    "- create a google sheet / new spreadsheet titled X → google_sheets_create {title:'X'}",
+    "- create a google sheet / new spreadsheet titled X → google_sheets_create {title:'X'} (ONLY when user explicitly says create/new/make)",
     "- rename google sheet to X → google_sheets_rename {spreadsheetId:'SHEET_ID', title:'X'}",
     "- share google sheet with X → google_sheets_share {spreadsheetId:'SHEET_ID', email:'x@example.com', role:'writer'}",
     "- delete google sheet X → google_sheets_delete {spreadsheetId:'SHEET_ID'}",
     "- duplicate google sheet X → google_sheets_duplicate {spreadsheetId:'SHEET_ID', title:'Copy of X'}",
     "Note: When user references a spreadsheet by title (not ID), first use google_sheets_search to find the spreadsheetId, then chain with the next step.",
     'Format: {"isAgentTask":true,"confidence":0.93,"intent":"...","steps":[{"tool":"google_sheets_list","params":{"limit":14}}]}',
+    "",
+
+    // ── STRICT PROHIBITIONS (consistency rules) ────────────────────────────
+    "STRICT PROHIBITIONS — FOLLOW THESE EXACTLY:",
+    "1. NEVER use google_docs_create or google_sheets_create unless the user EXPLICITLY says 'create', 'new', or 'make'. Words like 'send', 'share', 'fetch', 'find', 'get' do NOT mean create.",
+    "2. NEVER chain google_docs_get after google_docs_search in a send/share workflow. The search already provides the doc info needed for messaging via template variables.",
+    "3. NEVER chain google_sheets_get after google_sheets_search in a send/share workflow.",
+    "4. NEVER use {{documentId}} as a template variable — it does NOT exist. Valid doc variables are: {{googleDocId}}, {{googleDocTitle}}, {{googleDocUrl}}.",
+    "5. NEVER use {{spreadsheetId}} as a template variable — it does NOT exist. Valid sheet variables are: {{googleSheetId}}, {{googleSheetTitle}}, {{googleSheetUrl}}.",
+    "6. NEVER invent template variables. ONLY use the variables listed in the 'Available template variables' section below.",
+    "",
+    "DETERMINISTIC PATTERNS — Same input MUST always produce the same plan:",
+    "Pattern: 'send/share X doc/document to Y on Z' → ALWAYS: [{google_docs_search, query:'X'}, {Z_send_message, contact/channel:'Y', message with {{googleDocTitle}} and {{googleDocUrl}}}]",
+    "Pattern: 'send/share X sheet/spreadsheet to Y on Z' → ALWAYS: [{google_sheets_search, query:'X'}, {Z_send_message, contact/channel:'Y', message with {{googleSheetTitle}} and {{googleSheetUrl}}}]",
+    "Pattern: 'send X doc to A on telegram and B on whatsapp' → ALWAYS: [{google_docs_search, query:'X'}, {telegram_send_message, contact:'A', message with {{googleDocTitle}} and {{googleDocUrl}}}, {whatsapp_send_message, contact:'B', message with {{googleDocTitle}} and {{googleDocUrl}}}]",
+    "Pattern: 'send X sheet to A on telegram and B on whatsapp' → ALWAYS: [{google_sheets_search, query:'X'}, {telegram_send_message, contact:'A', message with {{googleSheetTitle}} and {{googleSheetUrl}}}, {whatsapp_send_message, contact:'B', message with {{googleSheetTitle}} and {{googleSheetUrl}}}]",
+    "Pattern: 'fetch/find/get X doc' (no send) → ALWAYS: [{google_docs_search, query:'X'}]",
+    "Pattern: 'fetch/find/get X sheet' (no send) → ALWAYS: [{google_sheets_search, query:'X'}]",
+    "",
+
+    // ── OUTBOUND MESSAGE GENERATION RULES ──────────────────────────────────
+    "CRITICAL — OUTBOUND MESSAGE GENERATION:",
+    "When generating a message to send via Telegram/Slack/WhatsApp/Email, follow this reasoning flow:",
+    "",
+    "Step 1 — INTENT DETECTION: Identify what the user wants sent (link, file, meeting info, doc, sheet, notification, update).",
+    "Step 2 — ENTITY EXTRACTION: Extract recipient, platform, referenced resource (meeting title, doc name, sheet name, ticket, invoice), date/time context, explicit constraints.",
+    "Step 3 — CONTEXT RESOLUTION: If the user references a meeting/event/calendar item → add calendar_get_today or calendar_get_events BEFORE the send step to resolve real event details.",
+    "  If the user references a Google Doc by name → add google_docs_search BEFORE the send step.",
+    "  If the user references a Google Sheet by name → add google_sheets_search BEFORE the send step.",
+    "  If the user references a Jira ticket → add the relevant jira tool BEFORE the send step.",
+    "  If the user references an invoice/document → add fetch_document BEFORE the send step.",
+    "Step 4 — CONSTRAINT PRESERVATION: Never drop explicit details the user asked for:",
+    "  - 'send link' → message MUST include {{meetLink}} or {{googleDocUrl}} or {{googleSheetUrl}}",
+    "  - 'send meeting info' → message MUST include {{eventTitle}}, {{eventDate}}, {{eventTime}}, {{meetLink}}",
+    "  - 'send doc/document' → message MUST include {{googleDocTitle}} and {{googleDocUrl}}",
+    "  - 'send sheet/spreadsheet' → message MUST include {{googleSheetTitle}} and {{googleSheetUrl}}",
+    "  - 'send invoice/PDF' → chain fetch_document → generate_pdf → send_email/send steps",
+    "  - 'tell about meeting' → message MUST include resolved meeting details, not generic text",
+    "Step 5 — FINAL MESSAGE: Generate the actual sendable message with {{placeholders}} for data that will be resolved from previous steps. Never use generic placeholder text like 'the meeting' or 'the link' when a template variable exists.",
+    "",
+    "Available template variables (auto-resolved from previous steps):",
+    "  {{ticketKey}}, {{ticketTitle}}, {{ticketUrl}} — from Jira steps",
+    "  {{eventTitle}}, {{eventDate}}, {{eventTime}}, {{meetLink}} — from calendar steps",
+    "  {{documentNumber}}, {{documentType}} — from fetch_document steps",
+    "  {{googleDocTitle}}, {{googleDocUrl}} — from google_docs steps",
+    "  {{googleSheetTitle}}, {{googleSheetUrl}} — from google_sheets steps",
+    "  {{lastSummary}} — summary from the most recent step",
     "",
 
     "MULTI-AGENT EXAMPLES (combine steps freely across types):",
@@ -336,7 +388,23 @@ async function buildClassifierPrompt(userMessage) {
     '  → [{"tool":"slack_get_unread","params":{}},{"tool":"telegram_get_unread","params":{}}]',
     "- 'send latest invoice to client and notify #billing on slack'",
     '  → [{"tool":"fetch_document","params":{"collection":"Invoices","fallbackToLatest":true}},{"tool":"generate_pdf","params":{}},{"tool":"send_email","params":{"to":"client@example.com"}},{"tool":"slack_send_message","params":{"channel":"billing","message":"Invoice sent to client ✅"}}]',
-    "",
+    "- 'send link of today's all hands meeting to Piku on telegram'",
+    `  → [{"tool":"calendar_get_today","params":{}},{"tool":"telegram_send_message","params":{"contact":"Piku","message":"Here's the link for today's {{eventTitle}}: {{meetLink}}"}}]`,
+
+    "- 'message Kiran about today's OrionAI module meeting'",
+    `  → [{"tool":"calendar_get_today","params":{}},{"tool":"telegram_send_message","params":{"contact":"Kiran","message":"Reminder: {{eventTitle}} is scheduled for today at {{eventTime}}. {{meetLink}}"}}]`,
+
+    "- 'send testing doc to Rahul on telegram'",
+    `  → [{"tool":"google_docs_search","params":{"query":"testing"}},{"tool":"telegram_send_message","params":{"contact":"Rahul","message":"Here's the document: {{googleDocTitle}} — {{googleDocUrl}}"}}]`,
+
+    "- 'send sales sheet to Adi on slack'",
+    `  → [{"tool":"google_sheets_search","params":{"query":"sales"}},{"tool":"slack_send_message","params":{"channel":"adi","message":"Here's the spreadsheet: {{googleSheetTitle}} — {{googleSheetUrl}}"}}]`,
+
+    "- 'send testing document to Piku on telegram and Vikas on whatsapp'",
+    `  → [{"tool":"google_docs_search","params":{"query":"testing"}},{"tool":"telegram_send_message","params":{"contact":"Piku","message":"Here's the document: {{googleDocTitle}} — {{googleDocUrl}}"}},{"tool":"whatsapp_send_message","params":{"contact":"Vikas","message":"Here's the document: {{googleDocTitle}} — {{googleDocUrl}}"}}]`,
+
+    "- 'send budget sheet to Rahul on telegram and Kiran on slack'",
+    `  → [{"tool":"google_sheets_search","params":{"query":"budget"}},{"tool":"telegram_send_message","params":{"contact":"Rahul","message":"Here's the spreadsheet: {{googleSheetTitle}} — {{googleSheetUrl}}"}},{"tool":"slack_send_message","params":{"channel":"kiran","message":"Here's the spreadsheet: {{googleSheetTitle}} — {{googleSheetUrl}}"}}]`,
 
     // ── Not an agent task ──────────────────────────────────────────────────
     'If NONE of the above (general questions, coding, analytics, casual chat): {"isAgentTask":false,"confidence":0.95,"intent":"","steps":[]}',
@@ -352,7 +420,7 @@ async function parseAgentIntent(userMessage, history = []) {
   try {
     const classifierMessage = await buildClassifierPrompt(userMessage);
     const responseText = await withRetry(
-      () => chatCompleteNoSystem(classifierMessage, 512, 0.1),
+      () => chatCompleteNoSystem(classifierMessage, 512, 0),
       { label: "LLM classification" }
     );
     const clean = responseText
@@ -361,7 +429,30 @@ async function parseAgentIntent(userMessage, history = []) {
       .trim();
     const jsonMatch = clean.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error("No JSON found in response");
-    return JSON.parse(jsonMatch[0]);
+    const plan = JSON.parse(jsonMatch[0]);
+
+    if (plan.steps?.length) {
+      const lower = userMessage.toLowerCase();
+      const wantsSend = /\b(send|forward|share|deliver)\b/.test(lower);
+      const wantsCreate = /\b(create|new|make|generate|draft)\b/.test(lower);
+
+      if (wantsSend && !wantsCreate) {
+        for (const step of plan.steps) {
+          if (step.tool === "google_docs_create") {
+            const title = step.params?.title || "";
+            step.tool = "google_docs_search";
+            step.params = { query: title };
+          }
+          if (step.tool === "google_sheets_create") {
+            const title = step.params?.title || "";
+            step.tool = "google_sheets_search";
+            step.params = { query: title };
+          }
+        }
+      }
+    }
+
+    return plan;
   } catch (err) {
     console.error("parseAgentIntent failed:", err.message);
     return { isAgentTask: false, confidence: 0, intent: "", steps: [] };
@@ -984,7 +1075,11 @@ async function runAgent(steps, db, onProgress, userId, sessionId = "default") {
     const stepUI = presentStep(tool, results.length, TOOL_REGISTRY);
 
     try {
-      const messagingPreflight = await preflightMessagingSend(tool, params, ctx);
+      const messagingPreflight = await preflightMessagingSend(
+        tool,
+        params,
+        ctx
+      );
       if (messagingPreflight) {
         if (!messagingPreflight.ok) {
           throw new Error(
@@ -1460,44 +1555,63 @@ async function runAgent(steps, db, onProgress, userId, sessionId = "default") {
 
         // ── Google Docs ─────────────────────────────────────────────────
         case "google_docs_list":
-          result = await withRetry(
-            () => toolGoogleDocsListDocs(params, ctx),
-            { label: "google_docs_list" }
-          );
+          result = await withRetry(() => toolGoogleDocsListDocs(params, ctx), {
+            label: "google_docs_list",
+          });
           break;
 
-        case "google_docs_search":
+        case "google_docs_search": {
           result = await withRetry(
             () => toolGoogleDocsSearchDocs(params, ctx),
             { label: "google_docs_search" }
           );
-          if (result.richGoogleDocs?.length) {
-            ctx.lastGoogleDoc = result.richGoogleDocs[0];
+          const docs = result.richGoogleDocs || [];
+          const hasFollowUpSteps = steps.indexOf(step) < steps.length - 1;
+          if (docs.length > 1 && hasFollowUpSteps) {
+            await onProgress({
+              status: "disambiguate",
+              tool,
+              items: docs.map((d) => ({ id: d.id, title: d.title, modifiedTime: d.modifiedTime, ownerName: d.ownerName })),
+              message: `Found ${docs.length} documents matching "${params.query || ""}". Which one do you want to use?`,
+            });
+            const selection = await waitForDisambiguation(sessionId, tool);
+            if (selection?.id) {
+              const picked = docs.find((d) => d.id === selection.id) || docs[0];
+              ctx.lastGoogleDoc = picked;
+              result.richGoogleDocs = [picked];
+              result.summary = `Selected "${picked.title}"`;
+            } else {
+              ctx.lastGoogleDoc = docs[0];
+            }
+          } else if (docs.length) {
+            ctx.lastGoogleDoc = docs[0];
           }
           break;
+        }
 
-        case "google_docs_get":
-          result = await withRetry(
-            () => toolGoogleDocsGetDoc(params, ctx),
-            { label: "google_docs_get" }
-          );
+        case "google_docs_get": {
+          if (!params.documentId && ctx.lastGoogleDoc?.id) {
+            params.documentId = ctx.lastGoogleDoc.id;
+          }
+          result = await withRetry(() => toolGoogleDocsGetDoc(params, ctx), {
+            label: "google_docs_get",
+          });
           break;
+        }
 
         case "google_docs_create":
-          result = await withRetry(
-            () => toolGoogleDocsCreateDoc(params, ctx),
-            { label: "google_docs_create" }
-          );
+          result = await withRetry(() => toolGoogleDocsCreateDoc(params, ctx), {
+            label: "google_docs_create",
+          });
           break;
 
         case "google_docs_update": {
           if (!params.documentId && ctx.lastGoogleDoc?.id) {
             params.documentId = ctx.lastGoogleDoc.id;
           }
-          result = await withRetry(
-            () => toolGoogleDocsUpdateDoc(params, ctx),
-            { label: "google_docs_update" }
-          );
+          result = await withRetry(() => toolGoogleDocsUpdateDoc(params, ctx), {
+            label: "google_docs_update",
+          });
           break;
         }
 
@@ -1505,10 +1619,9 @@ async function runAgent(steps, db, onProgress, userId, sessionId = "default") {
           if (!params.documentId && ctx.lastGoogleDoc?.id) {
             params.documentId = ctx.lastGoogleDoc.id;
           }
-          result = await withRetry(
-            () => toolGoogleDocsShareDoc(params, ctx),
-            { label: "google_docs_share" }
-          );
+          result = await withRetry(() => toolGoogleDocsShareDoc(params, ctx), {
+            label: "google_docs_share",
+          });
           break;
         }
 
@@ -1516,10 +1629,9 @@ async function runAgent(steps, db, onProgress, userId, sessionId = "default") {
           if (!params.documentId && ctx.lastGoogleDoc?.id) {
             params.documentId = ctx.lastGoogleDoc.id;
           }
-          result = await withRetry(
-            () => toolGoogleDocsDeleteDoc(params, ctx),
-            { label: "google_docs_delete" }
-          );
+          result = await withRetry(() => toolGoogleDocsDeleteDoc(params, ctx), {
+            label: "google_docs_delete",
+          });
           break;
         }
 
@@ -1531,15 +1643,34 @@ async function runAgent(steps, db, onProgress, userId, sessionId = "default") {
           );
           break;
 
-        case "google_sheets_search":
+        case "google_sheets_search": {
           result = await withRetry(
             () => toolGoogleSheetsSearchSheets(params, ctx),
             { label: "google_sheets_search" }
           );
-          if (result.richGoogleSheets?.length) {
-            ctx.lastGoogleSheet = result.richGoogleSheets[0];
+          const sheets = result.richGoogleSheets || [];
+          const hasFollowUpSheetSteps = steps.indexOf(step) < steps.length - 1;
+          if (sheets.length > 1 && hasFollowUpSheetSteps) {
+            await onProgress({
+              status: "disambiguate",
+              tool,
+              items: sheets.map((s) => ({ id: s.id, title: s.title, modifiedTime: s.modifiedTime, ownerName: s.ownerName })),
+              message: `Found ${sheets.length} spreadsheets matching "${params.query || ""}". Which one do you want to use?`,
+            });
+            const selection = await waitForDisambiguation(sessionId, tool);
+            if (selection?.id) {
+              const picked = sheets.find((s) => s.id === selection.id) || sheets[0];
+              ctx.lastGoogleSheet = picked;
+              result.richGoogleSheets = [picked];
+              result.summary = `Selected "${picked.title}"`;
+            } else {
+              ctx.lastGoogleSheet = sheets[0];
+            }
+          } else if (sheets.length) {
+            ctx.lastGoogleSheet = sheets[0];
           }
           break;
+        }
 
         case "google_sheets_get":
           result = await withRetry(
@@ -1612,10 +1743,9 @@ async function runAgent(steps, db, onProgress, userId, sessionId = "default") {
           break;
 
         case "razorpay_get_payouts":
-          result = await withRetry(
-            () => toolRazorpayGetPayouts(params, ctx),
-            { label: "razorpay_get_payouts" }
-          );
+          result = await withRetry(() => toolRazorpayGetPayouts(params, ctx), {
+            label: "razorpay_get_payouts",
+          });
           break;
 
         case "razorpay_create_payout":

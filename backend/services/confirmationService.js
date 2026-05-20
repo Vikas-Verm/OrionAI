@@ -101,16 +101,18 @@ function buildPreview(tool, params, previousResults) {
       return {
         action: "Send Telegram message",
         to: params.contact || params.chatId,
-        message: params.message?.slice(0, 100),
+        message: params.message || "",
         icon: "✈️",
+        app: "telegram",
       };
 
     case "slack_send_message":
       return {
         action: "Send Slack message",
         to: params.channel,
-        message: params.message?.slice(0, 100),
+        message: params.message || "",
         icon: "💬",
+        app: "slack",
       };
 
     case "whatsapp_send_message":
@@ -118,8 +120,9 @@ function buildPreview(tool, params, previousResults) {
       return {
         action: "Send WhatsApp message",
         to: params.phone || params.contact || params.to,
-        message: params.message?.slice(0, 100),
+        message: params.message || "",
         icon: "📱",
+        app: "whatsapp",
       };
 
     case "send_email":
@@ -128,6 +131,7 @@ function buildPreview(tool, params, previousResults) {
         to: params.to,
         subject: params.subject,
         icon: "📧",
+        app: "gmail",
       };
 
     case "calendar_delete":
@@ -136,6 +140,7 @@ function buildPreview(tool, params, previousResults) {
         event: params.title || params.eventId,
         icon: "📅",
         danger: true,
+        app: "calendar",
       };
 
     case "jira_create_ticket":
@@ -144,6 +149,7 @@ function buildPreview(tool, params, previousResults) {
         title: params.title || params.summary,
         project: params.projectKey,
         icon: "🎯",
+        app: "jira",
       };
 
     case "jira_notify_overdue":
@@ -151,6 +157,7 @@ function buildPreview(tool, params, previousResults) {
         action: "Send overdue notifications to team",
         icon: "🔔",
         danger: false,
+        app: "jira",
       };
 
     case "razorpay_create_payout":
@@ -163,6 +170,7 @@ function buildPreview(tool, params, previousResults) {
           : params.narration || "This will trigger a real payout.",
         icon: "₹",
         danger: true,
+        app: "razorpay",
       };
 
     case "google_docs_share":
@@ -171,6 +179,7 @@ function buildPreview(tool, params, previousResults) {
         to: params.email || (params.emails || []).join(", "),
         message: `Role: ${params.role || "writer"}`,
         icon: "🔗",
+        app: "google_docs",
       };
 
     case "google_docs_delete":
@@ -179,6 +188,7 @@ function buildPreview(tool, params, previousResults) {
         title: params.documentId || "document",
         icon: "🗑️",
         danger: true,
+        app: "google_docs",
       };
 
     case "google_sheets_share":
@@ -187,6 +197,7 @@ function buildPreview(tool, params, previousResults) {
         to: params.email || (params.emails || []).join(", "),
         message: `Role: ${params.role || "writer"}`,
         icon: "🔗",
+        app: "google_sheets",
       };
 
     case "google_sheets_delete":
@@ -195,6 +206,7 @@ function buildPreview(tool, params, previousResults) {
         title: params.spreadsheetId || "spreadsheet",
         icon: "🗑️",
         danger: true,
+        app: "google_sheets",
       };
 
     default:

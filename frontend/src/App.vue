@@ -148,8 +148,8 @@
           >
             <div class="chat-pane">
               <DocPanel />
-              <MessageList ref="messageListRef" @usePrompt="usePrompt" @regenerate="onRegenerate" />
-              <InputArea ref="inputAreaRef" @send="onSend" @upload="onUpload" @removeFile="removeAttachment"
+              <MessageList ref="messageListRef" @usePrompt="usePrompt" @regenerate="onRegenerate" @disambiguate="selectDisambiguation" />
+              <InputArea ref="inputAreaRef" @send="onSend" @stop="onStop" @upload="onUpload" @removeFile="removeAttachment"
                 @connectDB="connectDatabase" />
               <ParamPrompt v-if="pendingParams" :pending="pendingParams" @submit="onAgentParamsSubmit"
                 @cancel="pendingParams = null" />
@@ -215,9 +215,9 @@ const authBooting = ref(Boolean(store.token))
 
 // Composables
 const { loadSessions, startNewChat, switchSession: _switchSession, deleteSession } = useSession()
-const { sendMessage, regenerate } = useChat()
+const { sendMessage, regenerate, stopChat } = useChat()
 const { handleFileSelect, removeAttachment, connectDatabase } = useFiles()
-const { handleAgentMessage, provideMissingParams, pendingParams } = useAgent()
+const { handleAgentMessage, provideMissingParams, pendingParams, disambiguateData, selectDisambiguation, stopAgent } = useAgent()
 const { start, stop, unreadNotifCount, hasUrgent } = useWebSocket()
 // Refs
 const sidebarRef = ref(null)
@@ -943,6 +943,11 @@ async function onRegenerate() {
     () => messageListRef.value?.scrollToBottom(),
     () => messageListRef.value?.scrollDuringStream()
   )
+}
+
+function onStop() {
+  stopAgent()
+  stopChat()
 }
 
 function usePrompt(prompt) {

@@ -23,6 +23,7 @@
         >
           <div class="step-icon-wrap">
             <span v-if="step.status === 'running'" class="step-spinner"></span>
+            <span v-else-if="step.status === 'disambiguating'" class="step-spinner"></span>
             <span v-else-if="step.status === 'done'" class="step-check">✓</span>
             <span v-else-if="step.status === 'error'" class="step-err">✕</span>
             <span v-else class="step-pending-dot"></span>
@@ -30,8 +31,22 @@
           <div class="step-body">
             <span class="step-label">{{ step.label || step.tool }}</span>
             <span v-if="step.status === 'running'" class="step-sub running">Working…</span>
+            <span v-else-if="step.status === 'disambiguating'" class="step-sub running">Choose one below…</span>
             <span v-else-if="step.status === 'done' && step.summary" class="step-sub done">{{ step.summary }}</span>
             <span v-else-if="step.status === 'error'" class="step-sub error">{{ step.error }}</span>
+            <!-- Disambiguation picker -->
+            <div v-if="step.status === 'disambiguating' && step.disambiguateItems?.length" class="disambiguate-list">
+              <button
+                v-for="item in step.disambiguateItems"
+                :key="item.id"
+                class="disambiguate-item"
+                @click="$emit('disambiguate', item)"
+              >
+                <span class="disambiguate-icon">{{ step.tool?.includes('sheet') ? '📊' : '📄' }}</span>
+                <span class="disambiguate-title">{{ item.title }}</span>
+                <span v-if="item.ownerName" class="disambiguate-owner">{{ item.ownerName }}</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -386,6 +401,8 @@ import CalendarRenderer from '../../components/agent/renderers/CalendarRenderer.
 import SlackRenderer    from '../../components/agent/renderers/SlackRenderer.vue'
 import GoogleDocsRenderer   from '../../components/agent/renderers/GoogleDocsRenderer.vue'
 import GoogleSheetsRenderer from '../../components/agent/renderers/GoogleSheetsRenderer.vue'
+
+const emit = defineEmits(['disambiguate'])
 
 const props = defineProps({
   msg: { type: Object, required: true },

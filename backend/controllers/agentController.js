@@ -10,6 +10,9 @@ const {
   resolveConfirmation,
   getPendingConfirmation,
 } = require("../services/agentConfirmationStore");
+const {
+  resolveDisambiguation,
+} = require("../services/agentDisambiguationStore");
 const { captureException } = require("../services/errorMonitoring");
 
 function buildSessionTitle(text = "") {
@@ -571,6 +574,17 @@ async function runPlan(req, res) {
             preview: progress.preview || null,
           });
         }
+
+        if (progress.status === "disambiguate") {
+          send({
+            type: "disambiguate",
+            tool: progress.tool,
+            icon: meta.icon,
+            label: meta.label,
+            items: progress.items || [],
+            message: progress.message || "Multiple results found. Please select one.",
+          });
+        }
       },
       userId,
       sessionId
@@ -943,10 +957,23 @@ async function saveTelegramReply(req, res) {
   }
 }
 
+async function disambiguateSelection(req, res) {
+  const { sessionId, tool, selection } = req.body || {};
+  if (!sessionId || !tool) {
+    return res.status(400).json({ error: "sessionId and tool are required" });
+  }
+  const resolved = resolveDisambiguation(sessionId, tool, selection || null);
+  if (!resolved) {
+    return res.status(404).json({ error: "No pending disambiguation found" });
+  }
+  res.json({ ok: true });
+}
+
 module.exports = {
   parseIntent,
   runPlan,
   confirmAgentAction,
+  disambiguateSelection,
   gmailReplyDirect,
   gmailSuggestReply,
   calendarRsvpDirect,

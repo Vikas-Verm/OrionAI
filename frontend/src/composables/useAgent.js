@@ -6,6 +6,8 @@ import { buildSessionTitle, upsertVisibleSession } from "../utils/sessionTitles"
 export function useAgent() {
   const agentRunning = ref(false);
   const pendingParams = ref(null);
+  const disambiguateData = ref(null);
+  let abortController = null;
 
   function revealCurrentSession(message) {
     if (!store.currentSessionId) return;
@@ -89,6 +91,8 @@ export function useAgent() {
   // confirmFn: (preview) => Promise<boolean> — passed from App.vue via confirmRef
   async function executePlan(plan, scrollToBottom, userMessage, confirmFn = null) {
     agentRunning.value = true;
+    store.loading = true;
+    abortController = new AbortController();
     const bubbleIdx = createAgentBubble(plan);
     await nextTick();
     scrollToBottom?.();
@@ -98,7 +102,7 @@ export function useAgent() {
     }
 
     return new Promise((resolve) => {
-      streamAgentRun(plan.steps, store.currentSessionId, userMessage)
+      streamAgentRun(plan.steps, store.currentSessionId, userMessage, abortController.signal)
         .then((response) => {
           const reader = response.body.getReader();
           const decoder = new TextDecoder();
@@ -117,13 +121,11 @@ export function useAgent() {
                 const lines = buffer.split("\n");
                 buffer = lines.pop();
 
-                // Process lines sequentially — await needed for confirm_needed
                 processLines(lines).then(() => read());
               })
               .catch(() => finish());
           }
 
-          // ── Process lines — async so confirm_needed can await modal ──
           async function processLines(lines) {
             for (const line of lines) {
               if (!line.startsWith("data: ")) continue;
@@ -143,19 +145,35 @@ export function useAgent() {
           read();
         })
         .catch((err) => {
-          patchMsg(bubbleIdx, {
-            content: `❌ ${err.message}`,
-            agentDone: true,
-            agentSuccess: false,
-          });
+          if (err.name === "AbortError") {
+            patchMsg(bubbleIdx, {
+              content: "Stopped by you.",
+              agentDone: true,
+              agentSuccess: false,
+            });
+          } else {
+            patchMsg(bubbleIdx, {
+              content: `❌ ${err.message}`,
+              agentDone: true,
+              agentSuccess: false,
+            });
+          }
           finish();
         });
 
       function finish() {
         agentRunning.value = false;
+        store.loading = false;
+        abortController = null;
         resolve();
       }
     });
+  }
+
+  function stopAgent() {
+    if (abortController) {
+      abortController.abort();
+    }
   }
 
   // ── Handle individual SSE events ──────────────────────
@@ -303,6 +321,22 @@ export function useAgent() {
         break;
       }
 
+      case "disambiguate": {
+        disambiguateData.value = {
+          tool: event.tool,
+          items: event.items || [],
+          message: event.message || "Multiple results found. Please select one.",
+        };
+        patchStep(bubbleIdx, event.tool, {
+          status: "disambiguating",
+          icon: event.icon || "🔍",
+          label: event.label || event.tool,
+          summary: event.message,
+          disambiguateItems: event.items || [],
+        });
+        break;
+      }
+
       case "complete":
       case "error": {
         const content = event.summary || event.error || "✅ Done";
@@ -357,5 +391,29 @@ export function useAgent() {
     await executePlan(plan, scrollToBottom, userMessage, confirmFn);
   }
 
-  return { agentRunning, pendingParams, handleAgentMessage, provideMissingParams };
+  async function selectDisambiguation(item) {
+    if (!disambiguateData.value) return;
+    const { tool } = disambiguateData.value;
+    disambiguateData.value = null;
+    try {
+      const { default: api } = await import("../services/api");
+      await api.post("/api/agent/disambiguate", {
+        sessionId: store.currentSessionId,
+        tool,
+        selection: item,
+      });
+    } catch (err) {
+      console.error("Failed to send disambiguation:", err.message);
+    }
+  }
+
+  return {
+    agentRunning,
+    pendingParams,
+    disambiguateData,
+    handleAgentMessage,
+    provideMissingParams,
+    selectDisambiguation,
+    stopAgent,
+  };
 }
