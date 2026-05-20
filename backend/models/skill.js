@@ -22,6 +22,8 @@ const skillSchema = new mongoose.Schema({
       "custom",
       "whatsapp",
       "notifications",
+      "google_docs",
+      "google_sheets",
     ],
     default: "custom",
   },

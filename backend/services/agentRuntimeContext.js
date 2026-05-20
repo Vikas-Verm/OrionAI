@@ -22,6 +22,12 @@ function buildRuntimeContext(results = [], ctx = {}) {
     documentType: "",
     documentSummary: "",
     databaseSummary: "",
+    googleDocId: "",
+    googleDocTitle: "",
+    googleDocUrl: "",
+    googleSheetId: "",
+    googleSheetTitle: "",
+    googleSheetUrl: "",
   };
 
   for (const entry of results) {
@@ -53,6 +59,24 @@ function buildRuntimeContext(results = [], ctx = {}) {
 
     if (tool === "database_query" && result.summary) {
       context.databaseSummary = result.summary;
+    }
+
+    if (tool?.startsWith("google_docs_")) {
+      const doc = result.richGoogleDoc || result.richGoogleDocs?.[0];
+      if (doc) {
+        context.googleDocId = doc.id || context.googleDocId;
+        context.googleDocTitle = doc.title || context.googleDocTitle;
+        context.googleDocUrl = doc.webViewUrl || context.googleDocUrl;
+      }
+    }
+
+    if (tool?.startsWith("google_sheets_")) {
+      const sheet = result.richGoogleSheet || result.richGoogleSheets?.[0];
+      if (sheet) {
+        context.googleSheetId = sheet.id || context.googleSheetId;
+        context.googleSheetTitle = sheet.title || context.googleSheetTitle;
+        context.googleSheetUrl = sheet.webViewUrl || context.googleSheetUrl;
+      }
     }
 
     if (result.subject) {
@@ -172,6 +196,22 @@ function applyRuntimeDefaults(tool, params = {}, context = {}) {
     shouldAutofillMessage(resolved.message, context)
   ) {
     resolved.message = buildDefaultFollowUpMessage(context);
+  }
+
+  if (
+    ["google_docs_get", "google_docs_update", "google_docs_share", "google_docs_delete"].includes(tool) &&
+    !String(resolved.documentId || "").trim() &&
+    context.googleDocId
+  ) {
+    resolved.documentId = context.googleDocId;
+  }
+
+  if (
+    ["google_sheets_get", "google_sheets_rename", "google_sheets_share", "google_sheets_delete", "google_sheets_duplicate"].includes(tool) &&
+    !String(resolved.spreadsheetId || "").trim() &&
+    context.googleSheetId
+  ) {
+    resolved.spreadsheetId = context.googleSheetId;
   }
 
   if (["gmail_send_email", "send_email"].includes(tool)) {

@@ -52,6 +52,25 @@ const {
 } = require("./tools/toolTelegram");
 const { toolDatabaseQuery } = require("./tools/toolDatabase");
 const {
+  toolGoogleDocsListDocs,
+  toolGoogleDocsGetDoc,
+  toolGoogleDocsCreateDoc,
+  toolGoogleDocsUpdateDoc,
+  toolGoogleDocsShareDoc,
+  toolGoogleDocsDeleteDoc,
+  toolGoogleDocsSearchDocs,
+} = require("./tools/toolGoogleDocs");
+const {
+  toolGoogleSheetsListSheets,
+  toolGoogleSheetsGetSheet,
+  toolGoogleSheetsCreateSheet,
+  toolGoogleSheetsRenameSheet,
+  toolGoogleSheetsShareSheet,
+  toolGoogleSheetsDeleteSheet,
+  toolGoogleSheetsSearchSheets,
+  toolGoogleSheetsDuplicateSheet,
+} = require("./tools/toolGoogleSheets");
+const {
   toolRazorpayGetPayouts,
   toolRazorpayCreatePayout,
 } = require("./tools/toolRazorpay");
@@ -102,6 +121,23 @@ const STATIC_TOOL_REGISTRY = {
   whatsapp_get_messages: { icon: "💬", label: "Read WhatsApp" },
   whatsapp_get_unread: { icon: "🔔", label: "WhatsApp unread" },
   whatsapp_list_chats: { icon: "💬", label: "WhatsApp chats" },
+  // ── Google Docs ──────────────────────────────────────
+  google_docs_list: { icon: "📝", label: "List Google Docs" },
+  google_docs_get: { icon: "📄", label: "Open Google Doc" },
+  google_docs_create: { icon: "➕", label: "Create Google Doc" },
+  google_docs_update: { icon: "✏️", label: "Update Google Doc" },
+  google_docs_share: { icon: "🔗", label: "Share Google Doc" },
+  google_docs_delete: { icon: "🗑️", label: "Delete Google Doc" },
+  google_docs_search: { icon: "🔍", label: "Search Google Docs" },
+  // ── Google Sheets ─────────────────────────────────────
+  google_sheets_list: { icon: "📊", label: "List Google Sheets" },
+  google_sheets_get: { icon: "📋", label: "Open Google Sheet" },
+  google_sheets_create: { icon: "➕", label: "Create Google Sheet" },
+  google_sheets_rename: { icon: "✏️", label: "Rename Google Sheet" },
+  google_sheets_share: { icon: "🔗", label: "Share Google Sheet" },
+  google_sheets_delete: { icon: "🗑️", label: "Delete Google Sheet" },
+  google_sheets_search: { icon: "🔍", label: "Search Google Sheets" },
+  google_sheets_duplicate: { icon: "📑", label: "Duplicate Google Sheet" },
   database_query: { icon: "🗄️", label: "Query connected database" },
   meeting_prep: { icon: "🧠", label: "Prepare meeting brief" },
   razorpay_get_payouts: { icon: "₹", label: "List Razorpay payouts" },
@@ -197,6 +233,8 @@ async function buildClassifierPrompt(userMessage) {
   const gmailLines = buildSkillLines("gmail");
   const telegramLines = buildSkillLines("telegram");
   const calendarLines = buildSkillLines("calendar");
+  const googleDocsLines = buildSkillLines("google_docs");
+  const googleSheetsLines = buildSkillLines("google_sheets");
 
   return [
     `User request: "${userMessage}"`,
@@ -209,8 +247,11 @@ async function buildClassifierPrompt(userMessage) {
     "",
 
     // ── TYPE A: Document Delivery ──────────────────────────────────────────
-    "TYPE A — DOCUMENT DELIVERY: user wants to send/email/share a business document.",
+    "TYPE A — DOCUMENT DELIVERY: user wants to send/email/share a BUSINESS document from ERP.",
+    "ONLY use TYPE A when the user explicitly mentions one of these ERP collections: invoice, bill, PO, purchase order, credit note, debit note, payment request, proof of delivery, POD.",
     "Collections: invoice→Invoices | bill→Bills | PO→PurchaseOrders | CN→CreditNotes | DN→DebitNotes | payment→PaymentRequests | POD→ProofOfDeliveries",
+    "IMPORTANT: If user says 'fetch doc', 'find document', 'get doc', 'search doc' WITHOUT mentioning a specific ERP collection above, do NOT use fetch_document. Instead use google_docs_search (TYPE G) to search Google Docs. Similarly for sheets/spreadsheets use google_sheets_search (TYPE H).",
+    "IMPORTANT: If user says 'fetch testing doc' or 'find my report' without mentioning invoice/bill/PO/etc, route to google_docs_search with the search query.",
     'Format: {"isAgentTask":true,"confidence":0.95,"intent":"...","steps":[{"tool":"fetch_document","params":{"collection":"Invoices","identifier":"INV-001","identifierField":"number","fallbackToLatest":false}},{"tool":"generate_pdf","params":{}},{"tool":"send_email","params":{"to":"email@example.com"}}]}',
     "Use fallbackToLatest:true when user says latest/recent/last.",
     "",
@@ -256,6 +297,38 @@ async function buildClassifierPrompt(userMessage) {
     "NOTE: For slack_send_message, 'channel' can be a person name (DM), a channel name like 'general', or a channel ID.",
     "NOTE: When sending to a person by name (e.g. 'Adi', 'Rahul'), set channel to their first name in lowercase.",
     "",
+    // ── TYPE G: Google Docs ──────────────────────────────────────────
+    "TYPE G — GOOGLE DOCS: user mentions google docs, documents, doc, create doc, share doc, edit doc.",
+    "ALSO use TYPE G when user says 'fetch X doc', 'find X document', 'get X doc', 'search X doc' WITHOUT mentioning an ERP collection (invoice, bill, PO, etc).",
+    ...googleDocsLines,
+    "- list my google docs / show my documents / recent docs → google_docs_list {limit:12}",
+    "- fetch X doc / find doc about X / search google docs for X → google_docs_search {query:'X'}",
+    "- open google doc X / read doc X / get doc X → google_docs_get {documentId:'DOC_ID'}",
+    "- create a google doc / new doc titled X → google_docs_create {title:'X'}",
+    "- update / edit google doc → google_docs_update {documentId:'DOC_ID', title:'new title', content:'<p>HTML content</p>'}",
+    "- share google doc with X → google_docs_share {documentId:'DOC_ID', email:'x@example.com', role:'writer'}",
+    "- delete google doc X → google_docs_delete {documentId:'DOC_ID'}",
+    "Note: When user references a doc by title (not ID), first use google_docs_search to find the documentId, then chain with the next step.",
+    "Note: When user says 'create a doc about X with content', use google_docs_create then google_docs_update to add content.",
+    'Format: {"isAgentTask":true,"confidence":0.93,"intent":"...","steps":[{"tool":"google_docs_list","params":{"limit":12}}]}',
+    "",
+
+    // ── TYPE H: Google Sheets ─────────────────────────────────────────
+    "TYPE H — GOOGLE SHEETS: user mentions google sheets, spreadsheet, spreadsheets, sheet, create sheet, share sheet.",
+    "ALSO use TYPE H when user says 'fetch X sheet', 'find X spreadsheet', 'get X sheet', 'search X sheet'.",
+    ...googleSheetsLines,
+    "- list my google sheets / show my spreadsheets / recent sheets → google_sheets_list {limit:14}",
+    "- fetch X sheet / find spreadsheet about X / search google sheets for X → google_sheets_search {query:'X'}",
+    "- open google sheet X / read sheet X → google_sheets_get {spreadsheetId:'SHEET_ID'}",
+    "- create a google sheet / new spreadsheet titled X → google_sheets_create {title:'X'}",
+    "- rename google sheet to X → google_sheets_rename {spreadsheetId:'SHEET_ID', title:'X'}",
+    "- share google sheet with X → google_sheets_share {spreadsheetId:'SHEET_ID', email:'x@example.com', role:'writer'}",
+    "- delete google sheet X → google_sheets_delete {spreadsheetId:'SHEET_ID'}",
+    "- duplicate google sheet X → google_sheets_duplicate {spreadsheetId:'SHEET_ID', title:'Copy of X'}",
+    "Note: When user references a spreadsheet by title (not ID), first use google_sheets_search to find the spreadsheetId, then chain with the next step.",
+    'Format: {"isAgentTask":true,"confidence":0.93,"intent":"...","steps":[{"tool":"google_sheets_list","params":{"limit":14}}]}',
+    "",
+
     "MULTI-AGENT EXAMPLES (combine steps freely across types):",
     "- 'create a bug ticket for GST issue and message Rahul on slack about it'",
     '  → [{"tool":"jira_create_ticket","params":{"title":"GST setting issue","issueType":"Bug"}},{"tool":"slack_send_message","params":{"channel":"rahul","message":"Bug ticket {{ticketKey}} created for GST setting issue."}}]',
@@ -1384,6 +1457,147 @@ async function runAgent(steps, db, onProgress, userId, sessionId = "default") {
             { label: "whatsapp_list_chats" }
           );
           break;
+
+        // ── Google Docs ─────────────────────────────────────────────────
+        case "google_docs_list":
+          result = await withRetry(
+            () => toolGoogleDocsListDocs(params, ctx),
+            { label: "google_docs_list" }
+          );
+          break;
+
+        case "google_docs_search":
+          result = await withRetry(
+            () => toolGoogleDocsSearchDocs(params, ctx),
+            { label: "google_docs_search" }
+          );
+          if (result.richGoogleDocs?.length) {
+            ctx.lastGoogleDoc = result.richGoogleDocs[0];
+          }
+          break;
+
+        case "google_docs_get":
+          result = await withRetry(
+            () => toolGoogleDocsGetDoc(params, ctx),
+            { label: "google_docs_get" }
+          );
+          break;
+
+        case "google_docs_create":
+          result = await withRetry(
+            () => toolGoogleDocsCreateDoc(params, ctx),
+            { label: "google_docs_create" }
+          );
+          break;
+
+        case "google_docs_update": {
+          if (!params.documentId && ctx.lastGoogleDoc?.id) {
+            params.documentId = ctx.lastGoogleDoc.id;
+          }
+          result = await withRetry(
+            () => toolGoogleDocsUpdateDoc(params, ctx),
+            { label: "google_docs_update" }
+          );
+          break;
+        }
+
+        case "google_docs_share": {
+          if (!params.documentId && ctx.lastGoogleDoc?.id) {
+            params.documentId = ctx.lastGoogleDoc.id;
+          }
+          result = await withRetry(
+            () => toolGoogleDocsShareDoc(params, ctx),
+            { label: "google_docs_share" }
+          );
+          break;
+        }
+
+        case "google_docs_delete": {
+          if (!params.documentId && ctx.lastGoogleDoc?.id) {
+            params.documentId = ctx.lastGoogleDoc.id;
+          }
+          result = await withRetry(
+            () => toolGoogleDocsDeleteDoc(params, ctx),
+            { label: "google_docs_delete" }
+          );
+          break;
+        }
+
+        // ── Google Sheets ──────────────────────────────────────────────
+        case "google_sheets_list":
+          result = await withRetry(
+            () => toolGoogleSheetsListSheets(params, ctx),
+            { label: "google_sheets_list" }
+          );
+          break;
+
+        case "google_sheets_search":
+          result = await withRetry(
+            () => toolGoogleSheetsSearchSheets(params, ctx),
+            { label: "google_sheets_search" }
+          );
+          if (result.richGoogleSheets?.length) {
+            ctx.lastGoogleSheet = result.richGoogleSheets[0];
+          }
+          break;
+
+        case "google_sheets_get":
+          result = await withRetry(
+            () => toolGoogleSheetsGetSheet(params, ctx),
+            { label: "google_sheets_get" }
+          );
+          break;
+
+        case "google_sheets_create":
+          result = await withRetry(
+            () => toolGoogleSheetsCreateSheet(params, ctx),
+            { label: "google_sheets_create" }
+          );
+          break;
+
+        case "google_sheets_rename": {
+          if (!params.spreadsheetId && ctx.lastGoogleSheet?.id) {
+            params.spreadsheetId = ctx.lastGoogleSheet.id;
+          }
+          result = await withRetry(
+            () => toolGoogleSheetsRenameSheet(params, ctx),
+            { label: "google_sheets_rename" }
+          );
+          break;
+        }
+
+        case "google_sheets_share": {
+          if (!params.spreadsheetId && ctx.lastGoogleSheet?.id) {
+            params.spreadsheetId = ctx.lastGoogleSheet.id;
+          }
+          result = await withRetry(
+            () => toolGoogleSheetsShareSheet(params, ctx),
+            { label: "google_sheets_share" }
+          );
+          break;
+        }
+
+        case "google_sheets_delete": {
+          if (!params.spreadsheetId && ctx.lastGoogleSheet?.id) {
+            params.spreadsheetId = ctx.lastGoogleSheet.id;
+          }
+          result = await withRetry(
+            () => toolGoogleSheetsDeleteSheet(params, ctx),
+            { label: "google_sheets_delete" }
+          );
+          break;
+        }
+
+        case "google_sheets_duplicate": {
+          if (!params.spreadsheetId && ctx.lastGoogleSheet?.id) {
+            params.spreadsheetId = ctx.lastGoogleSheet.id;
+          }
+          result = await withRetry(
+            () => toolGoogleSheetsDuplicateSheet(params, ctx),
+            { label: "google_sheets_duplicate" }
+          );
+          break;
+        }
 
         case "database_query":
           result = await withRetry(() => toolDatabaseQuery(params, ctx), {

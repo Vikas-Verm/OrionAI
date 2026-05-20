@@ -18,6 +18,14 @@ const DESTRUCTIVE_TOOLS = new Set([
   // Mass actions
   "jira_notify_overdue",
   "razorpay_create_payout",
+
+  // Google Docs — sharing & deleting are destructive
+  "google_docs_share",
+  "google_docs_delete",
+
+  // Google Sheets — sharing & deleting are destructive
+  "google_sheets_share",
+  "google_sheets_delete",
 ]);
 
 const BATCH_THRESHOLD = 3;
@@ -66,6 +74,10 @@ function checkNeedsConfirmation(tool, params, previousResults = []) {
     "jira_notify_overdue",
     "calendar_delete",
     "razorpay_create_payout",
+    "google_docs_share",
+    "google_docs_delete",
+    "google_sheets_share",
+    "google_sheets_delete",
   ].includes(tool);
 
   // Batch actions (multiple recipients) always need confirmation
@@ -150,6 +162,38 @@ function buildPreview(tool, params, previousResults) {
           ? `Amount: INR ${Number(params.amount).toLocaleString("en-IN")}`
           : params.narration || "This will trigger a real payout.",
         icon: "₹",
+        danger: true,
+      };
+
+    case "google_docs_share":
+      return {
+        action: "Share Google Doc",
+        to: params.email || (params.emails || []).join(", "),
+        message: `Role: ${params.role || "writer"}`,
+        icon: "🔗",
+      };
+
+    case "google_docs_delete":
+      return {
+        action: "Delete Google Doc",
+        title: params.documentId || "document",
+        icon: "🗑️",
+        danger: true,
+      };
+
+    case "google_sheets_share":
+      return {
+        action: "Share Google Sheet",
+        to: params.email || (params.emails || []).join(", "),
+        message: `Role: ${params.role || "writer"}`,
+        icon: "🔗",
+      };
+
+    case "google_sheets_delete":
+      return {
+        action: "Delete Google Sheet",
+        title: params.spreadsheetId || "spreadsheet",
+        icon: "🗑️",
         danger: true,
       };
 

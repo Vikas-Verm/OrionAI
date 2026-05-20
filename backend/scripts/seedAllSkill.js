@@ -916,6 +916,409 @@ const ALL_SKILLS = [
   },
 
   // ══════════════════════════════════════════════════════════════════════
+  // GOOGLE DOCS — Complete coverage
+  // ══════════════════════════════════════════════════════════════════════
+  {
+    toolName: "google_docs_list",
+    icon: "📝",
+    label: "List Google Docs",
+    category: "google_docs",
+    enabled: true,
+    description:
+      "List recent Google Docs documents from the user's Google Drive.",
+    params: [
+      {
+        name: "limit",
+        type: "number",
+        required: false,
+        default: "12",
+        description: "Number of documents to return",
+      },
+    ],
+    promptExample: {
+      userSays: "Show my recent Google Docs",
+      output: '{"tool":"google_docs_list","params":{"limit":12}}',
+    },
+  },
+  {
+    toolName: "google_docs_search",
+    icon: "🔍",
+    label: "Search Google Docs",
+    category: "google_docs",
+    enabled: true,
+    description:
+      "Search Google Docs by title or keyword to find a specific document.",
+    params: [
+      {
+        name: "query",
+        type: "string",
+        required: true,
+        description: "Search keyword or document title",
+        example: "meeting notes",
+      },
+    ],
+    promptExample: {
+      userSays: "Find my doc about project roadmap",
+      output:
+        '{"tool":"google_docs_search","params":{"query":"project roadmap"}}',
+    },
+  },
+  {
+    toolName: "google_docs_get",
+    icon: "📄",
+    label: "Open Google Doc",
+    category: "google_docs",
+    enabled: true,
+    description:
+      "Open and read the content of a specific Google Doc by its document ID.",
+    params: [
+      {
+        name: "documentId",
+        type: "string",
+        required: true,
+        description: "Google Docs document ID",
+        example: "1abc2def3ghi4jkl",
+      },
+    ],
+    promptExample: {
+      userSays: "Open the meeting notes doc",
+      output:
+        '{"tool":"google_docs_get","params":{"documentId":"1abc2def3ghi4jkl"}}',
+    },
+  },
+  {
+    toolName: "google_docs_create",
+    icon: "➕",
+    label: "Create Google Doc",
+    category: "google_docs",
+    enabled: true,
+    description: "Create a new blank Google Doc with a specified title.",
+    params: [
+      {
+        name: "title",
+        type: "string",
+        required: true,
+        description: "Title for the new document",
+        example: "Sprint Planning Notes",
+      },
+    ],
+    promptExample: {
+      userSays: "Create a new Google Doc called Sprint Planning Notes",
+      output:
+        '{"tool":"google_docs_create","params":{"title":"Sprint Planning Notes"}}',
+    },
+  },
+  {
+    toolName: "google_docs_update",
+    icon: "✏️",
+    label: "Update Google Doc",
+    category: "google_docs",
+    enabled: true,
+    description:
+      "Update the title or content of an existing Google Doc. Can use the doc from a previous google_docs_create or google_docs_get step.",
+    params: [
+      {
+        name: "documentId",
+        type: "string",
+        required: false,
+        description:
+          "Document ID. Uses last opened/created doc if not specified.",
+      },
+      {
+        name: "title",
+        type: "string",
+        required: false,
+        description: "New title for the document",
+      },
+      {
+        name: "content",
+        type: "string",
+        required: false,
+        description: "HTML content to set in the document",
+        example: "<p>Updated project notes here</p>",
+      },
+    ],
+    promptExample: {
+      userSays: "Update the doc title to Final Report",
+      output:
+        '{"tool":"google_docs_update","params":{"title":"Final Report"}}',
+    },
+  },
+  {
+    toolName: "google_docs_share",
+    icon: "🔗",
+    label: "Share Google Doc",
+    category: "google_docs",
+    enabled: true,
+    description:
+      "Share a Google Doc with someone by email. Can set role as writer, reader, or commenter.",
+    params: [
+      {
+        name: "documentId",
+        type: "string",
+        required: false,
+        description:
+          "Document ID. Uses last opened/created doc if not specified.",
+      },
+      {
+        name: "email",
+        type: "string",
+        required: true,
+        description: "Email address to share with",
+        example: "hari@company.com",
+      },
+      {
+        name: "role",
+        type: "string",
+        required: false,
+        default: "writer",
+        description: "Permission role: writer, reader, or commenter",
+      },
+    ],
+    promptExample: {
+      userSays: "Share the doc with hari@company.com",
+      output:
+        '{"tool":"google_docs_share","params":{"email":"hari@company.com","role":"writer"}}',
+    },
+  },
+  {
+    toolName: "google_docs_delete",
+    icon: "🗑️",
+    label: "Delete Google Doc",
+    category: "google_docs",
+    enabled: true,
+    description:
+      "Move a Google Doc to trash. Can use the doc from a previous step.",
+    params: [
+      {
+        name: "documentId",
+        type: "string",
+        required: false,
+        description:
+          "Document ID. Uses last opened/created doc if not specified.",
+      },
+    ],
+    promptExample: {
+      userSays: "Delete the old meeting notes doc",
+      output:
+        '{"tool":"google_docs_delete","params":{"documentId":"1abc2def3ghi4jkl"}}',
+    },
+  },
+
+  // ══════════════════════════════════════════════════════════════════════
+  // GOOGLE SHEETS — Complete coverage
+  // ══════════════════════════════════════════════════════════════════════
+  {
+    toolName: "google_sheets_list",
+    icon: "📊",
+    label: "List Google Sheets",
+    category: "google_sheets",
+    enabled: true,
+    description:
+      "List recent Google Sheets spreadsheets from the user's Google Drive.",
+    params: [
+      {
+        name: "limit",
+        type: "number",
+        required: false,
+        default: "14",
+        description: "Number of spreadsheets to return",
+      },
+    ],
+    promptExample: {
+      userSays: "Show my recent Google Sheets",
+      output: '{"tool":"google_sheets_list","params":{"limit":14}}',
+    },
+  },
+  {
+    toolName: "google_sheets_search",
+    icon: "🔍",
+    label: "Search Google Sheets",
+    category: "google_sheets",
+    enabled: true,
+    description:
+      "Search Google Sheets by title or keyword to find a specific spreadsheet.",
+    params: [
+      {
+        name: "query",
+        type: "string",
+        required: true,
+        description: "Search keyword or spreadsheet title",
+        example: "sales report",
+      },
+    ],
+    promptExample: {
+      userSays: "Find my spreadsheet about sales report",
+      output:
+        '{"tool":"google_sheets_search","params":{"query":"sales report"}}',
+    },
+  },
+  {
+    toolName: "google_sheets_get",
+    icon: "📋",
+    label: "Open Google Sheet",
+    category: "google_sheets",
+    enabled: true,
+    description:
+      "Open and read the content of a specific Google Sheet by its spreadsheet ID.",
+    params: [
+      {
+        name: "spreadsheetId",
+        type: "string",
+        required: true,
+        description: "Google Sheets spreadsheet ID",
+        example: "1abc2def3ghi4jkl",
+      },
+    ],
+    promptExample: {
+      userSays: "Open the sales report sheet",
+      output:
+        '{"tool":"google_sheets_get","params":{"spreadsheetId":"1abc2def3ghi4jkl"}}',
+    },
+  },
+  {
+    toolName: "google_sheets_create",
+    icon: "➕",
+    label: "Create Google Sheet",
+    category: "google_sheets",
+    enabled: true,
+    description: "Create a new blank Google Sheet with a specified title.",
+    params: [
+      {
+        name: "title",
+        type: "string",
+        required: true,
+        description: "Title for the new spreadsheet",
+        example: "Q4 Budget Tracker",
+      },
+    ],
+    promptExample: {
+      userSays: "Create a new Google Sheet called Q4 Budget Tracker",
+      output:
+        '{"tool":"google_sheets_create","params":{"title":"Q4 Budget Tracker"}}',
+    },
+  },
+  {
+    toolName: "google_sheets_rename",
+    icon: "✏️",
+    label: "Rename Google Sheet",
+    category: "google_sheets",
+    enabled: true,
+    description: "Rename an existing Google Sheet.",
+    params: [
+      {
+        name: "spreadsheetId",
+        type: "string",
+        required: false,
+        description:
+          "Spreadsheet ID. Uses last opened/created sheet if not specified.",
+      },
+      {
+        name: "title",
+        type: "string",
+        required: true,
+        description: "New title for the spreadsheet",
+        example: "Final Budget Report",
+      },
+    ],
+    promptExample: {
+      userSays: "Rename the sheet to Final Budget Report",
+      output:
+        '{"tool":"google_sheets_rename","params":{"title":"Final Budget Report"}}',
+    },
+  },
+  {
+    toolName: "google_sheets_share",
+    icon: "🔗",
+    label: "Share Google Sheet",
+    category: "google_sheets",
+    enabled: true,
+    description:
+      "Share a Google Sheet with someone by email. Can set role as writer, reader, or commenter.",
+    params: [
+      {
+        name: "spreadsheetId",
+        type: "string",
+        required: false,
+        description:
+          "Spreadsheet ID. Uses last opened/created sheet if not specified.",
+      },
+      {
+        name: "email",
+        type: "string",
+        required: true,
+        description: "Email address to share with",
+        example: "hari@company.com",
+      },
+      {
+        name: "role",
+        type: "string",
+        required: false,
+        default: "writer",
+        description: "Permission role: writer, reader, or commenter",
+      },
+    ],
+    promptExample: {
+      userSays: "Share the sheet with hari@company.com",
+      output:
+        '{"tool":"google_sheets_share","params":{"email":"hari@company.com","role":"writer"}}',
+    },
+  },
+  {
+    toolName: "google_sheets_delete",
+    icon: "🗑️",
+    label: "Delete Google Sheet",
+    category: "google_sheets",
+    enabled: true,
+    description:
+      "Move a Google Sheet to trash. Can use the sheet from a previous step.",
+    params: [
+      {
+        name: "spreadsheetId",
+        type: "string",
+        required: false,
+        description:
+          "Spreadsheet ID. Uses last opened/created sheet if not specified.",
+      },
+    ],
+    promptExample: {
+      userSays: "Delete the old budget sheet",
+      output:
+        '{"tool":"google_sheets_delete","params":{"spreadsheetId":"1abc2def3ghi4jkl"}}',
+    },
+  },
+  {
+    toolName: "google_sheets_duplicate",
+    icon: "📑",
+    label: "Duplicate Google Sheet",
+    category: "google_sheets",
+    enabled: true,
+    description:
+      "Create a copy of an existing Google Sheet. Can specify a new title.",
+    params: [
+      {
+        name: "spreadsheetId",
+        type: "string",
+        required: false,
+        description:
+          "Spreadsheet ID. Uses last opened/created sheet if not specified.",
+      },
+      {
+        name: "title",
+        type: "string",
+        required: false,
+        description: "Title for the duplicated spreadsheet",
+        example: "Copy of Budget Tracker",
+      },
+    ],
+    promptExample: {
+      userSays: "Duplicate the sales report sheet",
+      output:
+        '{"tool":"google_sheets_duplicate","params":{"title":"Copy of Sales Report"}}',
+    },
+  },
+
+  // ══════════════════════════════════════════════════════════════════════
   // WHATSAPP — Complete coverage
   // ══════════════════════════════════════════════════════════════════════
   {
@@ -1163,6 +1566,8 @@ async function seed() {
   console.log(`   - All Slack operations (4 tools)`);
   console.log(`   - All Gmail operations (6 tools)`);
   console.log(`   - All Calendar operations (8 tools)`);
+  console.log(`   - All Google Docs operations (7 tools)`);
+  console.log(`   - All Google Sheets operations (8 tools)`);
   console.log(`   - All WhatsApp operations (4 tools)`);
   console.log(`   - Document delivery (4 tools)`);
   console.log(`   - Cross-app notifications (1 tool)`);
