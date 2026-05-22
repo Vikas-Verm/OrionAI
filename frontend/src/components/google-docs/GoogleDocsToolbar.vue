@@ -80,6 +80,7 @@
       <div class="gd-toolbar-group gd-toolbar-group--iconic">
         <button
           class="gd-tool-btn gd-tool-btn--icon"
+          :class="{ 'is-active': activeBold }"
           type="button"
           :disabled="disabled"
           title="Bold"
@@ -89,6 +90,7 @@
         </button>
         <button
           class="gd-tool-btn gd-tool-btn--icon"
+          :class="{ 'is-active': activeItalic }"
           type="button"
           :disabled="disabled"
           title="Italic"
@@ -98,6 +100,7 @@
         </button>
         <button
           class="gd-tool-btn gd-tool-btn--icon"
+          :class="{ 'is-active': activeUnderline }"
           type="button"
           :disabled="disabled"
           title="Underline"
@@ -121,6 +124,7 @@
       <div class="gd-toolbar-group gd-toolbar-group--iconic">
         <button
           class="gd-tool-btn gd-tool-btn--icon"
+          :class="{ 'is-active': activeAlign === 'left' || activeAlign === 'start' }"
           type="button"
           :disabled="disabled"
           title="Align left"
@@ -130,6 +134,7 @@
         </button>
         <button
           class="gd-tool-btn gd-tool-btn--icon"
+          :class="{ 'is-active': activeAlign === 'center' }"
           type="button"
           :disabled="disabled"
           title="Align center"
@@ -139,6 +144,7 @@
         </button>
         <button
           class="gd-tool-btn gd-tool-btn--icon"
+          :class="{ 'is-active': activeAlign === 'right' || activeAlign === 'end' }"
           type="button"
           :disabled="disabled"
           title="Align right"
@@ -330,6 +336,13 @@ const props = defineProps({
   disabled: { type: Boolean, default: false },
   zoom: { type: Number, default: 100 },
   headerCollapsed: { type: Boolean, default: false },
+  activeFontFamily: { type: String, default: "Inter" },
+  activeFontSize: { type: String, default: "11" },
+  activeBold: { type: Boolean, default: false },
+  activeItalic: { type: Boolean, default: false },
+  activeUnderline: { type: Boolean, default: false },
+  activeAlign: { type: String, default: "left" },
+  activeStyle: { type: String, default: "P" },
 });
 
 const emit = defineEmits(["action"]);
@@ -369,6 +382,8 @@ const textStyleOptions = [
 ];
 
 const fontSizeOptions = [
+  "6",
+  "7",
   "8",
   "9",
   "10",
@@ -412,6 +427,12 @@ const fontFamilyOptions = [
   { label: "Times New Roman", value: "'Times New Roman', Times, serif" },
   { label: "Trebuchet MS", value: "'Trebuchet MS', sans-serif" },
   { label: "Verdana", value: "Verdana, Geneva, sans-serif" },
+  { label: "Roboto", value: "'Roboto', sans-serif" },
+  { label: "Open Sans", value: "'Open Sans', sans-serif" },
+  { label: "Lora", value: "'Lora', serif" },
+  { label: "Oswald", value: "'Oswald', sans-serif" },
+  { label: "Playfair Display", value: "'Playfair Display', serif" },
+  { label: "Poppins", value: "'Poppins', sans-serif" },
 ];
 
 const listOptions = [
@@ -422,6 +443,75 @@ const listOptions = [
   { label: "I, II, III", value: "upper-roman" },
   { label: "i, ii, iii", value: "lower-roman" },
 ];
+
+function findFontLabel(fontFamilyProp) {
+  if (!fontFamilyProp) return "Inter";
+  const clean = fontFamilyProp.toLowerCase().replace(/['"]/g, "").trim();
+  const firstFont = clean.split(",")[0].trim();
+  const found = fontFamilyOptions.find((opt) => {
+    const label = opt.label.toLowerCase();
+    return firstFont === label || firstFont.includes(label) || label.includes(firstFont);
+  });
+  return found ? found.label : "Inter";
+}
+
+const STANDARD_SIZES = [6,7,8,9,10,11,12,14,18,20,22,24,26,28,30,32,36,42,48,54,60,72,96];
+
+function findSizeLabel(fontSizeProp) {
+  if (!fontSizeProp) return "11";
+  const raw = String(fontSizeProp).trim();
+  let pt;
+  if (raw.includes("pt")) {
+    pt = parseFloat(raw);
+  } else if (raw.includes("px")) {
+    pt = parseFloat(raw) * 0.75;
+  } else {
+    pt = parseFloat(raw);
+  }
+  if (!pt || isNaN(pt)) return "11";
+  let closest = STANDARD_SIZES[0];
+  let minDiff = Math.abs(pt - closest);
+  for (const s of STANDARD_SIZES) {
+    const diff = Math.abs(pt - s);
+    if (diff < minDiff) { minDiff = diff; closest = s; }
+  }
+  return String(closest);
+}
+
+watch(
+  () => props.activeFontFamily,
+  (newVal) => {
+    selectedFontFamilyLabel.value = findFontLabel(newVal);
+  },
+  { immediate: true }
+);
+
+watch(
+  () => props.activeFontSize,
+  (newVal) => {
+    selectedFontSizeLabel.value = findSizeLabel(newVal);
+  },
+  { immediate: true }
+);
+
+watch(
+  () => props.activeStyle,
+  (newVal) => {
+    const normalized = String(newVal || "P").toUpperCase();
+    const map = {
+      P: "Normal text",
+      NORMAL_TEXT: "Normal text",
+      H1: "Heading 1",
+      H2: "Heading 2",
+      H3: "Heading 3",
+      H4: "Heading 4",
+      H5: "Heading 5",
+      H6: "Heading 6",
+    };
+    selectedStyleLabel.value = map[normalized] || "Normal text";
+  },
+  { immediate: true }
+);
 
 function emitAction(type, value = null) {
   emit("action", { type, value });
@@ -644,6 +734,13 @@ watch(activePicker, (value) => {
   color: var(--text-primary);
   background: rgba(255, 255, 255, 0.05);
   border-color: rgba(176, 201, 255, 0.08);
+}
+
+.gd-tool-btn.is-active,
+.gd-tool-btn.active {
+  background: rgba(64, 108, 227, 0.24) !important;
+  color: rgba(244, 248, 255, 0.96) !important;
+  border-color: rgba(64, 108, 227, 0.4) !important;
 }
 
 .gd-tool-btn:disabled,

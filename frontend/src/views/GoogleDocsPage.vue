@@ -171,6 +171,7 @@
                   class="gd-menubar-item"
                   type="button"
                   @click.stop="toggleHeaderMenu(item)"
+                  @mouseenter="handleHeaderMenuMouseEnter(item)"
                 >
                   {{ item }}
                 </button>
@@ -192,6 +193,13 @@
             :disabled="!currentDocument || documentLoading || !currentPermissions.canEdit"
             :zoom="zoom"
             :header-collapsed="topShellCollapsed"
+            :active-font-family="activeFontFamily"
+            :active-font-size="activeFontSize"
+            :active-bold="activeBold"
+            :active-italic="activeItalic"
+            :active-underline="activeUnderline"
+            :active-align="activeAlign"
+            :active-style="activeStyle"
             @action="handleToolbarAction"
           />
         </section>
@@ -223,7 +231,7 @@
                 :disabled="!currentPermissions.canEdit"
                 @update:model-value="updateEditorHtml"
                 @outline-change="updateOutline"
-                @selection-change="updateSelectionContext"
+                @selection-change="handleSelectionChange"
                 @metrics-change="pageMetrics = $event"
               />
 
@@ -566,6 +574,13 @@ const outlineCollapsed = ref(false);
 const aiPanelOpen = ref(true);
 const activeAiTab = ref("chat");
 const activeHeaderMenu = ref("");
+const activeFontFamily = ref("Inter");
+const activeFontSize = ref("11");
+const activeBold = ref(false);
+const activeItalic = ref(false);
+const activeUnderline = ref(false);
+const activeAlign = ref("left");
+const activeStyle = ref("P");
 const exportMenuOpen = ref(false);
 const moreMenuOpen = ref(false);
 const topShellCollapsed = ref(false);
@@ -916,6 +931,23 @@ function toggleHeaderMenu(menu) {
   closeTablePicker();
   editorRef.value?.captureSelection?.();
   activeHeaderMenu.value = activeHeaderMenu.value === menu ? "" : menu;
+}
+
+function handleHeaderMenuMouseEnter(menu) {
+  if (activeHeaderMenu.value) {
+    activeHeaderMenu.value = menu;
+  }
+}
+
+function handleSelectionChange(payload = {}) {
+  updateSelectionContext(payload);
+  activeFontFamily.value = payload.fontFamily || "Inter";
+  activeFontSize.value = payload.fontSize || "11";
+  activeBold.value = !!payload.bold;
+  activeItalic.value = !!payload.italic;
+  activeUnderline.value = !!payload.underline;
+  activeAlign.value = payload.align || "left";
+  activeStyle.value = payload.style || "P";
 }
 
 async function handleExport(format) {
@@ -1398,10 +1430,17 @@ async function handleAiSend(question) {
   });
 
   try {
+    // Pass recent conversation history for context continuity
+    const recentHistory = aiMessages.value
+      .slice(-10)
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .map((m) => ({ role: m.role, text: m.text }));
+
     const result = await executeScopedAssistantCommand({
       question: trimmedQuestion,
       scope: "google_docs",
       runtime: buildDocsAssistantRuntime(),
+      conversationHistory: recentHistory,
     });
 
     if (requestId !== aiRequestCounter.value) {

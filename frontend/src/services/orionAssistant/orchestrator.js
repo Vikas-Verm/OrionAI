@@ -16,6 +16,7 @@ export async function executeScopedAssistantCommand({
   question,
   scope,
   runtime,
+  conversationHistory = [],
 }) {
   const intent = classifyAssistantIntent(question, { scope });
   const handler = scopeHandlers.get(intent.scope || scope);
@@ -33,6 +34,7 @@ export async function executeScopedAssistantCommand({
     question,
     intent,
     runtime,
+    conversationHistory,
   });
 
   return {

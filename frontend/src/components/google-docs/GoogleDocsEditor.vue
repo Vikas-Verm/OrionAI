@@ -1,6 +1,17 @@
 <template>
   <div ref="shellRef" class="gd-editor-shell" @scroll.passive="handleShellScroll">
     <div ref="pageRef" class="gd-editor-page" :style="{ zoom: zoom / 100 }">
+      <!-- Page breaks -->
+      <div
+        v-for="p in localPageCount - 1"
+        :key="p"
+        class="gd-page-break"
+        :style="{ top: `${p * GOOGLE_DOCS_PAGE_HEIGHT}px` }"
+        contenteditable="false"
+      >
+        <span class="gd-page-break-text">Page {{ p + 1 }}</span>
+      </div>
+
       <div
         ref="editorRef"
         class="gd-editor"
@@ -116,6 +127,7 @@ const shellRef = ref(null);
 const floatingMenuRef = ref(null);
 const selectedMedia = ref(null);
 const selectedTable = ref(null);
+const localPageCount = ref(1);
 const floatingMenu = ref({
   visible: false,
   type: "",
@@ -159,6 +171,26 @@ function sanitizeHtml(html = "") {
       }
     });
   });
+
+  doc.body.querySelectorAll("font").forEach((font) => {
+    const span = doc.createElement("span");
+    if (font.getAttribute("size")) {
+      const sizeMap = { "1": "8pt", "2": "10pt", "3": "12pt", "4": "14pt", "5": "18pt", "6": "24pt", "7": "36pt" };
+      span.style.fontSize = sizeMap[font.getAttribute("size")] || "11pt";
+    }
+    if (font.getAttribute("face")) {
+      span.style.fontFamily = font.getAttribute("face");
+    }
+    if (font.getAttribute("color")) {
+      span.style.color = font.getAttribute("color");
+    }
+    if (font.style.cssText) {
+      span.style.cssText += font.style.cssText;
+    }
+    span.innerHTML = font.innerHTML;
+    font.replaceWith(span);
+  });
+
   return doc.body.innerHTML || "<p><br /></p>";
 }
 
@@ -235,9 +267,9 @@ function applyHistorySnapshot(html) {
   editor.innerHTML = nextHtml;
   emit("update:modelValue", nextHtml);
   emitOutline();
-  emitMetrics();
-  emitSelectionContext();
   nextTick(() => {
+    emitMetrics();
+    emitSelectionContext();
     syncingFromProps = false;
     suppressHistoryCapture = false;
   });
@@ -300,8 +332,9 @@ function emitMetrics() {
   const scale = props.zoom / 100 || 1;
   const pageCount = Math.max(
     1,
-    Math.ceil((editor.scrollHeight + 80) / GOOGLE_DOCS_BODY_HEIGHT)
+    Math.ceil(editor.scrollHeight / GOOGLE_DOCS_PAGE_HEIGHT)
   );
+  localPageCount.value = pageCount;
   const currentPage = shell
     ? Math.min(
         pageCount,
@@ -366,9 +399,63 @@ function emitSelectionContext() {
     ? extractSectionText(heading)
     : editor.textContent?.replace(/\s+/g, " ").trim() || "";
 
+  const parentElement = anchorNode.nodeType === Node.ELEMENT_NODE ? anchorNode : anchorNode.parentElement;
+  let activeFontFamily = "Inter";
+  let activeFontSize = "11";
+  let activeBold = false;
+  let activeItalic = false;
+  let activeUnderline = false;
+  let activeAlign = "left";
+  let activeStyle = "P";
+
+  if (parentElement && editor.contains(parentElement)) {
+    const computedStyle = window.getComputedStyle(parentElement);
+    activeFontFamily = computedStyle.fontFamily;
+
+    const inlineSize = parentElement.style?.fontSize || "";
+    if (inlineSize && inlineSize.includes("pt")) {
+      activeFontSize = inlineSize;
+    } else {
+      let el = parentElement;
+      let found = false;
+      while (el && el !== editor) {
+        if (el.style?.fontSize?.includes("pt")) {
+          activeFontSize = el.style.fontSize;
+          found = true;
+          break;
+        }
+        el = el.parentElement;
+      }
+      if (!found) {
+        activeFontSize = computedStyle.fontSize;
+      }
+    }
+    activeBold = computedStyle.fontWeight === "bold" || Number(computedStyle.fontWeight) >= 700;
+    activeItalic = computedStyle.fontStyle === "italic";
+    activeUnderline = computedStyle.textDecorationLine?.includes("underline") ||
+                      computedStyle.textDecoration?.includes("underline") ||
+                      parentElement.closest("u") !== null;
+    activeAlign = computedStyle.textAlign || "left";
+
+    let block = parentElement;
+    while (block && block !== editor && !/^(P|H[1-6]|DIV|PRE|BLOCKQUOTE)$/.test(block.tagName)) {
+      block = block.parentElement;
+    }
+    if (block && block !== editor) {
+      activeStyle = block.tagName;
+    }
+  }
+
   emit("selection-change", {
     selectionText,
     currentSectionText,
+    fontFamily: activeFontFamily,
+    fontSize: activeFontSize,
+    bold: activeBold,
+    italic: activeItalic,
+    underline: activeUnderline,
+    align: activeAlign,
+    style: activeStyle,
   });
 }
 
@@ -556,8 +643,8 @@ function syncFromProps(html) {
   editor.innerHTML = nextHtml;
   savedSelectionRange = null;
   emitOutline();
-  emitMetrics();
   nextTick(() => {
+    emitMetrics();
     syncingFromProps = false;
   });
 }
@@ -651,26 +738,69 @@ function insertBlockHtml(html, { appendToEnd = false } = {}) {
   emitSelectionContext();
 }
 
-function applyFontSize(size) {
-  const px = Number(size || 14);
-  document.execCommand("fontSize", false, "7");
-  Array.from(editorRef.value?.querySelectorAll('font[size="7"]') || []).forEach((node) => {
+function wrapSelectionWithStyle(styleProp, styleValue) {
+  const selection = window.getSelection();
+  if (!selection || !selection.rangeCount) return;
+
+  if (!selection.isCollapsed) {
+    const range = selection.getRangeAt(0);
+    const fragment = range.extractContents();
+
+    function applyToTextNodes(node) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        if (!node.textContent) return node;
+        const span = document.createElement("span");
+        span.style[styleProp] = styleValue;
+        span.appendChild(node.cloneNode(true));
+        return span;
+      }
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        const el = node;
+        el.style[styleProp] = styleValue;
+        return el;
+      }
+      return node;
+    }
+
+    const wrapper = document.createDocumentFragment();
+    Array.from(fragment.childNodes).forEach((child) => {
+      wrapper.appendChild(applyToTextNodes(child));
+    });
+
+    range.insertNode(wrapper);
+
+    selection.removeAllRanges();
+    selection.addRange(range);
+  } else {
+    const range = selection.getRangeAt(0);
     const span = document.createElement("span");
-    span.style.fontSize = `${px}px`;
-    span.innerHTML = node.innerHTML;
-    node.replaceWith(span);
-  });
+    span.style[styleProp] = styleValue;
+    span.innerHTML = "​";
+
+    range.insertNode(span);
+
+    const nextRange = document.createRange();
+    nextRange.setStart(span.firstChild, 1);
+    nextRange.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(nextRange);
+    savedSelectionRange = nextRange.cloneRange();
+  }
+}
+
+function applyFontSize(size) {
+  const pt = Number(size || 11);
+  wrapSelectionWithStyle("fontSize", `${pt}pt`);
 }
 
 function applyFontFamily(fontFamily = "Inter, sans-serif") {
-  const temporaryFace = "__orion_font_family__";
-  document.execCommand("fontName", false, temporaryFace);
-  Array.from(editorRef.value?.querySelectorAll(`font[face="${temporaryFace}"]`) || []).forEach((node) => {
-    const span = document.createElement("span");
-    span.style.fontFamily = fontFamily;
-    span.innerHTML = node.innerHTML;
-    node.replaceWith(span);
-  });
+  // Extract primary font name only — Google Docs HTML converter
+  // can't parse CSS fallback stacks like "'Roboto', sans-serif".
+  const primary = fontFamily
+    .split(",")[0]
+    .trim()
+    .replace(/^['"]|['"]$/g, "");
+  wrapSelectionWithStyle("fontFamily", primary);
 }
 
 function applyNamedStyle(style = "P") {
@@ -884,7 +1014,11 @@ function execCommand(command, value = null) {
   const editor = editorRef.value;
   if (!editor || props.disabled || typeof document.execCommand !== "function") return;
 
-  focusEditor();
+  if (savedSelectionRange && isRangeInsideEditor(savedSelectionRange)) {
+    setSelectionRange(savedSelectionRange);
+  } else {
+    focusEditor();
+  }
   document.execCommand("styleWithCSS", false, true);
 
   if (command === "undo") {
@@ -897,9 +1031,13 @@ function execCommand(command, value = null) {
     return;
   }
 
+  // Capture history snapshot BEFORE formatting
+  captureHistorySnapshot();
+
   if (command === "fontSize") {
     applyFontSize(value);
     handleInput();
+    captureHistorySnapshot();
     emitSelectionContext();
     return;
   }
@@ -907,26 +1045,28 @@ function execCommand(command, value = null) {
   if (command === "fontName") {
     applyFontFamily(value);
     handleInput();
+    captureHistorySnapshot();
     emitSelectionContext();
     return;
   }
 
   if (command === "formatBlock") {
     applyFormatBlock(value);
-    handleInput();
+    captureHistorySnapshot();
     emitSelectionContext();
     return;
   }
 
   if (command === "applyNamedStyle") {
     applyNamedStyle(value);
-    handleInput();
+    captureHistorySnapshot();
     emitSelectionContext();
     return;
   }
 
   if (command === "applyListStyle") {
     applyListStyle(value);
+    captureHistorySnapshot();
     return;
   }
 
@@ -934,16 +1074,19 @@ function execCommand(command, value = null) {
     const rows = Number(value?.rows || 3);
     const columns = Number(value?.columns || 3);
     insertBlockHtml(buildBlankTable(rows, columns));
+    captureHistorySnapshot();
     return;
   }
 
   if (command === "insertImageBlock") {
     insertImageBlock(value || {});
+    captureHistorySnapshot();
     return;
   }
 
   if (command === "insertChartBlock") {
     insertChartBlock(value || {});
+    captureHistorySnapshot();
     return;
   }
 
@@ -953,7 +1096,7 @@ function execCommand(command, value = null) {
     document.execCommand(command, false);
   }
 
-  handleInput();
+  captureHistorySnapshot();
   emitSelectionContext();
 }
 
@@ -1305,6 +1448,26 @@ function handleKeydown(event) {
   if ((event.key === "Backspace" || event.key === "Delete") && selectedMedia.value?.element) {
     event.preventDefault();
     removeSelectedMedia();
+    return;
+  }
+
+  const isMac = typeof navigator !== "undefined" && /Mac|iPod|iPhone|iPad/.test(navigator.userAgent);
+  const isMeta = isMac ? event.metaKey : event.ctrlKey;
+
+  if (isMeta && event.key.toLowerCase() === "z") {
+    event.preventDefault();
+    if (event.shiftKey) {
+      redoHistory();
+    } else {
+      undoHistory();
+    }
+    return;
+  }
+
+  if (isMeta && event.key.toLowerCase() === "y") {
+    event.preventDefault();
+    redoHistory();
+    return;
   }
 }
 
@@ -1578,7 +1741,9 @@ onMounted(() => {
   window.addEventListener("resize", updateSelectedTableOverlay);
   syncFromProps(props.modelValue);
   emitOutline();
-  emitMetrics();
+  nextTick(() => {
+    emitMetrics();
+  });
 });
 
 onBeforeUnmount(() => {
@@ -1628,6 +1793,33 @@ defineExpose({
     0 2px 8px rgba(2, 8, 24, 0.06);
   transform-origin: top center;
   position: relative;
+}
+
+.gd-page-break {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  border-top: 2px dashed #dadce0;
+  z-index: 5;
+  pointer-events: none;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.gd-page-break-text {
+  font-size: 10px;
+  color: #70757a;
+  background: #ffffff;
+  padding: 2px 8px;
+  margin-top: -8px;
+  margin-right: 24px;
+  font-family: Arial, sans-serif;
+  border: 1px solid #dadce0;
+  border-radius: 4px;
+  font-weight: 500;
 }
 
 .gd-editor {

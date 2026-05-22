@@ -61,6 +61,15 @@ function applyInlineTextStyle(text, style = {}) {
   if (foreground) inlineStyles.push(`color: ${foreground}`);
   if (background) inlineStyles.push(`background-color: ${background}`);
 
+  if (style.fontSize?.magnitude) {
+    const unit = String(style.fontSize.unit || "PT").toLowerCase();
+    inlineStyles.push(`font-size: ${style.fontSize.magnitude}${unit}`);
+  }
+
+  if (style.weightedFontFamily?.fontFamily) {
+    inlineStyles.push(`font-family: ${escapeHtml(style.weightedFontFamily.fontFamily)}`);
+  }
+
   if (inlineStyles.length) {
     html = `<span style="${inlineStyles.join("; ")}">${html}</span>`;
   }

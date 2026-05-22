@@ -28,6 +28,7 @@ const PRINT_RE = /\bprint\b/i;
 const INSERT_TABLE_RE = /\b(insert|add)\s+(?:a\s+)?table\b/i;
 const ADD_HEADING_RE = /\b(add|insert)\s+(?:a\s+)?(?:heading|subheading|title)\b/i;
 const ADD_CONCLUSION_RE = /\b(add|write|insert)\s+(?:a\s+)?conclusion(?:\s+section)?\b/i;
+const ADD_CONTENT_RE = /\b(add|append|insert|include|put|place|write)\b.+\b(in|to|under|into|after|before|at|for|inside)\b/i;
 
 export function detectActiveAssistantScope(explicitScope = "") {
   if (explicitScope) return explicitScope;
@@ -149,6 +150,14 @@ function detectDocumentAction(question = "") {
     return {
       type: ASSISTANT_INTENT_TYPES.DOCUMENT_ACTION,
       action: "add_conclusion_section",
+    };
+  }
+
+  // Generic "add X to/in Y" — treat as content to write into the document
+  if (ADD_CONTENT_RE.test(normalized) && !SHARE_RE.test(normalized)) {
+    return {
+      type: ASSISTANT_INTENT_TYPES.DOCUMENT_ACTION,
+      action: "add_content",
     };
   }
 
