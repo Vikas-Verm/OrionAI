@@ -679,11 +679,10 @@ watch(activePicker, (value) => {
   gap: 7px;
   min-height: 42px;
   padding: 6px 8px;
-  border-radius: 14px;
+  border-radius: var(--radius-md);
   background: rgba(18, 24, 40, 0.92);
-  border: 1px solid rgba(176, 201, 255, 0.07);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
-  overflow-x: auto;
+  border: 1px solid var(--border-subtle);
+    overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
 }
@@ -706,7 +705,7 @@ watch(activePicker, (value) => {
 .gd-toolbar-divider {
   width: 1px;
   height: 20px;
-  background: rgba(176, 201, 255, 0.08);
+  background: var(--border-subtle);
   flex-shrink: 0;
 }
 
@@ -732,8 +731,8 @@ watch(activePicker, (value) => {
 .gd-tool-select:hover,
 .gd-color-chip:hover {
   color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.05);
-  border-color: rgba(176, 201, 255, 0.08);
+  background: var(--bg-elevated);
+  border-color: var(--border-subtle);
 }
 
 .gd-tool-btn.is-active,
@@ -802,8 +801,8 @@ watch(activePicker, (value) => {
 .gd-tool-badge,
 .gd-tool-mode {
   color: rgba(232, 239, 255, 0.76);
-  background: rgba(255, 255, 255, 0.02);
-  border-color: rgba(176, 201, 255, 0.08);
+  background: var(--bg-surface);
+  border-color: var(--border-subtle);
 }
 
 .gd-color-chip {
@@ -826,7 +825,7 @@ watch(activePicker, (value) => {
   bottom: -2px;
   height: 2px;
   background: currentColor;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
 }
 
 .gd-color-chip-label--highlight::after {
@@ -861,8 +860,8 @@ watch(activePicker, (value) => {
   flex-direction: column;
   gap: 4px;
   padding: 8px;
-  border-radius: 14px;
-  border: 1px solid rgba(176, 201, 255, 0.12);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
   background: rgba(10, 16, 28, 0.98);
   box-shadow: 0 14px 36px rgba(2, 8, 24, 0.34);
   z-index: 40;
@@ -881,7 +880,7 @@ watch(activePicker, (value) => {
 }
 
 .gd-toolbar-menu button:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--bg-elevated);
 }
 
 .gd-toolbar-menu--picker {

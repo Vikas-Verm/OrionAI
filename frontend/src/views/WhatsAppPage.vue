@@ -2452,9 +2452,7 @@ onUnmounted(() => {
   grid-template-columns: 360px minmax(0, 1fr);
   height: 100%;
   background:
-    radial-gradient(circle at 8% 10%, rgba(69, 211, 152, 0.14), transparent 22%),
-    radial-gradient(circle at 88% 12%, rgba(82, 212, 255, 0.12), transparent 24%),
-    linear-gradient(180deg, rgba(10, 16, 28, 0.96), rgba(6, 11, 21, 1));
+    var(--bg-base);
   overflow: hidden;
 }
 
@@ -2475,8 +2473,7 @@ onUnmounted(() => {
   padding: 16px 14px 14px;
   border-right: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(7, 12, 22, 0.78);
-  backdrop-filter: blur(22px);
-  box-sizing: border-box;
+    box-sizing: border-box;
 }
 
 .wa-sidebar.collapsed {
@@ -2521,8 +2518,8 @@ onUnmounted(() => {
 .wa-info-avatar {
   width: 44px;
   height: 44px;
-  border-radius: 16px;
-  background: linear-gradient(145deg, rgba(37, 211, 102, 0.24), rgba(9, 192, 156, 0.22));
+  border-radius: var(--radius-md);
+  background: rgba(37, 211, 102, 0.24);
   border: 1px solid rgba(95, 255, 170, 0.22);
   color: #dfffea;
   display: flex;
@@ -2629,11 +2626,10 @@ onUnmounted(() => {
 .wa-quick-panel,
 .wa-action-panel-wrap :deep(.comm-insights),
 .wa-action-panel-wrap :deep(.comm-panel) {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 20px;
-  backdrop-filter: blur(16px);
-}
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  }
 
 .wa-profile-card {
   display: flex;
@@ -2654,7 +2650,7 @@ onUnmounted(() => {
 .wa-profile-avatar {
   width: 56px;
   height: 56px;
-  border-radius: 20px;
+  border-radius: var(--radius-md);
 }
 
 .wa-action-panel-wrap {
@@ -2680,8 +2676,8 @@ onUnmounted(() => {
 .wa-compose-input {
   width: 100%;
   box-sizing: border-box;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
   color: var(--text-primary);
   outline: none;
   transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
@@ -2689,7 +2685,7 @@ onUnmounted(() => {
 
 .wa-search,
 .wa-chat-search-input {
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   padding: 11px 14px 11px 38px;
   font-size: 12px;
 }
@@ -2733,7 +2729,7 @@ onUnmounted(() => {
   width: 100%;
   padding: 10px 12px;
   border: 0;
-  border-radius: 18px;
+  border-radius: var(--radius-md);
   color: inherit;
   text-align: left;
   background: transparent;
@@ -2750,7 +2746,7 @@ onUnmounted(() => {
 
 .wa-chat-row:hover,
 .wa-chat-row.active {
-  background: linear-gradient(90deg, rgba(69, 211, 152, 0.12), rgba(82, 212, 255, 0.08));
+  background: rgba(69, 211, 152, 0.12);
   box-shadow: inset 0 0 0 1px rgba(95, 255, 170, 0.12);
 }
 
@@ -2804,7 +2800,7 @@ onUnmounted(() => {
   min-width: 18px;
   height: 18px;
   padding: 0 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: #29cf77;
   color: #05230f;
   font-size: 11px;
@@ -2818,7 +2814,7 @@ onUnmounted(() => {
   font-size: 10px;
   color: #b4f0cb;
   border: 1px solid rgba(95, 255, 170, 0.16);
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   padding: 2px 6px;
 }
 
@@ -2875,8 +2871,8 @@ onUnmounted(() => {
 .wa-empty-orb {
   width: 76px;
   height: 76px;
-  border-radius: 26px;
-  background: linear-gradient(145deg, rgba(69, 211, 152, 0.2), rgba(82, 212, 255, 0.12));
+  border-radius: var(--radius-lg);
+  background: rgba(69, 211, 152, 0.2);
   border: 1px solid rgba(95, 255, 170, 0.2);
   display: flex;
   align-items: center;
@@ -2912,7 +2908,7 @@ onUnmounted(() => {
 .wa-chat-skeleton-avatar {
   width: 42px;
   height: 42px;
-  border-radius: 16px;
+  border-radius: var(--radius-md);
 }
 
 .wa-chat-skeleton-lines {
@@ -2924,13 +2920,13 @@ onUnmounted(() => {
 .wa-chat-skeleton-lines span:first-child {
   width: 68%;
   height: 12px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
 }
 
 .wa-chat-skeleton-lines span:last-child {
   width: 92%;
   height: 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
 }
 
 .wa-main {
@@ -2941,9 +2937,7 @@ onUnmounted(() => {
   flex-direction: column;
   overflow: hidden;
   background:
-    linear-gradient(rgba(5, 11, 19, 0.86), rgba(5, 11, 19, 0.92)),
-    radial-gradient(circle at 50% 20%, rgba(69, 211, 152, 0.08), transparent 28%),
-    radial-gradient(circle at 70% 80%, rgba(82, 212, 255, 0.08), transparent 24%);
+    var(--bg-base);
 }
 
 .wa-state-panel {
@@ -2983,7 +2977,7 @@ onUnmounted(() => {
 .wa-state-circle--two {
   width: 220px;
   height: 220px;
-  background: rgba(82, 212, 255, 0.09);
+  background: rgba(79, 140, 255, 0.09);
   right: 8px;
   bottom: 10px;
 }
@@ -2991,11 +2985,10 @@ onUnmounted(() => {
 .wa-state-card {
   position: absolute;
   inset: 48px 28px 28px 48px;
-  border-radius: 28px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-default);
   background: rgba(13, 20, 33, 0.84);
-  backdrop-filter: blur(20px);
-  padding: 22px;
+    padding: 22px;
   display: grid;
   gap: 18px;
 }
@@ -3025,19 +3018,19 @@ onUnmounted(() => {
 .wa-state-lines span:nth-child(1) {
   width: 84%;
   height: 16px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
 }
 
 .wa-state-lines span:nth-child(2) {
   width: 68%;
   height: 16px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
 }
 
 .wa-state-lines span:nth-child(3) {
   width: 92%;
   height: 88px;
-  border-radius: 20px;
+  border-radius: var(--radius-md);
 }
 
 .wa-state-qr img {
@@ -3045,7 +3038,7 @@ onUnmounted(() => {
   height: 210px;
   padding: 14px;
   background: white;
-  border-radius: 24px;
+  border-radius: var(--radius-lg);
 }
 
 .wa-chat-head {
@@ -3111,7 +3104,7 @@ onUnmounted(() => {
 .wa-msg-skeleton span {
   width: min(320px, 62%);
   height: 74px;
-  border-radius: 24px;
+  border-radius: var(--radius-lg);
 }
 
 .wa-date-divider {
@@ -3123,8 +3116,8 @@ onUnmounted(() => {
 
 .wa-date-divider span {
   padding: 7px 12px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
   color: var(--text-muted);
   font-size: 11px;
   letter-spacing: 0.02em;
@@ -3168,10 +3161,10 @@ onUnmounted(() => {
 
 .wa-bubble {
   padding: 10px 12px 8px;
-  border-radius: 20px;
+  border-radius: var(--radius-md);
   border-bottom-left-radius: 10px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
   color: var(--text-primary);
   display: flex;
   flex-direction: column;
@@ -3189,7 +3182,7 @@ onUnmounted(() => {
 }
 
 .wa-message-row.from-me .wa-bubble {
-  background: linear-gradient(145deg, rgba(69, 211, 152, 0.2), rgba(18, 181, 143, 0.16));
+  background: rgba(69, 211, 152, 0.2);
   border-color: rgba(95, 255, 170, 0.18);
   border-bottom-right-radius: 10px;
   border-bottom-left-radius: 24px;
@@ -3210,8 +3203,8 @@ onUnmounted(() => {
   display: grid;
   gap: 4px;
   padding: 8px 10px;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
   border-left: 3px solid rgba(95, 255, 170, 0.42);
   margin-bottom: 8px;
 }
@@ -3240,7 +3233,7 @@ onUnmounted(() => {
   max-width: 280px;
   max-height: 320px;
   display: block;
-  border-radius: 14px;
+  border-radius: var(--radius-md);
   cursor: zoom-in;
   object-fit: cover;
 }
@@ -3248,9 +3241,9 @@ onUnmounted(() => {
 .wa-media-card--video video {
   width: min(260px, 100%);
   max-height: 260px;
-  border-radius: 18px;
+  border-radius: var(--radius-md);
   display: block;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--bg-elevated);
 }
 
 .wa-media-card--audio audio {
@@ -3269,8 +3262,8 @@ onUnmounted(() => {
 .wa-audio-wave {
   width: 42px;
   height: 12px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, rgba(95, 255, 170, 0.2), rgba(95, 255, 170, 0.9), rgba(95, 255, 170, 0.2));
+  border-radius: var(--radius-sm);
+  background: rgba(95, 255, 170, 0.4);
 }
 
 .wa-file-card {
@@ -3279,8 +3272,8 @@ onUnmounted(() => {
   justify-content: flex-start;
   gap: 10px;
   padding: 8px 10px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.05);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
   max-width: 320px;
 }
 
@@ -3333,9 +3326,9 @@ onUnmounted(() => {
 
 .wa-reaction-pill {
   padding: 4px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   font-size: 11px;
-  background: rgba(255, 255, 255, 0.07);
+  background: var(--bg-elevated);
   color: var(--text-secondary);
 }
 
@@ -3398,9 +3391,9 @@ onUnmounted(() => {
 
 .wa-info-item {
   padding: 12px;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -3441,8 +3434,8 @@ onUnmounted(() => {
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.05);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
 }
 
 .wa-compose-banner {
@@ -3524,7 +3517,7 @@ onUnmounted(() => {
   height: 40px;
   border-radius: 12px;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--bg-elevated);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3542,8 +3535,7 @@ onUnmounted(() => {
 .wa-composer-shell {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(7, 12, 22, 0.78);
-  backdrop-filter: blur(20px);
-  padding: 12px 18px 18px;
+    padding: 12px 18px 18px;
   flex-shrink: 0;
 }
 
@@ -3563,8 +3555,8 @@ onUnmounted(() => {
 .wa-quick-panel {
   margin-bottom: 12px;
   padding: 12px;
-  border-radius: 18px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
   background: rgba(7, 12, 22, 0.92);
   max-height: 360px;
   overflow: hidden;
@@ -3618,8 +3610,8 @@ onUnmounted(() => {
   min-width: 0;
   padding: 8px 12px;
   border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
   color: var(--text-primary);
   font-size: 13px;
 }
@@ -3642,7 +3634,7 @@ onUnmounted(() => {
   border-radius: 12px;
   overflow: hidden;
   aspect-ratio: 1 / 1;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--bg-elevated);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3679,8 +3671,8 @@ onUnmounted(() => {
 .wa-filter-chip,
 .wa-primary-btn,
 .wa-gif-card {
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
   color: var(--text-primary);
   cursor: pointer;
   transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
@@ -3697,7 +3689,7 @@ onUnmounted(() => {
 }
 
 .wa-icon-btn--ghost {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--bg-surface);
 }
 
 .wa-icon-btn--danger {
@@ -3750,14 +3742,14 @@ onUnmounted(() => {
 .wa-chip-btn,
 .wa-load-btn {
   padding: 9px 12px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   font-size: 12px;
   font-weight: 600;
 }
 
 .wa-filter-chip {
   padding: 8px 12px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   white-space: nowrap;
   font-size: 12px;
 }
@@ -3770,7 +3762,7 @@ onUnmounted(() => {
 
 .wa-mini-btn {
   padding: 5px 9px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   font-size: 11px;
 }
 
@@ -3778,7 +3770,7 @@ onUnmounted(() => {
 .wa-compose-send {
   width: 42px;
   height: 42px;
-  border-radius: 14px;
+  border-radius: var(--radius-md);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3796,20 +3788,20 @@ onUnmounted(() => {
   resize: none;
   box-sizing: border-box;
   padding: 12px 14px;
-  border-radius: 18px;
+  border-radius: var(--radius-md);
   font: inherit;
   line-height: 1.45;
 }
 
 .wa-compose-send {
-  background: linear-gradient(145deg, rgba(69, 211, 152, 0.9), rgba(22, 191, 155, 0.92));
+  background: rgba(69, 211, 152, 0.9);
   color: #04210f;
   border-color: rgba(95, 255, 170, 0.3);
 }
 
 .wa-primary-btn {
   padding: 11px 16px;
-  border-radius: 14px;
+  border-radius: var(--radius-md);
 }
 
 .wa-hidden-input {
@@ -3845,15 +3837,15 @@ onUnmounted(() => {
   max-width: min(84vw, 920px);
   max-height: 86vh;
   padding: 14px;
-  border-radius: 28px;
+  border-radius: var(--radius-lg);
   background: rgba(11, 18, 29, 0.96);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--border-default);
 }
 
 .wa-lightbox-card img {
   max-width: 100%;
   max-height: calc(86vh - 90px);
-  border-radius: 20px;
+  border-radius: var(--radius-md);
   display: block;
 }
 
@@ -3886,8 +3878,7 @@ onUnmounted(() => {
   position: fixed;
   inset: 0;
   background: rgba(2, 6, 16, 0.62);
-  backdrop-filter: blur(8px);
-  display: flex;
+    display: flex;
   align-items: center;
   justify-content: center;
   z-index: 1200;
@@ -3896,9 +3887,9 @@ onUnmounted(() => {
 
 .wa-confirm-card {
   width: min(420px, 100%);
-  background: linear-gradient(180deg, rgba(20, 28, 44, 0.98), rgba(11, 16, 28, 0.98));
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 20px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
   padding: 20px 22px 18px;
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.4);
   display: flex;
@@ -3932,7 +3923,7 @@ onUnmounted(() => {
 
 .wa-confirm-close:hover {
   color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--bg-elevated);
 }
 
 .wa-confirm-body {
@@ -3952,7 +3943,7 @@ onUnmounted(() => {
 .wa-confirm-btn {
   width: 100%;
   padding: 10px 14px;
-  border-radius: 14px;
+  border-radius: var(--radius-md);
   border: 1px solid transparent;
   font-size: 13px;
   font-weight: 600;
@@ -3966,8 +3957,8 @@ onUnmounted(() => {
 }
 
 .wa-confirm-btn--default {
-  background: rgba(255, 255, 255, 0.06);
-  border-color: rgba(255, 255, 255, 0.12);
+  background: var(--bg-elevated);
+  border-color: var(--border-default);
   color: var(--text-primary);
 }
 
@@ -3992,12 +3983,12 @@ onUnmounted(() => {
 
 .wa-confirm-btn--ghost {
   background: transparent;
-  border-color: rgba(255, 255, 255, 0.08);
+  border-color: var(--border-subtle);
   color: var(--text-muted);
 }
 
 .wa-confirm-btn--ghost:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--bg-elevated);
   color: var(--text-primary);
 }
 
@@ -4119,7 +4110,7 @@ onUnmounted(() => {
   .wa-empty-orb {
     width: 64px;
     height: 64px;
-    border-radius: 22px;
+    border-radius: var(--radius-lg);
     font-size: 18px;
   }
 

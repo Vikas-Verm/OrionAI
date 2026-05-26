@@ -77,21 +77,18 @@ function formatDate(value) {
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgba(2, 6, 23, 0.62);
-  backdrop-filter: blur(16px);
-  z-index: 200;
+  background: rgba(0, 0, 0, 0.62);
+    z-index: 200;
 }
 .tlm-modal {
   width: min(640px, 100%);
   max-height: 80vh;
   display: flex;
   flex-direction: column;
-  border-radius: 24px;
-  border: 1px solid rgba(176, 201, 255, 0.18);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015)),
-    rgba(9, 14, 30, 0.94);
-  box-shadow: 0 32px 80px rgba(2, 6, 23, 0.48);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.48);
   color: var(--text-primary);
   overflow: hidden;
 }
@@ -107,7 +104,7 @@ function formatDate(value) {
   letter-spacing: 0.18em;
   font-size: 10.5px;
   font-weight: 600;
-  color: rgba(82, 212, 255, 0.78);
+  color: rgba(79, 140, 255, 0.78);
 }
 .tlm-head h3 {
   margin: 6px 0 4px;
@@ -121,7 +118,7 @@ function formatDate(value) {
 }
 .tlm-icon-btn {
   background: transparent;
-  border: 1px solid rgba(176, 201, 255, 0.14);
+  border: 1px solid var(--border-default);
   border-radius: 12px;
   width: 32px;
   height: 32px;
@@ -134,7 +131,7 @@ function formatDate(value) {
   padding: 0 24px 22px;
   overflow-y: auto;
   scrollbar-width: thin;
-  scrollbar-color: rgba(82, 212, 255, 0.32) transparent;
+  scrollbar-color: rgba(79, 140, 255, 0.32) transparent;
 }
 .tlm-empty {
   margin: 24px 0;
@@ -149,9 +146,9 @@ function formatDate(value) {
   justify-content: space-between;
   gap: 14px;
   padding: 12px 14px;
-  border-radius: 14px;
-  border: 1px solid rgba(176, 201, 255, 0.1);
-  background: rgba(8, 14, 30, 0.45);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
 }
 .tlm-row-main h4 { margin: 0; font-size: 14px; font-weight: 600; }
 .tlm-row-meta {
@@ -166,12 +163,12 @@ function formatDate(value) {
 .tlm-status {
   text-transform: capitalize;
   padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(176, 201, 255, 0.08);
+  border-radius: var(--radius-sm);
+  background: var(--border-subtle);
   color: var(--text-secondary);
   font-size: 10.5px;
 }
-.tlm-status[data-status="in_progress"] { background: rgba(82, 212, 255, 0.18); color: var(--accent-hover); }
+.tlm-status[data-status="in_progress"] { background: rgba(79, 140, 255, 0.18); color: var(--accent-hover); }
 .tlm-status[data-status="completed"] { background: rgba(47, 211, 157, 0.18); color: #6fe0bc; }
 .tlm-status[data-status="weak"] { background: rgba(255, 107, 127, 0.16); color: #ff8ea1; }
 .tlm-status[data-status="revision_due"] { background: rgba(242, 184, 79, 0.16); color: #f6c577; }

@@ -1659,8 +1659,7 @@ onBeforeUnmount(() => {
   min-width: 0;
   min-height: 0;
   background:
-    radial-gradient(circle at 16% 8%, rgba(53, 94, 214, 0.09), transparent 24%),
-    linear-gradient(180deg, #0b1120 0%, #09111a 100%);
+    var(--bg-base);
 }
 
 .gd-shell {
@@ -1688,7 +1687,7 @@ onBeforeUnmount(() => {
   height: 28px;
   padding: 0 12px 0 9px;
   border-radius: 10px;
-  border: 1px solid rgba(176, 201, 255, 0.06);
+  border: 1px solid var(--border-subtle);
   background: rgba(24, 31, 49, 0.9);
   color: rgba(214, 223, 238, 0.78);
   font: inherit;
@@ -1696,17 +1695,16 @@ onBeforeUnmount(() => {
   font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
-}
+  }
 
 .gd-app-tab.active {
-  background: linear-gradient(180deg, rgba(52, 99, 222, 0.88), rgba(42, 84, 193, 0.9));
+  background: rgba(52, 99, 222, 0.88);
   color: var(--text-primary);
   border-color: rgba(123, 164, 255, 0.18);
 }
 
 .gd-app-tab--add {
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   width: 28px;
   justify-content: center;
   padding: 0;
@@ -1715,7 +1713,7 @@ onBeforeUnmount(() => {
 .gd-app-tab-icon {
   width: 14px;
   height: 14px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1726,44 +1724,43 @@ onBeforeUnmount(() => {
 }
 
 .gd-app-tab-icon--chat {
-  background: linear-gradient(180deg, #6f87ff, #4d65da);
+  background: #6f87ff;
 }
 
 .gd-app-tab-icon--jira {
-  background: linear-gradient(180deg, #8f78ff, #6b58d8);
+  background: #8f78ff;
 }
 
 .gd-app-tab-icon--gmail {
-  background: linear-gradient(180deg, #ff8477, #d8574c);
+  background: #ff8477;
 }
 
 .gd-app-tab-icon--calendar {
-  background: linear-gradient(180deg, #8fa3bf, #617389);
+  background: #8fa3bf;
 }
 
 .gd-app-tab-icon--drive {
-  background: linear-gradient(180deg, #59d38d, #249d5c);
+  background: #59d38d;
 }
 
 .gd-app-tab-icon--docs {
-  background: linear-gradient(180deg, #74a6ff, #3a75ea);
+  background: #74a6ff;
 }
 
 .gd-app-tab-icon--sheets {
-  background: linear-gradient(180deg, #6fd99b, #2ea96b);
+  background: #6fd99b;
 }
 
 .gd-app-tab-icon--slides {
-  background: linear-gradient(180deg, #ffba55, #e48a2d);
+  background: #ffba55;
 }
 
 .gd-top-shell {
   padding: 10px 10px 8px;
-  border-radius: 18px 18px 14px 14px;
-  background: linear-gradient(180deg, rgba(13, 19, 32, 0.98), rgba(11, 17, 28, 0.96));
-  border: 1px solid rgba(176, 201, 255, 0.06);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
-}
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  }
 
 .gd-top-shell-main {
   overflow: visible;
@@ -1870,7 +1867,7 @@ onBeforeUnmount(() => {
 .gd-save-dot {
   width: 6px;
   height: 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: #58d9a4;
 }
 
@@ -1918,10 +1915,10 @@ onBeforeUnmount(() => {
 .gd-state-btn,
 .gd-zoom-btn,
 .gd-mobile-pill {
-  border: 1px solid rgba(176, 201, 255, 0.08);
-  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
   color: rgba(228, 236, 250, 0.82);
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   min-height: 32px;
   padding: 0 10px;
   font: inherit;
@@ -1949,7 +1946,7 @@ onBeforeUnmount(() => {
 .gd-share-btn,
 .gd-state-btn {
   padding: 0 16px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: #2d6df6;
   color: white;
   border-color: rgba(45, 109, 246, 0.6);
@@ -1969,8 +1966,8 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 4px;
   padding: 8px;
-  border-radius: 16px;
-  border: 1px solid rgba(176, 201, 255, 0.12);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
   background: rgba(10, 16, 28, 0.98);
   box-shadow: var(--shadow-md);
 }
@@ -2000,7 +1997,7 @@ onBeforeUnmount(() => {
 }
 
 .gd-menu button:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--bg-elevated);
   color: white;
 }
 
@@ -2055,9 +2052,9 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 8px;
   padding: 10px 8px;
-  border-radius: 18px;
+  border-radius: var(--radius-md);
   background: rgba(20, 29, 47, 0.92);
-  border: 1px solid rgba(176, 201, 255, 0.08);
+  border: 1px solid var(--border-subtle);
   z-index: 2;
 }
 
@@ -2074,8 +2071,8 @@ onBeforeUnmount(() => {
 }
 
 .gd-side-rail-btn:hover {
-  background: rgba(255, 255, 255, 0.06);
-  border-color: rgba(176, 201, 255, 0.08);
+  background: var(--bg-elevated);
+  border-color: var(--border-subtle);
 }
 
 .gd-editor-loading,
@@ -2097,8 +2094,7 @@ onBeforeUnmount(() => {
   position: absolute;
   inset: 0;
   background: rgba(9, 14, 24, 0.52);
-  backdrop-filter: blur(8px);
-  display: flex;
+    display: flex;
   align-items: center;
   justify-content: center;
   flex-direction: column;
@@ -2110,8 +2106,8 @@ onBeforeUnmount(() => {
 .gd-spinner {
   width: 24px;
   height: 24px;
-  border-radius: 999px;
-  border: 3px solid rgba(176, 201, 255, 0.16);
+  border-radius: var(--radius-sm);
+  border: 3px solid var(--border-default);
   border-top-color: var(--accent);
   animation: gd-spin 0.9s linear infinite;
 }
@@ -2119,9 +2115,9 @@ onBeforeUnmount(() => {
 .gd-state-card {
   max-width: 420px;
   padding: 28px;
-  border-radius: 28px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border-default);
-  background: var(--surface-glass-strong);
+  background: var(--bg-surface);
   box-shadow: var(--shadow-md);
   text-align: center;
 }
@@ -2174,14 +2170,13 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   background: rgba(4, 8, 16, 0.62);
-  backdrop-filter: blur(10px);
-}
+  }
 
 .gd-dialog {
   width: min(560px, calc(100vw - 32px));
-  border-radius: 24px;
-  border: 1px solid rgba(176, 201, 255, 0.1);
-  background: linear-gradient(180deg, rgba(18, 25, 40, 0.98), rgba(12, 18, 31, 0.98));
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
   box-shadow: 0 26px 90px rgba(2, 8, 24, 0.45);
   padding: 20px;
 }
@@ -2255,9 +2250,9 @@ onBeforeUnmount(() => {
 .gd-dialog-textarea {
   width: 100%;
   min-height: 42px;
-  border-radius: 14px;
-  border: 1px solid rgba(176, 201, 255, 0.1);
-  background: rgba(255, 255, 255, 0.04);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
   color: var(--text-primary);
   font: inherit;
   font-size: 13px;
@@ -2282,9 +2277,9 @@ onBeforeUnmount(() => {
 .gd-dialog-btn {
   min-height: 42px;
   padding: 0 16px;
-  border-radius: 14px;
-  border: 1px solid rgba(176, 201, 255, 0.12);
-  background: rgba(255, 255, 255, 0.05);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
   color: var(--text-primary);
   font: inherit;
   font-size: 13px;
@@ -2327,8 +2322,8 @@ onBeforeUnmount(() => {
   width: 28px;
   height: 28px;
   border-radius: 8px;
-  border: 1px solid rgba(176, 201, 255, 0.1);
-  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
   cursor: pointer;
 }
 
@@ -2348,7 +2343,7 @@ onBeforeUnmount(() => {
   min-width: 26px;
   min-height: 26px;
   padding: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
 }
 
 .gd-zoom-slider {
@@ -2501,7 +2496,7 @@ onBeforeUnmount(() => {
 
   .gd-top-shell {
     padding: 8px;
-    border-radius: 16px 16px 12px 12px;
+    border-radius: var(--radius-md) 16px 12px 12px;
   }
 
   .gd-docbar {
@@ -2542,7 +2537,7 @@ onBeforeUnmount(() => {
   .gd-dialog {
     width: 100%;
     padding: 16px;
-    border-radius: 20px;
+    border-radius: var(--radius-md);
   }
 
   .gd-dialog-btn,

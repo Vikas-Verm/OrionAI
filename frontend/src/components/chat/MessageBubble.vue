@@ -696,7 +696,7 @@ async function submitFeedback(rating) {
 .feedback-btn {
   width: 30px;
   height: 30px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border-subtle);
   background: var(--bg-overlay);
   color: var(--text-secondary);

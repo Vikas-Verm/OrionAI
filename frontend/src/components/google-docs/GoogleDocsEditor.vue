@@ -1946,7 +1946,7 @@ defineExpose({
   z-index: 31;
   width: 16px;
   height: 16px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   border: 2px solid white;
   background: #2563eb;
   box-shadow: 0 6px 16px rgba(37, 99, 235, 0.35);
@@ -1971,8 +1971,8 @@ defineExpose({
   flex-direction: column;
   gap: 4px;
   padding: 8px;
-  border-radius: 14px;
-  border: 1px solid rgba(176, 201, 255, 0.12);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
   background: rgba(9, 14, 24, 0.96);
   box-shadow: 0 14px 36px rgba(2, 8, 24, 0.34);
 }
@@ -1990,6 +1990,6 @@ defineExpose({
 }
 
 .gd-editor-menu button:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--bg-elevated);
 }
 </style>

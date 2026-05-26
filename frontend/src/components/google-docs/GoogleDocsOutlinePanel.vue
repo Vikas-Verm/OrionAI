@@ -273,13 +273,12 @@ watch(
   flex-direction: column;
   gap: 12px;
   padding: 16px 12px 14px;
-  border-radius: 18px;
-  background: linear-gradient(180deg, rgba(19, 25, 39, 0.96), rgba(14, 20, 32, 0.96));
-  border: 1px solid rgba(176, 201, 255, 0.06);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
   min-height: 0;
   min-width: 0;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
-}
+  }
 
 .gd-outline--collapsed {
   width: 56px;
@@ -309,8 +308,8 @@ watch(
   width: 28px;
   height: 28px;
   border-radius: 10px;
-  border: 1px solid rgba(176, 201, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
   color: var(--text-secondary);
   cursor: pointer;
 }
@@ -349,8 +348,8 @@ watch(
   box-sizing: border-box;
   min-height: 34px;
   border-radius: 12px;
-  border: 1px solid rgba(176, 201, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
   color: rgba(236, 242, 252, 0.86);
   font: inherit;
   font-size: 12px;
@@ -358,9 +357,9 @@ watch(
 }
 
 .gd-outline-card {
-  border-radius: 14px;
-  border: 1px solid rgba(176, 201, 255, 0.06);
-  background: rgba(255, 255, 255, 0.02);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
   padding: 8px;
 }
 
@@ -387,7 +386,7 @@ watch(
   gap: 8px;
   text-align: left;
   padding: 8px 10px;
-  border-radius: 14px;
+  border-radius: var(--radius-md);
   border: 1px solid transparent;
   background: transparent;
   color: rgba(214, 223, 238, 0.8);
@@ -399,12 +398,12 @@ watch(
 
 .gd-doc-chip:hover,
 .gd-outline-item:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--bg-elevated);
   color: var(--text-primary);
 }
 
 .gd-doc-chip.active {
-  background: linear-gradient(180deg, rgba(51, 90, 190, 0.88), rgba(40, 72, 163, 0.88));
+  background: rgba(79, 140, 255, 0.12);
   color: var(--text-primary);
   border-color: rgba(123, 164, 255, 0.18);
 }
@@ -454,7 +453,7 @@ watch(
 }
 
 .gd-doc-chip-more:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bg-elevated);
   opacity: 1;
 }
 
@@ -465,8 +464,8 @@ watch(
   flex-direction: column;
   gap: 4px;
   padding: 8px;
-  border-radius: 14px;
-  border: 1px solid rgba(176, 201, 255, 0.12);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
   background: rgba(9, 14, 24, 0.98);
   box-shadow: 0 14px 36px rgba(2, 8, 24, 0.34);
   z-index: 3;
@@ -485,7 +484,7 @@ watch(
 }
 
 .gd-doc-chip-menu button:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--bg-elevated);
 }
 
 .gd-doc-chip-menu-danger {
@@ -524,7 +523,7 @@ watch(
 @media (max-width: 640px) {
   .gd-outline {
     padding: 14px 10px 12px;
-    border-radius: 16px;
+    border-radius: var(--radius-md);
   }
 
   .gd-outline-head {

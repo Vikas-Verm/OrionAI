@@ -132,11 +132,10 @@ onBeforeUnmount(() => chartInstance?.destroy());
 <style scoped>
 .gsc-card {
   min-height: 238px;
-  border-radius: 18px;
-  background: linear-gradient(180deg, rgba(14, 20, 34, 0.98), rgba(11, 17, 29, 0.98));
-  border: 1px solid rgba(176, 201, 255, 0.08);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  padding: 14px 16px 16px;
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+    padding: 14px 16px 16px;
 }
 
 .gsc-card.selected {
@@ -173,7 +172,7 @@ onBeforeUnmount(() => chartInstance?.destroy());
 .gsc-icon {
   border: 0;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--bg-elevated);
   color: #d9e3f8;
   font-size: 11px;
   font-weight: 600;

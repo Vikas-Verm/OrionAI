@@ -196,9 +196,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background:
-    radial-gradient(circle at top, rgba(82, 212, 255, 0.14), transparent 34%),
-    linear-gradient(180deg, #040713 0%, #050816 48%, #070d1c 100%);
+  background: var(--bg-base);
 }
 
 .sync-glow,
@@ -210,7 +208,7 @@ onUnmounted(() => {
 .sync-glow {
   width: 40rem;
   height: 40rem;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   filter: blur(96px);
   opacity: 0.28;
 }
@@ -218,13 +216,13 @@ onUnmounted(() => {
 .sync-glow--cyan {
   top: -12rem;
   right: 12%;
-  background: radial-gradient(circle, rgba(82, 212, 255, 0.24) 0%, rgba(82, 212, 255, 0.08) 38%, transparent 72%);
+  background: radial-gradient(circle, rgba(79, 140, 255, 0.24) 0%, rgba(79, 140, 255, 0.08) 38%, transparent 72%);
 }
 
 .sync-glow--violet {
   bottom: -14rem;
   left: 14%;
-  background: radial-gradient(circle, rgba(139, 125, 255, 0.24) 0%, rgba(139, 125, 255, 0.08) 36%, transparent 72%);
+  background: radial-gradient(circle, rgba(79, 140, 255, 0.24) 0%, rgba(79, 140, 255, 0.08) 36%, transparent 72%);
 }
 
 .sync-grid {
@@ -238,12 +236,9 @@ onUnmounted(() => {
   padding: clamp(28px, 4vw, 40px);
   border-radius: 32px;
   border: 1px solid rgba(134, 155, 212, 0.18);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
-    rgba(9, 14, 30, 0.9);
+  background: var(--bg-surface);
   box-shadow: 0 36px 90px rgba(2, 6, 23, 0.4);
-  backdrop-filter: blur(26px);
-}
+  }
 
 .sync-brand {
   display: flex;
@@ -254,14 +249,11 @@ onUnmounted(() => {
 .sync-logo {
   width: 58px;
   height: 58px;
-  border-radius: 20px;
+  border-radius: var(--radius-md);
   display: grid;
   place-items: center;
   font-size: 28px;
-  background:
-    radial-gradient(circle at 42% 34%, rgba(210, 234, 255, 0.96), rgba(196, 201, 255, 0.78) 28%, rgba(111, 142, 255, 0.16) 32%, transparent 56%),
-    linear-gradient(180deg, rgba(62, 129, 255, 0.22), rgba(85, 104, 255, 0.1)),
-    rgba(24, 36, 72, 0.92);
+  background: rgba(79, 140, 255, 0.12);
   border: 1px solid rgba(93, 139, 255, 0.24);
 }
 
@@ -270,9 +262,9 @@ onUnmounted(() => {
   align-items: center;
   height: 34px;
   padding: 0 14px;
-  border-radius: 999px;
-  border: 1px solid rgba(176, 201, 255, 0.16);
-  background: rgba(255, 255, 255, 0.04);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
   color: rgba(222, 233, 255, 0.82);
   font-size: 12px;
   font-weight: 600;
@@ -310,14 +302,14 @@ onUnmounted(() => {
   align-items: flex-start;
   gap: 16px;
   padding: 18px 18px 18px 16px;
-  border-radius: 22px;
-  border: 1px solid rgba(176, 201, 255, 0.12);
-  background: rgba(255, 255, 255, 0.04);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
 }
 
 .sync-step--active {
   border-color: rgba(102, 214, 255, 0.24);
-  background: rgba(82, 212, 255, 0.08);
+  background: rgba(79, 140, 255, 0.08);
 }
 
 .sync-step--complete {
@@ -329,11 +321,11 @@ onUnmounted(() => {
   width: 38px;
   height: 38px;
   flex-shrink: 0;
-  border-radius: 14px;
+  border-radius: var(--radius-md);
   display: grid;
   place-items: center;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(176, 201, 255, 0.14);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
   color: #eff6ff;
   font-size: 15px;
   font-weight: 700;
@@ -346,7 +338,7 @@ onUnmounted(() => {
 .sync-step__pulse {
   width: 12px;
   height: 12px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: #8fe8ff;
   box-shadow: 0 0 0 0 rgba(143, 232, 255, 0.5);
   animation: sync-pulse 1.2s infinite;
@@ -369,9 +361,9 @@ onUnmounted(() => {
 .sync-error {
   margin-top: 22px;
   padding: 18px 20px;
-  border-radius: 20px;
-  border: 1px solid rgba(176, 201, 255, 0.12);
-  background: rgba(255, 255, 255, 0.04);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
   color: rgba(229, 237, 255, 0.82);
 }
 
@@ -384,8 +376,8 @@ onUnmounted(() => {
 .sync-status__spinner {
   width: 20px;
   height: 20px;
-  border-radius: 999px;
-  border: 2px solid rgba(176, 201, 255, 0.14);
+  border-radius: var(--radius-sm);
+  border: 2px solid var(--border-default);
   border-top-color: rgba(102, 214, 255, 0.92);
   animation: sync-spin 0.85s linear infinite;
 }
@@ -410,8 +402,8 @@ onUnmounted(() => {
   min-height: 44px;
   padding: 0 16px;
   border: 0;
-  border-radius: 14px;
-  background: linear-gradient(135deg, #54d4ff, #7c88ff);
+  border-radius: var(--radius-md);
+  background: var(--accent);
   color: #04101f;
   font: inherit;
   font-weight: 700;
@@ -439,7 +431,7 @@ onUnmounted(() => {
   }
 
   .sync-card {
-    border-radius: 26px;
+    border-radius: var(--radius-lg);
     padding: 22px 18px;
   }
 

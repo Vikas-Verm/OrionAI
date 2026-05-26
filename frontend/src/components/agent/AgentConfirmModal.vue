@@ -163,8 +163,7 @@
     inset: 0;
     z-index: 99999;
     background: rgba(0,0,0,0.65);
-    backdrop-filter: blur(6px);
-    display: flex;
+        display: flex;
     align-items: center;
     justify-content: center;
     padding: 20px;
@@ -173,7 +172,7 @@
   .confirm-card {
     background: var(--bg-elevated, #13131f);
     border: 1px solid var(--border-default, rgba(255,255,255,0.1));
-    border-radius: 18px;
+    border-radius: var(--radius-md);
     padding: 28px 28px 24px;
     width: 100%;
     max-width: 400px;

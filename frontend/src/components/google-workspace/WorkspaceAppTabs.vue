@@ -66,11 +66,10 @@ defineEmits(["select", "add"]);
 }
 
 .gw-tab.active {
-  background: linear-gradient(180deg, rgba(22, 31, 48, 0.98), rgba(15, 23, 38, 0.98));
+  background: var(--bg-surface);
   color: #f6fbff;
-  border-color: rgba(176, 201, 255, 0.12);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
-}
+  border-color: var(--border-default);
+  }
 
 .gw-tab.disabled {
   opacity: 0.45;
@@ -94,7 +93,7 @@ defineEmits(["select", "add"]);
   min-width: 28px;
   justify-content: center;
   padding: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
 }
 
 @media (max-width: 1280px) {

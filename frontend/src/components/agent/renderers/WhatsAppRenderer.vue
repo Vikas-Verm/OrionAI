@@ -287,7 +287,7 @@
     flex: 1;
     background: var(--bg-elevated);
     border: 1px solid var(--border-subtle);
-    border-radius: 20px;
+    border-radius: var(--radius-md);
     padding: 7px 12px;
     color: var(--text-primary);
     font-size: 12px;

@@ -232,20 +232,17 @@ onMounted(loadSuggestions)
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgba(2, 6, 23, 0.62);
-  backdrop-filter: blur(16px);
-  z-index: 200;
+  background: rgba(0, 0, 0, 0.62);
+    z-index: 200;
 }
 .sh-modal {
   width: min(640px, 100%);
   max-height: 90vh;
   overflow: auto;
-  border-radius: 24px;
-  border: 1px solid rgba(176, 201, 255, 0.18);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015)),
-    rgba(9, 14, 30, 0.94);
-  box-shadow: 0 32px 80px rgba(2, 6, 23, 0.48);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.48);
   color: var(--text-primary);
 }
 .sh-modal--wide { width: min(720px, 100%); }
@@ -270,7 +267,7 @@ onMounted(loadSuggestions)
 }
 .sh-icon-btn {
   background: transparent;
-  border: 1px solid rgba(176, 201, 255, 0.14);
+  border: 1px solid var(--border-default);
   border-radius: 12px;
   width: 32px;
   height: 32px;
@@ -301,9 +298,9 @@ onMounted(loadSuggestions)
 .sh-spinner {
   width: 26px;
   height: 26px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   border: 2px solid rgba(168, 190, 255, 0.16);
-  border-top-color: rgba(82, 212, 255, 0.92);
+  border-top-color: rgba(79, 140, 255, 0.92);
   display: inline-block;
   animation: sh-spin 0.85s linear infinite;
 }
@@ -321,7 +318,7 @@ onMounted(loadSuggestions)
   justify-content: space-between;
   gap: 12px;
   padding: 8px 4px;
-  border-bottom: 1px solid rgba(176, 201, 255, 0.08);
+  border-bottom: 1px solid var(--border-subtle);
 }
 .sh-suggest-check {
   display: inline-flex;
@@ -331,7 +328,7 @@ onMounted(loadSuggestions)
   color: var(--text-secondary);
   cursor: pointer;
 }
-.sh-suggest-check input { accent-color: #52d4ff; }
+.sh-suggest-check input { accent-color: var(--accent); }
 .sh-suggest-check--row { padding-top: 6px; align-items: flex-start; }
 .sh-suggest-card-index {
   font-size: 11.5px;
@@ -342,12 +339,12 @@ onMounted(loadSuggestions)
   grid-template-columns: 26px 1fr;
   gap: 10px;
   padding: 14px;
-  border-radius: 14px;
-  border: 1px solid rgba(176, 201, 255, 0.1);
-  background: rgba(8, 14, 30, 0.45);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
 }
 .sh-suggest-card--selected {
-  border-color: rgba(82, 212, 255, 0.32);
+  border-color: rgba(79, 140, 255, 0.32);
 }
 .sh-suggest-card-body {
   display: flex;
@@ -357,8 +354,8 @@ onMounted(loadSuggestions)
 .sh-suggest-input {
   width: 100%;
   border-radius: 10px;
-  border: 1px solid rgba(176, 201, 255, 0.16);
-  background: rgba(8, 14, 30, 0.62);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
   color: var(--text-primary);
   font: inherit;
   font-size: 13px;
@@ -367,8 +364,8 @@ onMounted(loadSuggestions)
   color-scheme: dark;
 }
 .sh-suggest-input:focus {
-  border-color: rgba(82, 212, 255, 0.42);
-  box-shadow: 0 0 0 3px rgba(82, 212, 255, 0.1);
+  border-color: rgba(79, 140, 255, 0.42);
+  box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.1);
 }
 .sh-suggest-input--title { font-weight: 600; }
 .sh-suggest-row {
@@ -388,7 +385,7 @@ onMounted(loadSuggestions)
   justify-content: flex-end;
   gap: 10px;
   padding: 12px 24px 24px;
-  border-top: 1px solid rgba(176, 201, 255, 0.06);
+  border-top: 1px solid var(--border-subtle);
 }
 .sh-form-actions--center { justify-content: center; border-top: none; }
 .sh-form-error {
@@ -398,7 +395,7 @@ onMounted(loadSuggestions)
   font-size: 13px;
 }
 .sh-btn {
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   padding: 9px 18px;
   font: inherit;
   font-weight: 500;
@@ -409,16 +406,16 @@ onMounted(loadSuggestions)
 .sh-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 .sh-btn--ghost {
   background: transparent;
-  border-color: rgba(176, 201, 255, 0.16);
+  border-color: var(--border-default);
   color: var(--text-secondary);
 }
 .sh-btn--primary {
-  color: #050816;
-  background: linear-gradient(135deg, rgba(82, 212, 255, 0.92), rgba(139, 125, 255, 0.82));
-  border-color: rgba(82, 212, 255, 0.42);
-  box-shadow: 0 18px 38px rgba(82, 212, 255, 0.22);
+  color: white;
+  background: var(--accent);
+  border-color: rgba(79, 140, 255, 0.42);
+  
 }
-.sh-btn--primary:hover:not(:disabled) { transform: translateY(-1px); }
+.sh-btn--primary:hover:not(:disabled) { opacity: 0.9; }
 .sh-link {
   border: none;
   background: none;

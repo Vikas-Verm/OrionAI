@@ -458,9 +458,7 @@ onUnmounted(() => {
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
   padding: 32px 24px;
-  background:
-    radial-gradient(circle at top, rgba(82, 212, 255, 0.14), transparent 34%),
-    linear-gradient(180deg, #040713 0%, #050816 48%, #070d1c 100%);
+  background: var(--bg-base);
 }
 
 .connect-glow,
@@ -472,7 +470,7 @@ onUnmounted(() => {
 .connect-glow {
   width: 42rem;
   height: 42rem;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   filter: blur(96px);
   opacity: 0.28;
 }
@@ -480,13 +478,13 @@ onUnmounted(() => {
 .connect-glow--cyan {
   top: -12rem;
   left: -8rem;
-  background: radial-gradient(circle, rgba(82, 212, 255, 0.26) 0%, rgba(82, 212, 255, 0.08) 40%, transparent 72%);
+  background: radial-gradient(circle, rgba(79, 140, 255, 0.26) 0%, rgba(79, 140, 255, 0.08) 40%, transparent 72%);
 }
 
 .connect-glow--violet {
   right: -10rem;
   bottom: -16rem;
-  background: radial-gradient(circle, rgba(139, 125, 255, 0.24) 0%, rgba(139, 125, 255, 0.08) 38%, transparent 72%);
+  background: radial-gradient(circle, rgba(79, 140, 255, 0.24) 0%, rgba(79, 140, 255, 0.08) 38%, transparent 72%);
 }
 
 .connect-grid {
@@ -502,12 +500,9 @@ onUnmounted(() => {
   padding: clamp(22px, 4vw, 38px);
   border-radius: 32px;
   border: 1px solid rgba(134, 155, 212, 0.18);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
-    rgba(9, 14, 30, 0.9);
+  background: var(--bg-surface);
   box-shadow: 0 36px 90px rgba(2, 6, 23, 0.4);
-  backdrop-filter: blur(26px);
-}
+  }
 
 .connect-brand {
   display: flex;
@@ -519,14 +514,11 @@ onUnmounted(() => {
 .connect-logo {
   width: 58px;
   height: 58px;
-  border-radius: 20px;
+  border-radius: var(--radius-md);
   display: grid;
   place-items: center;
   font-size: 28px;
-  background:
-    radial-gradient(circle at 42% 34%, rgba(210, 234, 255, 0.96), rgba(196, 201, 255, 0.78) 28%, rgba(111, 142, 255, 0.16) 32%, transparent 56%),
-    linear-gradient(180deg, rgba(62, 129, 255, 0.22), rgba(85, 104, 255, 0.1)),
-    rgba(24, 36, 72, 0.92);
+  background: rgba(79, 140, 255, 0.12);
   border: 1px solid rgba(93, 139, 255, 0.24);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.08),
@@ -538,9 +530,9 @@ onUnmounted(() => {
   align-items: center;
   height: 34px;
   padding: 0 14px;
-  border-radius: 999px;
-  border: 1px solid rgba(176, 201, 255, 0.16);
-  background: rgba(255, 255, 255, 0.04);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
   color: rgba(222, 233, 255, 0.82);
   font-size: 12px;
   font-weight: 600;
@@ -582,9 +574,9 @@ onUnmounted(() => {
   flex-shrink: 0;
   min-width: 150px;
   padding: 16px 18px;
-  border-radius: 22px;
-  border: 1px solid rgba(176, 201, 255, 0.14);
-  background: rgba(255, 255, 255, 0.04);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
   text-align: right;
 }
 
@@ -606,9 +598,9 @@ onUnmounted(() => {
 .connect-loading {
   margin-top: 28px;
   padding: 18px 20px;
-  border-radius: 20px;
-  border: 1px solid rgba(176, 201, 255, 0.14);
-  background: rgba(255, 255, 255, 0.04);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
   color: rgba(229, 237, 255, 0.82);
 }
 
@@ -630,8 +622,8 @@ onUnmounted(() => {
 .connect-loading__spinner {
   width: 20px;
   height: 20px;
-  border-radius: 999px;
-  border: 2px solid rgba(176, 201, 255, 0.14);
+  border-radius: var(--radius-sm);
+  border: 2px solid var(--border-default);
   border-top-color: rgba(102, 214, 255, 0.92);
   animation: connect-spin 0.85s linear infinite;
 }
@@ -678,13 +670,10 @@ onUnmounted(() => {
   min-width: 0;
   min-height: 220px;
   padding: 20px;
-  border-radius: 26px;
-  border: 1px solid rgba(176, 201, 255, 0.14);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
-    rgba(16, 22, 44, 0.82);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
-}
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  }
 
 .connect-app-card--compact {
   min-height: 208px;
@@ -692,8 +681,7 @@ onUnmounted(() => {
 
 .connect-app-card--connected {
   border-color: rgba(102, 214, 255, 0.24);
-  background:
-    linear-gradient(180deg, rgba(82, 212, 255, 0.08), rgba(255, 255, 255, 0.02)),
+  background: rgba(79, 140, 255, 0.06),
     rgba(16, 22, 44, 0.88);
 }
 
@@ -712,12 +700,12 @@ onUnmounted(() => {
 .connect-app-icon {
   width: 52px;
   height: 52px;
-  border-radius: 18px;
+  border-radius: var(--radius-md);
   display: grid;
   place-items: center;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(176, 201, 255, 0.14);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
 }
 
 .connect-app-icon img {
@@ -737,9 +725,9 @@ onUnmounted(() => {
   align-items: center;
   height: 30px;
   padding: 0 11px;
-  border-radius: 999px;
-  border: 1px solid rgba(176, 201, 255, 0.14);
-  background: rgba(255, 255, 255, 0.04);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
   color: rgba(222, 233, 255, 0.76);
   font-size: 12px;
   font-weight: 600;
@@ -784,8 +772,8 @@ onUnmounted(() => {
   margin-top: auto;
   width: 100%;
   min-height: 46px;
-  border-radius: 16px;
-  background: linear-gradient(135deg, rgba(82, 212, 255, 0.16), rgba(139, 125, 255, 0.16));
+  border-radius: var(--radius-md);
+  background: rgba(79, 140, 255, 0.12);
   color: #f7fbff;
   font-weight: 600;
 }
@@ -807,7 +795,7 @@ onUnmounted(() => {
   justify-content: space-between;
   gap: 18px;
   padding-top: 24px;
-  border-top: 1px solid rgba(176, 201, 255, 0.1);
+  border-top: 1px solid var(--border-subtle);
 }
 
 .connect-footnote {
@@ -827,18 +815,18 @@ onUnmounted(() => {
 .connect-primary {
   min-height: 48px;
   padding: 0 20px;
-  border-radius: 16px;
+  border-radius: var(--radius-md);
   font-weight: 600;
 }
 
 .connect-secondary {
-  border: 1px solid rgba(176, 201, 255, 0.14);
-  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
   color: rgba(228, 236, 253, 0.82);
 }
 
 .connect-primary {
-  background: linear-gradient(135deg, #54d4ff, #7c88ff);
+  background: var(--accent);
   color: #04101f;
 }
 
@@ -856,8 +844,7 @@ onUnmounted(() => {
   overflow: auto;
   overscroll-behavior: contain;
   background: rgba(3, 8, 19, 0.8);
-  backdrop-filter: blur(14px);
-}
+  }
 
 .connect-modal__shell {
   width: min(1320px, 100%);
@@ -877,8 +864,8 @@ onUnmounted(() => {
   justify-content: center;
   min-height: 42px;
   padding: 0 16px;
-  border-radius: 14px;
-  border: 1px solid rgba(176, 201, 255, 0.14);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
   background: rgba(9, 14, 30, 0.92);
   color: #eef4ff;
 }
@@ -901,7 +888,7 @@ onUnmounted(() => {
   }
 
   .connect-card {
-    border-radius: 22px;
+    border-radius: var(--radius-lg);
     padding: 18px 14px;
   }
 
@@ -912,7 +899,7 @@ onUnmounted(() => {
   .connect-logo {
     width: 48px;
     height: 48px;
-    border-radius: 16px;
+    border-radius: var(--radius-md);
     font-size: 24px;
     flex-shrink: 0;
   }
@@ -972,7 +959,7 @@ onUnmounted(() => {
     min-height: 0;
     gap: 14px;
     padding: 16px;
-    border-radius: 20px;
+    border-radius: var(--radius-md);
   }
 
   .connect-app-icon {
@@ -1023,7 +1010,7 @@ onUnmounted(() => {
   }
 
   .connect-summary {
-    border-radius: 18px;
+    border-radius: var(--radius-md);
   }
 
   .connect-app-card__top {

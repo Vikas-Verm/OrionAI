@@ -200,11 +200,10 @@ function handleKeydown(event) {
   flex-direction: column;
   min-height: 0;
   min-width: 0;
-  border-radius: 18px;
-  background: linear-gradient(180deg, rgba(18, 24, 38, 0.97), rgba(14, 20, 33, 0.97));
-  border: 1px solid rgba(176, 201, 255, 0.06);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
-}
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  }
 
 .gd-ai-top {
   display: flex;
@@ -241,8 +240,8 @@ function handleKeydown(event) {
 .gd-ai-dot {
   width: 8px;
   height: 8px;
-  border-radius: 999px;
-  background: linear-gradient(180deg, #4ef0be, #24c58d);
+  border-radius: var(--radius-sm);
+  background: #4ef0be;
   box-shadow: 0 0 10px rgba(47, 211, 157, 0.45);
 }
 
@@ -289,8 +288,8 @@ function handleKeydown(event) {
 
 .gd-ai-action {
   min-height: 38px;
-  border-radius: 14px;
-  border: 1px solid rgba(176, 201, 255, 0.08);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
   background: rgba(255, 255, 255, 0.025);
   color: rgba(228, 236, 250, 0.84);
   font: inherit;
@@ -302,13 +301,13 @@ function handleKeydown(event) {
 }
 
 .gd-ai-action:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--bg-elevated);
 }
 
 .gd-ai-suggested {
   margin-top: 18px;
   padding-top: 16px;
-  border-top: 1px solid rgba(176, 201, 255, 0.06);
+  border-top: 1px solid var(--border-subtle);
 }
 
 .gd-ai-suggested-title {
@@ -353,9 +352,9 @@ function handleKeydown(event) {
 
 .gd-ai-message {
   padding: 12px 14px;
-  border-radius: 14px;
-  border: 1px solid rgba(176, 201, 255, 0.08);
-  background: rgba(255, 255, 255, 0.03);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
 }
 
 .gd-ai-message-text--rich :deep(p) {
@@ -416,9 +415,9 @@ function handleKeydown(event) {
   width: 100%;
   box-sizing: border-box;
   resize: none;
-  border-radius: 14px;
-  border: 1px solid rgba(176, 201, 255, 0.08);
-  background: rgba(255, 255, 255, 0.03);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
   color: var(--text-primary);
   padding: 14px 44px 14px 14px;
   min-height: 72px;
@@ -432,7 +431,7 @@ function handleKeydown(event) {
   bottom: 22px;
   min-width: 42px;
   height: 32px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   border: none;
   background: #4e7fff;
   color: white;
@@ -460,7 +459,7 @@ function handleKeydown(event) {
 
 @media (max-width: 640px) {
   .gd-ai {
-    border-radius: 16px;
+    border-radius: var(--radius-md);
   }
 
   .gd-ai-tabs {

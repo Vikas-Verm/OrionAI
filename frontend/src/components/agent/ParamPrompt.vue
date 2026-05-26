@@ -155,7 +155,7 @@ function submit() {
   color: white;
   font-size: 11px;
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
 }
 
 .param-fields {
