@@ -18,12 +18,47 @@ const DESTRUCTIVE_TOOLS = new Set([
   // Mass actions
   "jira_notify_overdue",
   "razorpay_create_payout",
+
+  // Google Docs — sharing & deleting are destructive
+  "google_docs_share",
+  "google_docs_delete",
+
+  // Google Sheets — sharing & deleting are destructive
+  "google_sheets_share",
+  "google_sheets_delete",
 ]);
 
 const BATCH_THRESHOLD = 3;
 
+const EXACT_MESSAGE_SEND_TOOLS = new Set([
+  "telegram_send_message",
+  "slack_send_message",
+  "whatsapp_send_message",
+]);
+
+function hasExactSendTarget(tool, params = {}) {
+  if (tool === "telegram_send_message") return Boolean(params.contact);
+  if (tool === "slack_send_message") return Boolean(params.channel);
+  if (tool === "whatsapp_send_message") {
+    return Boolean(
+      params.to || params.contact || params.phone || params.chatId || params.roomId
+    );
+  }
+  return false;
+}
+
 function checkNeedsConfirmation(tool, params, previousResults = []) {
   if (!DESTRUCTIVE_TOOLS.has(tool)) {
+    return { needsConfirm: false };
+  }
+
+  if (
+    EXACT_MESSAGE_SEND_TOOLS.has(tool) &&
+    hasExactSendTarget(tool, params) &&
+    Boolean(params?.message) &&
+    params?.messageSource === "user_exact" &&
+    params?.skipConfirmation === true
+  ) {
     return { needsConfirm: false };
   }
 
@@ -35,9 +70,14 @@ function checkNeedsConfirmation(tool, params, previousResults = []) {
     "send_email",
     "whatsapp_send_message",
     "telegram_send_message",
+    "slack_send_message",
     "jira_notify_overdue",
     "calendar_delete",
     "razorpay_create_payout",
+    "google_docs_share",
+    "google_docs_delete",
+    "google_sheets_share",
+    "google_sheets_delete",
   ].includes(tool);
 
   // Batch actions (multiple recipients) always need confirmation
@@ -61,16 +101,18 @@ function buildPreview(tool, params, previousResults) {
       return {
         action: "Send Telegram message",
         to: params.contact || params.chatId,
-        message: params.message?.slice(0, 100),
+        message: params.message || "",
         icon: "✈️",
+        app: "telegram",
       };
 
     case "slack_send_message":
       return {
         action: "Send Slack message",
         to: params.channel,
-        message: params.message?.slice(0, 100),
+        message: params.message || "",
         icon: "💬",
+        app: "slack",
       };
 
     case "whatsapp_send_message":
@@ -78,8 +120,9 @@ function buildPreview(tool, params, previousResults) {
       return {
         action: "Send WhatsApp message",
         to: params.phone || params.contact || params.to,
-        message: params.message?.slice(0, 100),
+        message: params.message || "",
         icon: "📱",
+        app: "whatsapp",
       };
 
     case "send_email":
@@ -88,6 +131,7 @@ function buildPreview(tool, params, previousResults) {
         to: params.to,
         subject: params.subject,
         icon: "📧",
+        app: "gmail",
       };
 
     case "calendar_delete":
@@ -96,6 +140,7 @@ function buildPreview(tool, params, previousResults) {
         event: params.title || params.eventId,
         icon: "📅",
         danger: true,
+        app: "calendar",
       };
 
     case "jira_create_ticket":
@@ -104,6 +149,7 @@ function buildPreview(tool, params, previousResults) {
         title: params.title || params.summary,
         project: params.projectKey,
         icon: "🎯",
+        app: "jira",
       };
 
     case "jira_notify_overdue":
@@ -111,6 +157,7 @@ function buildPreview(tool, params, previousResults) {
         action: "Send overdue notifications to team",
         icon: "🔔",
         danger: false,
+        app: "jira",
       };
 
     case "razorpay_create_payout":
@@ -123,6 +170,43 @@ function buildPreview(tool, params, previousResults) {
           : params.narration || "This will trigger a real payout.",
         icon: "₹",
         danger: true,
+        app: "razorpay",
+      };
+
+    case "google_docs_share":
+      return {
+        action: "Share Google Doc",
+        to: params.email || (params.emails || []).join(", "),
+        message: `Role: ${params.role || "writer"}`,
+        icon: "🔗",
+        app: "google_docs",
+      };
+
+    case "google_docs_delete":
+      return {
+        action: "Delete Google Doc",
+        title: params.documentId || "document",
+        icon: "🗑️",
+        danger: true,
+        app: "google_docs",
+      };
+
+    case "google_sheets_share":
+      return {
+        action: "Share Google Sheet",
+        to: params.email || (params.emails || []).join(", "),
+        message: `Role: ${params.role || "writer"}`,
+        icon: "🔗",
+        app: "google_sheets",
+      };
+
+    case "google_sheets_delete":
+      return {
+        action: "Delete Google Sheet",
+        title: params.spreadsheetId || "spreadsheet",
+        icon: "🗑️",
+        danger: true,
+        app: "google_sheets",
       };
 
     default:

@@ -450,8 +450,8 @@ onBeforeUnmount(() => {
   width: 100%;
   padding: 10px 12px;
   border-radius: 12px;
-  border: 1px solid rgba(176, 201, 255, 0.16);
-  background: rgba(8, 14, 30, 0.62);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
   color: var(--text-primary);
   font: inherit;
   font-size: 13.5px;
@@ -460,12 +460,12 @@ onBeforeUnmount(() => {
   transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
 }
 .odp-trigger:hover:not(:disabled) {
-  border-color: rgba(82, 212, 255, 0.32);
+  border-color: rgba(79, 140, 255, 0.32);
 }
 .odp--open .odp-trigger,
 .odp-trigger:focus-visible {
-  border-color: rgba(82, 212, 255, 0.45);
-  box-shadow: 0 0 0 3px rgba(82, 212, 255, 0.12);
+  border-color: rgba(79, 140, 255, 0.45);
+  box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.12);
   outline: none;
 }
 .odp-trigger:disabled { opacity: 0.55; cursor: not-allowed; }
@@ -477,7 +477,7 @@ onBeforeUnmount(() => {
   width: 24px;
   height: 24px;
   border-radius: 8px;
-  background: rgba(82, 212, 255, 0.12);
+  background: rgba(79, 140, 255, 0.12);
   color: var(--accent-hover);
   flex: 0 0 auto;
 }
@@ -497,8 +497,8 @@ onBeforeUnmount(() => {
   justify-content: center;
   width: 22px;
   height: 22px;
-  border-radius: 999px;
-  border: 1px solid rgba(176, 201, 255, 0.16);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
   color: var(--text-muted);
   font-size: 14px;
   line-height: 1;
@@ -517,14 +517,11 @@ onBeforeUnmount(() => {
 .odp-panel {
   z-index: 9999;
   padding: 14px 14px 10px;
-  border-radius: 18px;
-  border: 1px solid rgba(176, 201, 255, 0.18);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.012)),
-    rgba(9, 14, 30, 0.96);
-  box-shadow: 0 24px 64px rgba(2, 6, 23, 0.5);
-  backdrop-filter: blur(24px);
-  color: var(--text-primary);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+    color: var(--text-primary);
   font-family: var(--font-ui);
 }
 .odp-panel * { box-sizing: border-box; }
@@ -541,9 +538,9 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 6px;
   padding: 6px 10px;
-  border-radius: 999px;
-  background: rgba(82, 212, 255, 0.08);
-  border: 1px solid rgba(82, 212, 255, 0.18);
+  border-radius: var(--radius-sm);
+  background: rgba(79, 140, 255, 0.08);
+  border: 1px solid rgba(79, 140, 255, 0.18);
   color: var(--text-primary);
   font: inherit;
   font-size: 12.5px;
@@ -552,16 +549,16 @@ onBeforeUnmount(() => {
   transition: background 120ms ease, border-color 120ms ease;
 }
 .odp-panel .odp-head-month:hover {
-  background: rgba(82, 212, 255, 0.14);
-  border-color: rgba(82, 212, 255, 0.32);
+  background: rgba(79, 140, 255, 0.14);
+  border-color: rgba(79, 140, 255, 0.32);
 }
 .odp-panel .odp-head-nav { display: inline-flex; gap: 4px; }
 .odp-panel .odp-icon-btn {
   width: 28px;
   height: 28px;
   border-radius: 8px;
-  background: rgba(8, 14, 30, 0.55);
-  border: 1px solid rgba(176, 201, 255, 0.14);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
   color: var(--text-secondary);
   display: inline-flex;
   align-items: center;
@@ -571,7 +568,7 @@ onBeforeUnmount(() => {
 }
 .odp-panel .odp-icon-btn:hover {
   color: var(--text-primary);
-  border-color: rgba(82, 212, 255, 0.36);
+  border-color: rgba(79, 140, 255, 0.36);
 }
 
 .odp-panel .odp-grid-row {
@@ -603,22 +600,22 @@ onBeforeUnmount(() => {
   transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
 }
 .odp-panel .odp-day:hover:not(:disabled) {
-  background: rgba(82, 212, 255, 0.12);
+  background: rgba(79, 140, 255, 0.12);
   color: var(--text-primary);
 }
 .odp-panel .odp-day--muted { color: var(--text-faint); }
 .odp-panel .odp-day--today {
-  border-color: rgba(82, 212, 255, 0.36);
+  border-color: rgba(79, 140, 255, 0.36);
   color: var(--accent-hover);
 }
 .odp-panel .odp-day--selected {
-  background: linear-gradient(135deg, rgba(82, 212, 255, 0.92), rgba(139, 125, 255, 0.82));
-  color: #050816;
-  border-color: rgba(82, 212, 255, 0.55);
+  background: var(--accent);
+  color: white;
+  border-color: rgba(79, 140, 255, 0.55);
   font-weight: 600;
-  box-shadow: 0 12px 26px rgba(82, 212, 255, 0.22);
+  box-shadow: 0 12px 26px rgba(79, 140, 255, 0.22);
 }
-.odp-panel .odp-day--selected.odp-day--today { color: #050816; }
+.odp-panel .odp-day--selected.odp-day--today { color: white; }
 
 .odp-panel .odp-months,
 .odp-panel .odp-years {
@@ -631,8 +628,8 @@ onBeforeUnmount(() => {
 .odp-panel .odp-year-btn {
   padding: 10px 6px;
   border-radius: 10px;
-  border: 1px solid rgba(176, 201, 255, 0.12);
-  background: rgba(8, 14, 30, 0.55);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
   color: var(--text-secondary);
   font: inherit;
   font-size: 12.5px;
@@ -642,18 +639,18 @@ onBeforeUnmount(() => {
 .odp-panel .odp-month-btn:hover,
 .odp-panel .odp-year-btn:hover {
   color: var(--text-primary);
-  border-color: rgba(82, 212, 255, 0.32);
+  border-color: rgba(79, 140, 255, 0.32);
 }
 .odp-panel .odp-month-btn--current,
 .odp-panel .odp-year-btn--current {
   color: var(--accent-hover);
-  border-color: rgba(82, 212, 255, 0.36);
+  border-color: rgba(79, 140, 255, 0.36);
 }
 .odp-panel .odp-month-btn--selected,
 .odp-panel .odp-year-btn--selected {
-  background: linear-gradient(135deg, rgba(82, 212, 255, 0.92), rgba(139, 125, 255, 0.82));
-  color: #050816;
-  border-color: rgba(82, 212, 255, 0.55);
+  background: var(--accent);
+  color: white;
+  border-color: rgba(79, 140, 255, 0.55);
   font-weight: 600;
 }
 
@@ -663,7 +660,7 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   padding-top: 10px;
   margin-top: 8px;
-  border-top: 1px solid rgba(176, 201, 255, 0.08);
+  border-top: 1px solid var(--border-subtle);
 }
 .odp-panel .odp-foot-link {
   background: none;

@@ -1577,9 +1577,7 @@ onUnmounted(() => {
   display: flex;
   height: 100%;
   background:
-    radial-gradient(circle at 14% 10%, rgba(59, 130, 246, 0.1), transparent 24%),
-    radial-gradient(circle at 86% 14%, rgba(14, 165, 233, 0.08), transparent 22%),
-    linear-gradient(180deg, rgba(6, 11, 24, 0.98), rgba(7, 12, 25, 1));
+    var(--bg-base);
   overflow: hidden;
 }
 
@@ -1593,8 +1591,7 @@ onUnmounted(() => {
   padding: 16px 14px 14px;
   border-right: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(4, 9, 22, 0.74);
-  backdrop-filter: blur(22px);
-}
+  }
 
 .sg-sidebar-head,
 .sg-chat-head {
@@ -1633,8 +1630,8 @@ onUnmounted(() => {
 .sg-brand-icon {
   width: 42px;
   height: 42px;
-  border-radius: 16px;
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.24), rgba(14, 165, 233, 0.2));
+  border-radius: var(--radius-md);
+  background: rgba(59, 130, 246, 0.24);
   border: 1px solid rgba(59, 130, 246, 0.18);
   display: flex;
   align-items: center;
@@ -1683,7 +1680,7 @@ onUnmounted(() => {
   width: 32px;
   height: 32px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--bg-surface);
 }
 
 .sg-profile-popover {
@@ -1699,12 +1696,11 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 14px;
   padding: 16px;
-  background: rgba(8, 13, 28, 0.96);
+  background: var(--bg-base);
   border: 1px solid rgba(59, 130, 246, 0.16);
-  border-radius: 22px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 28px 48px rgba(3, 8, 20, 0.42);
-  backdrop-filter: blur(18px);
-}
+  }
 
 .sg-profile-actions {
   display: flex;
@@ -1720,10 +1716,10 @@ onUnmounted(() => {
 .sg-profile-avatar {
   width: 56px;
   height: 56px;
-  border-radius: 20px;
+  border-radius: var(--radius-md);
   overflow: hidden;
   flex-shrink: 0;
-  background: linear-gradient(135deg, #3b82f6, #0ea5e9);
+  background: #3b82f6;
   color: white;
   font-weight: 700;
   display: flex;
@@ -1772,8 +1768,8 @@ onUnmounted(() => {
 .sg-tool-btn,
 .sg-reaction-chip,
 .sg-reaction-option {
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
   color: var(--text-primary);
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s, transform 0.15s;
@@ -1799,7 +1795,7 @@ onUnmounted(() => {
 .sg-tool-btn:hover,
 .sg-reaction-chip:hover,
 .sg-reaction-option:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bg-elevated);
   border-color: rgba(255, 255, 255, 0.18);
   transform: translateY(-1px);
 }
@@ -1816,11 +1812,10 @@ onUnmounted(() => {
 .sg-compose-top,
 .sg-action-panel-wrap :deep(.comm-insights),
 .sg-action-panel-wrap :deep(.comm-panel) {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 18px;
-  backdrop-filter: blur(16px);
-}
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  }
 
 .sg-info-label {
   font-size: 11px;
@@ -1851,7 +1846,7 @@ onUnmounted(() => {
 .sg-empty-btn,
 .sg-load-btn {
   padding: 9px 12px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   font-size: 12px;
   font-weight: 600;
 }
@@ -1903,9 +1898,9 @@ onUnmounted(() => {
 .sg-message-search-input,
 .sg-compose-input {
   width: 100%;
-  background: rgba(255, 255, 255, 0.045);
+  background: var(--bg-elevated);
   border: 1px solid rgba(255, 255, 255, 0.09);
-  border-radius: 16px;
+  border-radius: var(--radius-md);
   color: var(--text-primary);
   outline: none;
   box-sizing: border-box;
@@ -2034,7 +2029,7 @@ onUnmounted(() => {
   width: 46px;
   height: 46px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #3b82f6, #0ea5e9);
+  background: #3b82f6;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2103,7 +2098,7 @@ onUnmounted(() => {
 
 .sg-room-chip {
   padding: 3px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   font-size: 9px;
   font-weight: 700;
 }
@@ -2138,7 +2133,7 @@ onUnmounted(() => {
   min-width: 24px;
   height: 24px;
   padding: 0 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: #3b82f6;
   color: white;
   display: inline-flex;
@@ -2159,8 +2154,7 @@ onUnmounted(() => {
   padding: 16px 18px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(5, 9, 21, 0.7);
-  backdrop-filter: blur(20px);
-}
+  }
 
 .sg-chat-head-main {
   display: flex;
@@ -2237,8 +2231,8 @@ onUnmounted(() => {
 
 .sg-date-divider span {
   padding: 5px 10px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.05);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
   color: var(--text-muted);
   font-size: 10.5px;
   letter-spacing: 0.04em;
@@ -2286,7 +2280,7 @@ onUnmounted(() => {
 
 .sg-tool-btn {
   padding: 5px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   font-size: 10.5px;
 }
 
@@ -2296,21 +2290,21 @@ onUnmounted(() => {
 
 .sg-message-bubble {
   width: 100%;
-  border-radius: 22px;
+  border-radius: var(--radius-lg);
   padding: 12px 14px;
-  background: rgba(255, 255, 255, 0.045);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
   box-shadow: 0 16px 28px rgba(3, 8, 18, 0.18);
 }
 
 .sg-message-row.from-me .sg-message-bubble {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.9), rgba(14, 165, 233, 0.74));
+  background: rgba(59, 130, 246, 0.9);
   border-color: rgba(125, 211, 252, 0.2);
   color: white;
 }
 
 .sg-message-bubble.deleted {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--bg-surface);
   color: var(--text-muted);
 }
 
@@ -2352,7 +2346,7 @@ onUnmounted(() => {
 
 .sg-reaction-option {
   padding: 6px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   font-size: 13px;
 }
 
@@ -2372,7 +2366,7 @@ onUnmounted(() => {
 .sg-media-card {
   margin-bottom: 10px;
   overflow: hidden;
-  border-radius: 16px;
+  border-radius: var(--radius-md);
   background: rgba(0, 0, 0, 0.16);
 }
 
@@ -2402,7 +2396,7 @@ onUnmounted(() => {
   gap: 10px;
   margin-bottom: 10px;
   padding: 11px 12px;
-  border-radius: 16px;
+  border-radius: var(--radius-md);
   background: rgba(0, 0, 0, 0.14);
   color: inherit;
   text-decoration: none;
@@ -2448,7 +2442,7 @@ onUnmounted(() => {
 
 .sg-reaction-chip {
   padding: 5px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   font-size: 11px;
   display: inline-flex;
   align-items: center;
@@ -2482,7 +2476,7 @@ onUnmounted(() => {
 .sg-info-avatar {
   width: 64px;
   height: 64px;
-  border-radius: 22px;
+  border-radius: var(--radius-lg);
 }
 
 .sg-info-card strong {
@@ -2503,9 +2497,9 @@ onUnmounted(() => {
 
 .sg-info-item {
   padding: 13px 12px;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
 }
 
 .sg-info-item span {
@@ -2543,8 +2537,8 @@ onUnmounted(() => {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  background: rgba(255, 255, 255, 0.035);
-  border-radius: 14px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-md);
   padding: 10px 12px;
 }
 
@@ -2592,7 +2586,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: rgba(59, 130, 246, 0.12);
   color: #bfdbfe;
   font-size: 11px;
@@ -2607,7 +2601,7 @@ onUnmounted(() => {
 .sg-console-send {
   width: 44px;
   height: 44px;
-  border-radius: 16px;
+  border-radius: var(--radius-md);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2623,14 +2617,14 @@ onUnmounted(() => {
 .sg-recording-dot {
   width: 10px;
   height: 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: #ef4444;
   box-shadow: 0 0 0 6px rgba(239, 68, 68, 0.16);
 }
 
 .sg-compose-send {
-  background: linear-gradient(135deg, #3b82f6, #0ea5e9);
-  border-color: rgba(125, 211, 252, 0.22);
+  background: var(--accent);
+  border-color: rgba(79, 140, 255, 0.22);
   color: white;
 }
 
@@ -2677,7 +2671,7 @@ onUnmounted(() => {
 .sg-lightbox-img {
   max-width: min(92vw, 1100px);
   max-height: 84vh;
-  border-radius: 20px;
+  border-radius: var(--radius-md);
   box-shadow: 0 24px 48px rgba(0, 0, 0, 0.3);
 }
 
@@ -2687,8 +2681,8 @@ onUnmounted(() => {
   top: 22px;
   right: 24px;
   padding: 10px 12px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
   border: 1px solid rgba(255, 255, 255, 0.14);
   color: white;
   text-decoration: none;

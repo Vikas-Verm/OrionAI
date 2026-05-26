@@ -1780,10 +1780,7 @@ async function removeIntegration(type) {
     position: absolute;
     inset: 0;
     left: 0;
-    background:
-        radial-gradient(circle at 16% 10%, rgba(82, 212, 255, 0.1), transparent 24%),
-        radial-gradient(circle at 82% 12%, rgba(139, 125, 255, 0.12), transparent 24%),
-        linear-gradient(180deg, var(--bg-base-alt, var(--bg-base)), var(--bg-base));
+    background: var(--bg-base);
     z-index: 100;
     min-width: 0;
     overflow-y: auto;
@@ -1808,21 +1805,20 @@ async function removeIntegration(type) {
 }
 .int-header-left { display: flex; align-items: center; gap: 16px; min-width: 0; }
 .int-back-btn {
-    width: 42px; height: 42px; border-radius: 999px;
-    border: 1px solid var(--border-default); background: rgba(255, 255, 255, 0.04);
+    width: 42px; height: 42px; border-radius: var(--radius-sm);
+    border: 1px solid var(--border-default); background: var(--bg-elevated);
     color: var(--text-secondary); display: flex; align-items: center; justify-content: center;
-    cursor: pointer; transition: all 0.15s; box-shadow: var(--shadow-sm);
+    cursor: pointer; transition: all 0.15s;
 }
-.int-back-btn:hover { background: rgba(255, 255, 255, 0.07); color: var(--text-primary); transform: translateY(-1px); }
+.int-back-btn:hover { background: var(--bg-elevated); border-color: var(--border-strong); color: var(--text-primary); }
 .int-title { font-size: 30px; font-weight: 700; color: var(--text-primary); margin: 0 0 6px; letter-spacing: -0.03em; }
 .int-subtitle { font-size: 14px; color: var(--text-secondary); margin: 0; }
 .int-header-badges { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .int-header-badge {
     display: flex; align-items: center; gap: 7px;
     font-size: 12px; color: var(--success);
-    background: rgba(3, 248, 117, 0.045); border: 1px solid var(--border-default);
-    padding: 9px 14px; border-radius: 999px;
-    backdrop-filter: blur(16px);
+    background: var(--bg-elevated); border: 1px solid var(--border-default);
+    padding: 9px 14px; border-radius: var(--radius-sm);
 }
 .int-header-badge--error {
     color: var(--danger);
@@ -1832,7 +1828,6 @@ async function removeIntegration(type) {
 .badge-dot-warn {
     width: 7px; height: 7px; border-radius: 50%;
     background: var(--danger); display: inline-block;
-    box-shadow: 0 0 8px rgba(255, 107, 127, 0.6);
     animation: warn-pulse 2s infinite;
 }
 @keyframes warn-pulse {
@@ -1843,38 +1838,32 @@ async function removeIntegration(type) {
 .int-search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-muted); }
 .int-search {
     width: 100%; padding: 13px 14px 13px 40px;
-    background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border-default);
-    border-radius: 999px; color: var(--text-primary); font-size: 13px;
+    background: var(--bg-elevated); border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm); color: var(--text-primary); font-size: 13px;
     outline: none; box-sizing: border-box; transition: border-color 0.15s, box-shadow 0.15s;
-    backdrop-filter: blur(16px);
 }
-.int-search:focus { border-color: var(--border-strong); box-shadow: 0 0 0 4px rgba(82, 212, 255, 0.08); }
+.int-search:focus { border-color: var(--accent); box-shadow: 0 0 0 4px rgba(79, 140, 255, 0.08); }
 
 .int-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 18px; }
 .int-card {
-    background: var(--surface-glass-strong); border: 1px solid var(--border-default);
-    border-radius: 28px; overflow: hidden; cursor: pointer; transition: all 0.2s;
-    box-shadow: var(--shadow-sm); backdrop-filter: blur(24px);
+    background: var(--bg-surface); border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg); overflow: hidden; cursor: pointer; transition: all 0.15s;
 }
-.int-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow-md); transform: translateY(-2px); }
+.int-card:hover { border-color: var(--border-strong); }
 .int-card.connected {
     border-color: rgba(47, 211, 157, 0.26);
-    background:
-        linear-gradient(135deg, rgba(47, 211, 157, 0.08), transparent 40%),
-        var(--surface-glass-strong);
+    background: var(--bg-surface);
 }
 .int-card.health-error {
     border-color: rgba(255, 107, 127, 0.3);
-    background:
-        linear-gradient(135deg, rgba(255, 107, 127, 0.06), transparent 40%),
-        var(--surface-glass-strong);
+    background: var(--bg-surface);
 }
-.int-card.expanded { border-color: rgba(82, 212, 255, 0.24); box-shadow: 0 0 0 1px rgba(82, 212, 255, 0.12), var(--shadow-md); }
+.int-card.expanded { border-color: rgba(79, 140, 255, 0.24); }
 .int-card-top { display: flex; align-items: center; gap: 16px; padding: 22px 22px; min-width: 0; }
 .int-card-icon {
-    width: 54px; height: 54px; border-radius: 18px; display: flex; align-items: center; justify-content: center;
+    width: 54px; height: 54px; border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center;
     flex-shrink: 0; padding: 10px; box-sizing: border-box; overflow: hidden;
-    border: 1px solid rgba(255,255,255,0.08); box-shadow: inset 0 1px 0 rgba(255,255,255,0.12), 0 12px 26px rgba(2, 8, 24, 0.18);
+    border: 1px solid var(--border-subtle);
 }
 .int-card-icon--gmail {
     background: linear-gradient(180deg, #ffffff, #f7f8fc) !important;
@@ -1913,7 +1902,7 @@ async function removeIntegration(type) {
     color: #f7c96b;
     font-weight: 600;
     padding: 4px 9px;
-    border-radius: 999px;
+    border-radius: var(--radius-sm);
     border: 1px solid rgba(247, 201, 107, 0.2);
     background: rgba(247, 201, 107, 0.08);
 }
@@ -1922,12 +1911,12 @@ async function removeIntegration(type) {
     color: var(--danger);
     font-weight: 600;
     padding: 4px 9px;
-    border-radius: 999px;
+    border-radius: var(--radius-sm);
     border: 1px solid rgba(255, 107, 127, 0.18);
     background: rgba(255, 107, 127, 0.08);
 }
 .badge-disconnected { font-size: 11px; color: var(--text-muted); }
-.badge-soon { font-size: 10px; font-weight: 700; background: rgba(242, 198, 109, 0.12); color: var(--accent-warm); padding: 4px 9px; border-radius: 999px; border: 1px solid rgba(242, 198, 109, 0.18); }
+.badge-soon { font-size: 10px; font-weight: 700; background: rgba(242, 198, 109, 0.12); color: var(--accent-warm); padding: 4px 9px; border-radius: var(--radius-sm); border: 1px solid rgba(242, 198, 109, 0.18); }
 .badge-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); display: inline-block; }
 .badge-dot.green { background: #10b981; }
 
@@ -1944,12 +1933,12 @@ async function removeIntegration(type) {
 .int-help-link:hover { text-decoration: underline; }
 .int-input {
     width: 100%; padding: 12px 14px;
-    background: rgba(255, 255, 255, 0.045); border: 1px solid var(--border-default);
-    border-radius: 18px; color: var(--text-primary); font-size: 13px;
+    background: var(--bg-elevated); border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm); color: var(--text-primary); font-size: 13px;
     outline: none; box-sizing: border-box; transition: border-color 0.15s, box-shadow 0.15s;
     font-family: var(--font-mono);
 }
-.int-input:focus { border-color: var(--border-strong); box-shadow: 0 0 0 4px rgba(82, 212, 255, 0.08); }
+.int-input:focus { border-color: var(--accent); box-shadow: 0 0 0 4px rgba(79, 140, 255, 0.08); }
 select.int-input { cursor: pointer; }
 .int-secret-wrap {
     position: relative;
@@ -1964,7 +1953,7 @@ select.int-input { cursor: pointer; }
     transform: translateY(-50%);
     width: 30px;
     height: 30px;
-    border-radius: 999px;
+    border-radius: var(--radius-sm);
     border: 1px solid transparent;
     background: transparent;
     color: var(--text-muted);
@@ -1981,8 +1970,8 @@ select.int-input { cursor: pointer; }
 }
 
 .int-setup-steps {
-    background: rgba(255, 255, 255, 0.035); border: 1px solid var(--border-subtle);
-    border-radius: 20px; padding: 14px 16px; margin-bottom: 14px;
+    background: var(--bg-elevated); border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md); padding: 14px 16px; margin-bottom: 14px;
 }
 .int-steps-title { font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.04em; }
 .int-steps-list { margin: 0; padding-left: 18px; font-size: 12px; color: var(--text-secondary); line-height: 1.8; }
@@ -1990,7 +1979,7 @@ select.int-input { cursor: pointer; }
 .int-oauth-block {
     display: flex; align-items: center; gap: 14px;
     background: rgba(255, 255, 255, 0.035); border: 1px solid var(--border-subtle);
-    border-radius: 22px; padding: 18px; margin-bottom: 14px;
+    border-radius: var(--radius-lg); padding: 18px; margin-bottom: 14px;
 }
 .int-oauth-text { flex: 1; min-width: 0; }
 .int-oauth-title { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 2px; }
@@ -1998,7 +1987,7 @@ select.int-input { cursor: pointer; }
 .int-signal-panel {
     background: rgba(255, 255, 255, 0.035);
     border: 1px solid var(--border-subtle);
-    border-radius: 22px;
+    border-radius: var(--radius-lg);
     padding: 18px;
     margin-bottom: 14px;
 }
@@ -2023,7 +2012,7 @@ select.int-input { cursor: pointer; }
     width: 144px;
     height: 144px;
     object-fit: contain;
-    border-radius: 18px;
+    border-radius: var(--radius-md);
     padding: 10px;
     background: #fff;
     border: 1px solid rgba(255, 255, 255, 0.12);
@@ -2035,7 +2024,7 @@ select.int-input { cursor: pointer; }
 .int-signal-qr-placeholder {
     width: 144px;
     height: 144px;
-    border-radius: 18px;
+    border-radius: var(--radius-md);
     border: 1px dashed var(--border-default);
     background: rgba(255, 255, 255, 0.04);
     color: var(--text-secondary);
@@ -2058,14 +2047,14 @@ select.int-input { cursor: pointer; }
 
 .int-actions { display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
 .int-btn {
-    padding: 10px 16px; border-radius: 999px; font-size: 13px; font-weight: 600;
+    padding: 10px 16px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600;
     cursor: pointer; border: 1px solid transparent; display: flex; align-items: center;
     gap: 6px; transition: all 0.15s;
 }
 .int-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 .int-btn-test { background: rgba(255, 255, 255, 0.045); border-color: var(--border-default); color: var(--text-primary); }
 .int-btn-test:hover:not(:disabled) { background: rgba(255, 255, 255, 0.07); border-color: var(--border-strong); transform: translateY(-1px); }
-.int-btn-save { background: linear-gradient(135deg, rgba(82, 212, 255, 0.94), rgba(139, 125, 255, 0.84)); color: white; border-color: rgba(255,255,255,0.12); }
+.int-btn-save { background: var(--accent); color: white; border-color: rgba(255,255,255,0.12); }
 .int-btn-save:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--shadow-accent); }
 .int-btn-remove { background: transparent; border-color: rgba(255,107,127,0.26); color: var(--danger); margin-left: auto; }
 .int-btn-remove:hover:not(:disabled) { background: rgba(255,107,127,0.08); }
@@ -2092,7 +2081,7 @@ select.int-input { cursor: pointer; }
 .int-oauth-connected {
     padding: 12px 14px;
     background: rgba(47,211,157,0.08); border: 1px solid rgba(47,211,157,0.18);
-    border-radius: 20px; margin-bottom: 12px;
+    border-radius: var(--radius-md); margin-bottom: 12px;
 }
 .int-oauth-connected-row {
     display: flex;
@@ -2113,7 +2102,7 @@ select.int-input { cursor: pointer; }
 .int-oauth-reconnect-btn {
     margin-left: auto;
     flex-shrink: 0;
-    font-size: 11.5px; padding: 7px 11px; border-radius: 999px;
+    font-size: 11.5px; padding: 7px 11px; border-radius: var(--radius-sm);
     border: 1px solid var(--border-default); background: rgba(255,255,255,0.045);
     color: var(--text-secondary); cursor: pointer; transition: all 0.15s;
 }
@@ -2160,9 +2149,9 @@ select.int-input { cursor: pointer; }
 
 .int-modal {
     width: min(100%, 520px);
-    background: linear-gradient(180deg, rgba(17, 24, 39, 0.98), rgba(10, 15, 27, 0.98));
+    background: var(--bg-surface);
     border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 28px;
+    border-radius: var(--radius-lg);
     box-shadow: 0 30px 80px rgba(0, 0, 0, 0.42);
     padding: 22px;
 }
@@ -2191,7 +2180,7 @@ select.int-input { cursor: pointer; }
 .int-modal-close {
     width: 38px;
     height: 38px;
-    border-radius: 999px;
+    border-radius: var(--radius-sm);
     border: 1px solid var(--border-default);
     background: rgba(255, 255, 255, 0.04);
     color: var(--text-secondary);
@@ -2345,7 +2334,7 @@ select.int-input { cursor: pointer; }
 
     .int-card,
     .int-modal {
-        border-radius: 22px;
+        border-radius: var(--radius-lg);
     }
 
     .int-card-top,

@@ -184,11 +184,9 @@ onMounted(load)
   display: flex;
   flex-direction: column;
   gap: 16px;
-  border-radius: 22px;
-  border: 1px solid rgba(176, 201, 255, 0.12);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.012)),
-    rgba(9, 14, 30, 0.78);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
   box-shadow: 0 14px 34px rgba(2, 8, 24, 0.18);
   color: var(--text-primary);
 }
@@ -204,7 +202,7 @@ onMounted(load)
   display: inline-flex;
   align-items: center;
   white-space: nowrap;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   padding: 9px 18px;
   font: inherit;
   font-weight: 500;
@@ -215,10 +213,10 @@ onMounted(load)
 }
 .sb-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 .sb-btn--primary {
-  color: #050816;
-  background: linear-gradient(135deg, rgba(82, 212, 255, 0.92), rgba(139, 125, 255, 0.82));
-  border-color: rgba(82, 212, 255, 0.42);
-  box-shadow: 0 18px 38px rgba(82, 212, 255, 0.18);
+  color: white;
+  background: var(--accent);
+  border-color: rgba(79, 140, 255, 0.42);
+  
 }
 .sb-btn--primary:hover:not(:disabled) { transform: translateY(-1px); }
 .sb-card-head h3 {
@@ -240,12 +238,12 @@ onMounted(load)
   letter-spacing: 0.18em;
   font-size: 10.5px;
   font-weight: 600;
-  color: rgba(82, 212, 255, 0.78);
+  color: rgba(79, 140, 255, 0.78);
 }
 .sb-card-empty {
-  border-radius: 14px;
+  border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.025);
-  border: 1px solid rgba(176, 201, 255, 0.08);
+  border: 1px solid var(--border-subtle);
   padding: 16px;
   display: flex;
   flex-direction: column;
@@ -260,9 +258,9 @@ onMounted(load)
   gap: 10px;
 }
 .sb-stat {
-  border-radius: 14px;
-  background: rgba(8, 14, 30, 0.45);
-  border: 1px solid rgba(176, 201, 255, 0.1);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
   padding: 12px 14px;
   display: flex;
   flex-direction: column;

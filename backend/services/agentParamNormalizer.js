@@ -83,16 +83,16 @@ function extractNamedRecipient(text = "", platform = "") {
 
   const patternsByPlatform = {
     telegram: [
-      /\b(?:send|message|tell|notify|reply to)\s+.+?\s+to\s+([a-z][a-z0-9.'@_-]*(?:\s+[a-z][a-z0-9.'@_-]*){0,4})\s+(?:on|via)\s+telegram\b/i,
-      /\bto\s+([a-z][a-z0-9.'@_-]*(?:\s+[a-z][a-z0-9.'@_-]*){0,4})\s+(?:on|via)\s+telegram\b/i,
+      /\b(?:send|message|tell|notify|reply to)\s+.+?\s+to\s+([a-z][a-z0-9.'@_-]*(?:\s+[a-z][a-z0-9.'@_-]*){0,4})\s+(?:on|in|via)\s+telegram\b/i,
+      /\bto\s+([a-z][a-z0-9.'@_-]*(?:\s+[a-z][a-z0-9.'@_-]*){0,4})\s+(?:on|in|via)\s+telegram\b/i,
     ],
     slack: [
-      /\b(?:send|message|tell|notify|reply to)\s+.+?\s+to\s+([#a-z][a-z0-9._-]*(?:\s+[a-z][a-z0-9._-]*){0,3})\s+(?:on|via)\s+slack\b/i,
-      /\bto\s+([#a-z][a-z0-9._-]*(?:\s+[a-z][a-z0-9._-]*){0,3})\s+(?:on|via)\s+slack\b/i,
+      /\b(?:send|message|tell|notify|reply to)\s+.+?\s+to\s+([#a-z][a-z0-9._-]*(?:\s+[a-z][a-z0-9._-]*){0,3})\s+(?:on|in|via)\s+slack\b/i,
+      /\bto\s+([#a-z][a-z0-9._-]*(?:\s+[a-z][a-z0-9._-]*){0,3})\s+(?:on|in|via)\s+slack\b/i,
     ],
     whatsapp: [
-      /\b(?:send|message|tell|notify|reply to)\s+.+?\s+to\s+([a-z0-9+][a-z0-9+ .@_-]*(?:\s+[a-z0-9+][a-z0-9+ .@_-]*){0,4})\s+(?:on|via)\s+whatsapp\b/i,
-      /\bto\s+([a-z0-9+][a-z0-9+ .@_-]*(?:\s+[a-z0-9+][a-z0-9+ .@_-]*){0,4})\s+(?:on|via)\s+whatsapp\b/i,
+      /\b(?:send|message|tell|notify|reply to)\s+.+?\s+to\s+([a-z0-9+][a-z0-9+ .@_-]*(?:\s+[a-z0-9+][a-z0-9+ .@_-]*){0,4})\s+(?:on|in|via)\s+whatsapp\b/i,
+      /\bto\s+([a-z0-9+][a-z0-9+ .@_-]*(?:\s+[a-z0-9+][a-z0-9+ .@_-]*){0,4})\s+(?:on|in|via)\s+whatsapp\b/i,
     ],
   };
 
@@ -105,6 +105,93 @@ function extractNamedRecipient(text = "", platform = "") {
   }
 
   return null;
+}
+
+const DRAFT_MESSAGE_TOPIC_RE =
+  /\b(romantic|flirty|love|birthday|anniversary|apology|professional|formal|funny|sweet|motivational|congratulatory|invitation|reminder|follow[-\s]?up|acknowledg(?:e|ement|ment)?|draft|write|compose|about|regarding|topic)\b/i;
+
+const NON_EXACT_MESSAGE_CONTEXT_RE =
+  /\b(invoice|bill|document|pdf|file|attachment|report|latest|recent|last|newest|ticket|issue|task|meeting|calendar|event|schedule|summary|digest)\b/i;
+
+function cleanExactMessageCandidate(value = "", options = {}) {
+  const candidate = normalizeNameCandidate(value)
+    .replace(/\s+(?:message|msg|text)$/i, "")
+    .trim();
+  if (!candidate) return null;
+  if (DRAFT_MESSAGE_TOPIC_RE.test(candidate)) return null;
+  if (options.rejectContext && NON_EXACT_MESSAGE_CONTEXT_RE.test(candidate)) {
+    return null;
+  }
+  return candidate;
+}
+
+function escapeRegExp(value = "") {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function extractMessagingExactMessage(text = "", platform = "") {
+  const source = String(text || "").replace(/\s+/g, " ").trim();
+  const platformName = String(platform || "").trim().toLowerCase();
+  if (!source || !platformName) return null;
+
+  const platformRe = escapeRegExp(platformName);
+  const platformMention = new RegExp(`\\b${platformRe}\\b`, "i");
+  if (!platformMention.test(source)) return null;
+
+  const quoted = source.match(/["']([^"']{1,500})["']/);
+  if (quoted) {
+    return cleanExactMessageCandidate(quoted[1]);
+  }
+
+  const patterns = [
+    new RegExp(
+      `\\b(?:send|message|text)\\s+(.+?)\\s+(?:message|msg|text)\\s+to\\s+.+?\\s+(?:on|in|via)\\s+${platformRe}\\b`,
+      "i"
+    ),
+    new RegExp(
+      `\\b(?:send|message|text)\\s+(?:message|msg|text)\\s+(.+?)\\s+to\\s+.+?\\s+(?:on|in|via)\\s+${platformRe}\\b`,
+      "i"
+    ),
+    new RegExp(
+      `\\b(?:send|message|text)\\s+(.+?)\\s+to\\s+.+?\\s+(?:on|in|via)\\s+${platformRe}\\b`,
+      "i"
+    ),
+    new RegExp(
+      `\\b(?:message|text|tell|notify)\\s+.+?\\s+(?:on|in|via)\\s+${platformRe}\\s+(?:that|saying|with text)\\s+(.+?)$`,
+      "i"
+    ),
+    new RegExp(
+      `\\b(?:saying|that says|with text)\\s+(.+?)\\s+to\\s+.+?\\s+(?:on|in|via)\\s+${platformRe}\\b`,
+      "i"
+    ),
+  ];
+
+  for (const pattern of patterns) {
+    const match = source.match(pattern);
+    if (!match) continue;
+    const candidate = cleanExactMessageCandidate(match[1], {
+      rejectContext: pattern === patterns[2],
+    });
+    if (candidate) return candidate;
+  }
+
+  return null;
+}
+
+function extractTelegramExactMessage(text = "") {
+  return extractMessagingExactMessage(text, "telegram");
+}
+
+function markExactMessagingSend(params, userMessage, platform) {
+  delete params.messageSource;
+  delete params.skipConfirmation;
+
+  const exactMessage = extractMessagingExactMessage(userMessage, platform);
+  if (!exactMessage) return;
+
+  params.message = exactMessage;
+  params.messageSource = "user_exact";
+  params.skipConfirmation = true;
 }
 
 function extractEmails(text = "") {
@@ -134,11 +221,9 @@ function isIsoDateTime(value = "") {
 }
 
 function addDays(dateKey, days) {
-  const base = new Date(`${dateKey}T00:00:00${APP_TIMEZONE_OFFSET}`);
+  const base = new Date(`${dateKey}T12:00:00${APP_TIMEZONE_OFFSET}`);
   base.setUTCDate(base.getUTCDate() + days);
-  return `${base.getUTCFullYear()}-${pad(base.getUTCMonth() + 1)}-${pad(
-    base.getUTCDate()
-  )}`;
+  return getTimezoneDateKey(base);
 }
 
 function nextWeekdayDateKey(baseDateKey, weekdayIndex) {
@@ -272,6 +357,59 @@ function extractMeetingTitle(text = "") {
   return null;
 }
 
+function stripCalendarTitleNoise(value = "") {
+  let candidate = normalizeNameCandidate(value);
+  if (!candidate) return null;
+
+  candidate = candidate
+    .replace(/\b(?:today's|tomorrow's|today|tomorrow|upcoming|scheduled)\b/gi, " ")
+    .replace(
+      /\b(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/gi,
+      " "
+    )
+    .replace(
+      /\b(?:on\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi,
+      " "
+    )
+    .replace(/\bnext\s+(?:week|month)\b/gi, " ")
+    .replace(/\b(?:meeting|call|event|session|appointment)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return normalizeNameCandidate(candidate) || null;
+}
+
+function extractCalendarDeleteTitle(text = "") {
+  const source = String(text || "").replace(/\s+/g, " ").trim();
+  if (!source) return null;
+
+  const quoted = source.match(/["']([^"']{2,120})["']/);
+  if (quoted) return stripCalendarTitleNoise(quoted[1]);
+
+  const namedPatterns = [
+    /\b(?:called|named|titled|about|regarding)\s+(.+?)(?:\s+(?:today|tomorrow|on\s+\d|at\s+\d{1,2}|next\s+\w+)|,|$)/i,
+    /\b(?:delete|cancel|remove)\s+(?:my\s+|the\s+|a\s+|an\s+)?(?:meeting|call|event|session|appointment)\s+for\s+(.+?)(?:\s+(?:today|tomorrow|on\s+\d|at\s+\d{1,2}|next\s+\w+)|,|$)/i,
+  ];
+
+  for (const pattern of namedPatterns) {
+    const match = source.match(pattern);
+    if (!match) continue;
+    const candidate = stripCalendarTitleNoise(match[1]);
+    if (candidate) return candidate;
+  }
+
+  let candidate = source
+    .replace(/^\s*(?:please\s+)?(?:delete|cancel|remove)\s+/i, "")
+    .replace(/^(?:my\s+|the\s+|a\s+|an\s+)/i, "")
+    .replace(/^(?:today's|tomorrow's|today|tomorrow|upcoming|scheduled)\s+/i, "")
+    .replace(/^(?:meeting|call|event|session|appointment)\s+/i, "")
+    .replace(/^(?:with|for|about|regarding|called|named|titled)\s+/i, "")
+    .replace(/\s+(?:today|tomorrow|on\s+\d|at\s+\d{1,2}|next\s+\w+).*$/i, "")
+    .replace(/(?:\s+)?(?:meeting|call|event|session|appointment)$/i, "");
+
+  return stripCalendarTitleNoise(candidate);
+}
+
 // ── Main normalizer ───────────────────────────────────────────────────────────
 
 function normalizeStepParams(step, userMessage = "", options = {}) {
@@ -313,6 +451,10 @@ function normalizeStepParams(step, userMessage = "", options = {}) {
       params.channel = extractNamedRecipient(userMessage, "slack");
     }
     if (params.channel) params.channel = normalizeSlackChannel(params.channel);
+
+    if (step.tool === "slack_send_message") {
+      markExactMessagingSend(params, userMessage, "slack");
+    }
   }
 
   // ── Telegram ──────────────────────────────────────────────────────────────
@@ -321,6 +463,10 @@ function normalizeStepParams(step, userMessage = "", options = {}) {
       params.contact = extractNamedRecipient(userMessage, "telegram");
     }
     if (params.contact) params.contact = normalizeTelegramContact(params.contact);
+
+    if (step.tool === "telegram_send_message") {
+      markExactMessagingSend(params, userMessage, "telegram");
+    }
   }
 
   // ── WhatsApp ──────────────────────────────────────────────────────────────
@@ -331,6 +477,10 @@ function normalizeStepParams(step, userMessage = "", options = {}) {
         params.contact = recipient;
         params.to = recipient;
       }
+    }
+
+    if (step.tool === "whatsapp_send_message") {
+      markExactMessagingSend(params, userMessage, "whatsapp");
     }
   }
 
@@ -380,6 +530,22 @@ function normalizeStepParams(step, userMessage = "", options = {}) {
     }
   }
 
+  if (step.tool === "calendar_delete") {
+    if (!params.eventId) {
+      const hasSpecificTitle = Boolean(stripCalendarTitleNoise(params.title));
+      if (!hasSpecificTitle) {
+        const title = extractCalendarDeleteTitle(userMessage);
+        if (title) params.title = title;
+      }
+    }
+
+    const dateKey = extractDateKey(userMessage, baseDate);
+    if (dateKey) {
+      if (!params.dateFrom) params.dateFrom = dateKey;
+      if (!params.dateTo) params.dateTo = dateKey;
+    }
+  }
+
   return { ...step, params };
 }
 
@@ -389,9 +555,12 @@ module.exports = {
     cleanupAssigneeCandidate,
     extractAssigneeFromMessage,
     extractNamedRecipient,
+    extractMessagingExactMessage,
+    extractTelegramExactMessage,
     extractEmails,
     extractDurationMinutes,
     extractCalendarStartDateTime,
     extractMeetingTitle,
+    extractCalendarDeleteTitle,
   },
 };

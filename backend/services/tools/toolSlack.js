@@ -148,6 +148,26 @@ async function resolveChannelId(token, channelName) {
   );
 }
 
+async function resolveSlackConversation(params = {}, ctx) {
+  const channel = String(params.channel || "").trim();
+  if (!channel) {
+    return {
+      ok: false,
+      channel,
+      summary: "Slack channel or user name is required",
+    };
+  }
+
+  const token = await getToken(ctx.userId);
+  const channelId = await resolveChannelId(token, channel);
+  return {
+    ok: true,
+    channel,
+    channelId,
+    summary: `Slack conversation found: ${channel}`,
+  };
+}
+
 // ── Main tool function ─────────────────────────────────────────────────────
 async function toolSlack(params, ctx) {
   const { action = "read", channel, message, limit = 10 } = params;
@@ -275,4 +295,4 @@ async function toolSendSlack(params, ctx) {
   return toolSlack({ action: "send", ...params }, ctx);
 }
 
-module.exports = { toolSlack, toolSendSlack };
+module.exports = { toolSlack, toolSendSlack, resolveSlackConversation };

@@ -130,7 +130,7 @@ function permissions(runtime = {}) {
   return runtime.getPermissions?.() || {};
 }
 
-export async function executeGoogleSheetsAssistantCommand({ question, runtime }) {
+export async function executeGoogleSheetsAssistantCommand({ question, runtime, conversationHistory = [] }) {
   const normalized = normalizeQuestion(question);
   if (!runtime.getActiveEntityId?.()) {
     return {
@@ -364,6 +364,7 @@ export async function executeGoogleSheetsAssistantCommand({ question, runtime })
     const data = await runtime.runAiAction?.({
       action: "formula_help",
       question: normalized,
+      conversationHistory,
     });
     if (!isStillActive()) {
       return {
@@ -382,11 +383,14 @@ export async function executeGoogleSheetsAssistantCommand({ question, runtime })
       ? "forecast"
       : intent.action === "summarize_sheet"
         ? "summarize_sheet"
-        : "analyze_data";
+        : intent.action === "chat"
+          ? "chat"
+          : "analyze_data";
 
   const data = await runtime.runAiAction?.({
     action,
     question: normalized,
+    conversationHistory,
   });
 
   if (!isStillActive()) {

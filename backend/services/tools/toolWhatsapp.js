@@ -66,6 +66,105 @@ function formatMessageForTool(message = {}) {
   };
 }
 
+function getWhatsAppTarget(params = {}) {
+  return String(
+    params?.to || params?.contact || params?.phone || params?.chatId || params?.roomId || ""
+  ).trim();
+}
+
+function normalizeWhatsAppLookupValue(value = "") {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function normalizeWhatsAppLookupDigits(value = "") {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function chatMatchesWhatsAppTarget(chat = {}, target = "") {
+  const query = normalizeWhatsAppLookupValue(target);
+  if (!query) return false;
+
+  const fields = [
+    chat.roomId,
+    chat.id,
+    chat.title,
+    chat.name,
+    chat.phoneNumber,
+    chat.contactJid,
+    chat.canonicalContactJid,
+    chat.fullName,
+    chat.pushName,
+    chat.businessName,
+  ].filter(Boolean);
+
+  if (
+    fields.some((field) => normalizeWhatsAppLookupValue(field) === query)
+  ) {
+    return true;
+  }
+
+  const targetDigits = normalizeWhatsAppLookupDigits(target);
+  if (targetDigits.length >= 6) {
+    return fields.some((field) => {
+      const fieldDigits = normalizeWhatsAppLookupDigits(field);
+      return (
+        fieldDigits.length >= 6 &&
+        (fieldDigits === targetDigits ||
+          fieldDigits.endsWith(targetDigits) ||
+          targetDigits.endsWith(fieldDigits))
+      );
+    });
+  }
+
+  return fields.some((field) => {
+    const value = normalizeWhatsAppLookupValue(field);
+    return value && value.includes(query);
+  });
+}
+
+function pickWhatsAppTargetChat(chats = [], target = "") {
+  return (
+    chats.find((chat) => chatMatchesWhatsAppTarget(chat, target)) || null
+  );
+}
+
+async function resolveWhatsAppTarget(params = {}, ctx) {
+  const { userId } = ctx;
+  const target = getWhatsAppTarget(params);
+
+  if (!target) {
+    return {
+      ok: false,
+      target,
+      summary: "WhatsApp contact is required",
+    };
+  }
+
+  const chats = await listWhatsAppChats(userId, { limit: 200 });
+  const chat = pickWhatsAppTargetChat(chats, target);
+
+  if (!chat) {
+    return {
+      ok: false,
+      target,
+      summary: `No WhatsApp contact found for: ${target}`,
+    };
+  }
+
+  return {
+    ok: true,
+    target,
+    chat,
+    chatId: chat.roomId || chat.id || target,
+    roomId: chat.roomId || chat.id || target,
+    name: chat.title || chat.name || target,
+    summary: `WhatsApp contact found: ${chat.title || chat.name || target}`,
+  };
+}
+
 async function whatsappConnect(params, ctx) {
   const { userId } = ctx;
   const result = await connectWhatsAppIntegration(userId, params || {});
@@ -92,7 +191,7 @@ async function whatsappDisconnect(params, ctx) {
 
 async function whatsappSend(params, ctx) {
   const { userId } = ctx;
-  const target = String(params?.to || params?.contact || "").trim();
+  const target = getWhatsAppTarget(params);
   const message = String(params?.message || params?.text || "").trim();
 
   if (!target || !message) {
@@ -216,5 +315,10 @@ async function getOrCreateClient() {
 module.exports = {
   toolWhatsApp,
   whatsappGetUnread,
+  resolveWhatsAppTarget,
+  __test: {
+    chatMatchesWhatsAppTarget,
+    pickWhatsAppTargetChat,
+  },
   getOrCreateClient,
 };

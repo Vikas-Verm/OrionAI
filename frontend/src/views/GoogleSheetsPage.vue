@@ -2289,10 +2289,11 @@ function buildSheetsRuntime() {
     getPermissions: () => currentPermissions.value,
     getActiveCell: () => currentCell.value,
     getActiveRangeLabel: () => selectedRangeLabel.value,
-    runAiAction: ({ action, question }) =>
+    runAiAction: ({ action, question, conversationHistory: history }) =>
       runAiAction({
         action,
         question,
+        conversationHistory: history,
         workbookTitle: currentWorkbook.value?.title,
         activeSheet: currentSheet.value,
         selection: normalizedSelection.value,
@@ -2339,10 +2340,17 @@ async function handleAiSend(question) {
 
   const requestId = ++aiRequestCounter.value;
   try {
+    // Pass recent conversation history for context continuity
+    const recentHistory = aiMessages.value
+      .slice(-10)
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .map((m) => ({ role: m.role, text: m.text }));
+
     const result = await executeScopedAssistantCommand({
       question: trimmed,
       scope: "google_sheets",
       runtime: buildSheetsRuntime(),
+      conversationHistory: recentHistory,
     });
     if (requestId !== aiRequestCounter.value) return;
     aiMessages.value.push({
@@ -2801,6 +2809,15 @@ async function handleGridKeydown(event) {
     } else if (key === "f") {
       event.preventDefault();
       findDialogOpen.value = true;
+    } else if (key === "b") {
+      event.preventDefault();
+      await applyUniformFormat({ bold: !currentCellFormat.value?.bold });
+    } else if (key === "i") {
+      event.preventDefault();
+      await applyUniformFormat({ italic: !currentCellFormat.value?.italic });
+    } else if (key === "u") {
+      event.preventDefault();
+      await applyUniformFormat({ underline: !currentCellFormat.value?.underline });
     }
     return;
   }
@@ -2913,6 +2930,8 @@ watch(
     if (spreadsheetId !== previousSpreadsheetId || activeSheetId !== previousActiveSheetId) {
       resetSelection();
       filterDraft.columnIndex = 0;
+      aiRequestCounter.value += 1;
+      aiMessages.value = [];
     }
     syncDraftsToSelection();
     sheetMenuSheetId.value = null;
@@ -2963,12 +2982,7 @@ onBeforeUnmount(() => {
   min-width: 0;
   min-height: 0;
   background:
-    linear-gradient(rgba(96, 124, 176, 0.04) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(96, 124, 176, 0.04) 1px, transparent 1px),
-    radial-gradient(circle at 18% 6%, rgba(52, 211, 153, 0.08), transparent 24%),
-    linear-gradient(180deg, #09131f 0%, #08111b 100%);
-  background-size: 120px 120px, 120px 120px, auto, auto;
-  background-position: 0 0, 0 0, 0 0, 0 0;
+    var(--bg-base);
 }
 
 .gs-shell {
@@ -2991,7 +3005,7 @@ onBeforeUnmount(() => {
   max-width: 440px;
   padding: 28px;
   text-align: center;
-  border-radius: 24px;
+  border-radius: var(--radius-lg);
   background: rgba(10, 18, 31, 0.9);
   border: 1px solid rgba(148, 163, 184, 0.12);
 }
@@ -3011,8 +3025,8 @@ onBeforeUnmount(() => {
 .gs-state-btn {
   margin-top: 18px;
   border: 0;
-  border-radius: 14px;
-  background: linear-gradient(180deg, #4c83ff, #3f6dff);
+  border-radius: var(--radius-md);
+  background: var(--accent);
   color: white;
   font-weight: 700;
   padding: 11px 16px;
@@ -3029,7 +3043,7 @@ onBeforeUnmount(() => {
 .gs-spinner {
   width: 18px;
   height: 18px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   border: 2px solid rgba(255, 255, 255, 0.22);
   border-top-color: #6b9bff;
   animation: gs-spin 0.9s linear infinite;
@@ -3040,11 +3054,10 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 6px;
   padding: 10px 10px 8px;
-  border-radius: 18px 18px 14px 14px;
-  background: linear-gradient(180deg, rgba(13, 19, 32, 0.98), rgba(11, 17, 28, 0.96));
-  border: 1px solid rgba(176, 201, 255, 0.06);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
-}
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  }
 
 .gs-top-shell-main {
   overflow: visible;
@@ -3150,7 +3163,7 @@ onBeforeUnmount(() => {
 .gs-save-dot {
   width: 6px;
   height: 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: #34d399;
 }
 
@@ -3173,10 +3186,10 @@ onBeforeUnmount(() => {
 .gs-share-btn,
 .gs-plus-btn,
 .gs-mobile-pill {
-  border: 1px solid rgba(176, 201, 255, 0.08);
-  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
   color: rgba(228, 236, 250, 0.82);
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font: inherit;
   font-size: 12px;
@@ -3244,9 +3257,9 @@ onBeforeUnmount(() => {
   left: 0;
   min-width: 190px;
   padding: 8px;
-  border-radius: 14px;
+  border-radius: var(--radius-md);
   background: rgba(10, 16, 28, 0.98);
-  border: 1px solid rgba(176, 201, 255, 0.12);
+  border: 1px solid var(--border-default);
   box-shadow: 0 14px 36px rgba(2, 8, 24, 0.34);
   z-index: 16;
 }
@@ -3290,7 +3303,7 @@ onBeforeUnmount(() => {
 }
 
 .gs-popover button:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--bg-elevated);
   color: white;
 }
 
@@ -3313,8 +3326,8 @@ onBeforeUnmount(() => {
 .gs-modal-input {
   height: 34px;
   border-radius: 12px;
-  border: 1px solid rgba(176, 201, 255, 0.08);
-  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
   color: #eef4ff;
   padding: 0 12px;
   outline: none;
@@ -3332,7 +3345,7 @@ onBeforeUnmount(() => {
   width: 34px;
   height: 34px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--bg-surface);
   color: #aeb8d0;
   font-weight: 700;
 }
@@ -3372,11 +3385,10 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 10px;
   padding: 8px 8px 10px;
-  border-radius: 18px;
-  background: linear-gradient(180deg, rgba(16, 23, 38, 0.96), rgba(11, 18, 30, 0.96));
-  border: 1px solid rgba(176, 201, 255, 0.06);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
-}
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  }
 
 .gs-tabsbar,
 .gs-tabsbar-fixed,
@@ -3426,9 +3438,9 @@ onBeforeUnmount(() => {
   align-items: center;
   min-height: 28px;
   padding: 0 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(176, 201, 255, 0.08);
-  background: rgba(255, 255, 255, 0.03);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
   color: rgba(239, 244, 255, 0.86);
   font-size: 12px;
   font-weight: 600;
@@ -3448,7 +3460,7 @@ onBeforeUnmount(() => {
   overflow: hidden;
   outline: none;
   background: #ffffff;
-  border: 1px solid rgba(176, 201, 255, 0.08);
+  border: 1px solid var(--border-subtle);
 }
 
 .gs-chart-grid {
@@ -3463,7 +3475,7 @@ onBeforeUnmount(() => {
   gap: 12px;
   min-height: 34px;
   padding: 0 6px;
-  border-top: 1px solid rgba(176, 201, 255, 0.06);
+  border-top: 1px solid var(--border-subtle);
   padding-top: 10px;
 }
 
@@ -3489,9 +3501,9 @@ onBeforeUnmount(() => {
   width: 28px;
   min-width: 28px;
   min-height: 28px;
-  border: 1px solid rgba(176, 201, 255, 0.08);
+  border: 1px solid var(--border-subtle);
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--bg-elevated);
   color: rgba(228, 236, 250, 0.82);
   cursor: pointer;
   opacity: 0.82;
@@ -3500,7 +3512,7 @@ onBeforeUnmount(() => {
 .gs-status-ok {
   width: 8px;
   height: 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: #34d399;
 }
 
@@ -3512,8 +3524,8 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 8px;
   padding: 10px 8px;
-  border-radius: 18px;
-  border: 1px solid rgba(176, 201, 255, 0.08);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
   background: rgba(20, 29, 47, 0.92);
   z-index: 2;
 }
@@ -3531,8 +3543,8 @@ onBeforeUnmount(() => {
 }
 
 .gs-side-rail-btn:hover {
-  background: rgba(255, 255, 255, 0.06);
-  border-color: rgba(176, 201, 255, 0.08);
+  background: var(--bg-elevated);
+  border-color: var(--border-subtle);
 }
 
 .gs-modal-backdrop {
@@ -3546,7 +3558,7 @@ onBeforeUnmount(() => {
 
 .gs-modal {
   width: min(420px, calc(100vw - 32px));
-  border-radius: 22px;
+  border-radius: var(--radius-lg);
   background: #0d1624;
   border: 1px solid rgba(148, 163, 184, 0.16);
   padding: 22px;
@@ -3574,8 +3586,8 @@ onBeforeUnmount(() => {
   width: 32px;
   height: 32px;
   border-radius: 10px;
-  border: 1px solid rgba(176, 201, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
   color: var(--text-secondary);
   cursor: pointer;
 }
@@ -3609,17 +3621,17 @@ onBeforeUnmount(() => {
   padding: 10px 14px;
   font-weight: 700;
   cursor: pointer;
-  background: linear-gradient(180deg, #4f7cff, #3f6dff);
+  background: var(--accent);
   color: white;
 }
 
 .gs-modal-btn.ghost {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--bg-elevated);
   color: #dce6fa;
 }
 
 .gs-modal-btn.danger {
-  background: linear-gradient(180deg, #fb7185, #ef4444);
+  background: #fb7185;
 }
 
 .gs-recent-list {
@@ -3637,9 +3649,9 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   gap: 12px;
   width: 100%;
-  border: 1px solid rgba(176, 201, 255, 0.08);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
   padding: 12px 14px;
   cursor: pointer;
   text-align: left;
@@ -3675,8 +3687,8 @@ onBeforeUnmount(() => {
 
 .gs-recent-empty {
   padding: 18px 12px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.03);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
   color: #9fb0ca;
   text-align: center;
 }
@@ -3803,7 +3815,7 @@ onBeforeUnmount(() => {
 
   .gs-top-shell {
     padding: 8px;
-    border-radius: 16px 16px 12px 12px;
+    border-radius: var(--radius-md) 16px 12px 12px;
   }
 
   .gs-docbar {
@@ -3869,7 +3881,7 @@ onBeforeUnmount(() => {
   .gs-modal {
     width: 100%;
     padding: 16px;
-    border-radius: 20px;
+    border-radius: var(--radius-md);
   }
 
   .gs-modal-actions {

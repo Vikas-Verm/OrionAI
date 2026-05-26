@@ -670,7 +670,7 @@ function hl(text,q){
 .tgr-btn{width:34px;height:34px;border-radius:50%;border:none;flex-shrink:0;background:rgba(255,255,255,.07);color:#94a3b8;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .12s,color .12s;}
 .tgr-btn:hover{background:rgba(255,255,255,.12);color:#e2e8f0;}
 .tgr-btn.act{color:#229ED9;background:rgba(34,158,217,.12);}
-.tgr-input{flex:1;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);border-radius:20px;padding:8px 12px;color:#e2e8f0;font-size:13px;outline:none;resize:none;min-height:34px;max-height:100px;line-height:1.4;font-family:inherit;transition:border-color .15s;}
+.tgr-input{flex:1;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);border-radius:var(--radius-md);padding:8px 12px;color:#e2e8f0;font-size:13px;outline:none;resize:none;min-height:34px;max-height:100px;line-height:1.4;font-family:inherit;transition:border-color .15s;}
 .tgr-input::placeholder{color:#64748b;}
 .tgr-input:focus{border-color:rgba(34,158,217,.5);background:rgba(34,158,217,.05);}
 .tgr-send{width:34px;height:34px;border-radius:50%;border:none;flex-shrink:0;background:rgba(34,158,217,.3);color:rgba(255,255,255,.4);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .15s,color .15s;}
@@ -697,7 +697,7 @@ function hl(text,q){
 .tgr-vbtn.play{background:rgba(34,158,217,.2);color:#7dd3fc;}
 .tgr-vbtn.discard{background:rgba(239,68,68,.1);color:#fca5a5;}
 /* Toast */
-.tgr-toast{position:absolute;bottom:calc(100% + 6px);right:12px;background:#22c55e;color:#fff;font-size:12px;font-weight:700;padding:5px 14px;border-radius:20px;box-shadow:0 4px 12px rgba(34,197,94,.35);z-index:10;}
+.tgr-toast{position:absolute;bottom:calc(100% + 6px);right:12px;background:#22c55e;color:#fff;font-size:12px;font-weight:700;padding:5px 14px;border-radius:var(--radius-md);box-shadow:0 4px 12px rgba(34,197,94,.35);z-index:10;}
 .tgr-toast-enter-active,.tgr-toast-leave-active{transition:opacity .2s,transform .2s;}
 .tgr-toast-enter-from,.tgr-toast-leave-to{opacity:0;transform:translateY(4px);}
 /* ✅ Lightbox */

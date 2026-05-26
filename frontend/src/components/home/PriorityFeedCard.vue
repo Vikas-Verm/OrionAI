@@ -801,29 +801,26 @@ function joinGoogleMeet() {
   flex-direction: column;
   gap: 10px;
   padding: 14px;
-  border-radius: 20px;
-  border: 1px solid rgba(176, 201, 255, 0.1);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015)),
-    rgba(8, 14, 30, 0.8);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
   box-shadow: 0 24px 56px rgba(2, 6, 23, 0.22);
-  backdrop-filter: blur(20px);
-  transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+    transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
 }
 
 .priority-card:hover {
   transform: translateY(-2px);
-  border-color: rgba(176, 201, 255, 0.16);
+  border-color: var(--border-default);
 }
 
 .priority-card-expanded {
-  border-color: rgba(82, 212, 255, 0.24);
-  box-shadow: 0 28px 72px rgba(82, 212, 255, 0.12);
+  border-color: rgba(79, 140, 255, 0.24);
+  box-shadow: 0 28px 72px rgba(79, 140, 255, 0.12);
 }
 
 .priority-card-unread {
-  border-color: rgba(82, 212, 255, 0.32);
-  box-shadow: 0 0 0 1px rgba(82, 212, 255, 0.18), 0 28px 64px rgba(2, 6, 23, 0.22);
+  border-color: rgba(79, 140, 255, 0.32);
+  box-shadow: 0 0 0 1px rgba(79, 140, 255, 0.18), 0 28px 64px rgba(2, 6, 23, 0.22);
 }
 
 .priority-card-unread .priority-card-headline h4 {
@@ -838,34 +835,28 @@ function joinGoogleMeet() {
   min-width: 22px;
   height: 22px;
   padding: 0 7px;
-  border-radius: 999px;
-  background: linear-gradient(135deg, #52d4ff, #8b7dff);
+  border-radius: var(--radius-sm);
+  background: var(--accent);
   color: #0b1224;
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.02em;
-  box-shadow: 0 0 0 2px rgba(82, 212, 255, 0.18);
+  box-shadow: 0 0 0 2px rgba(79, 140, 255, 0.18);
 }
 
 .priority-high {
-  background:
-    radial-gradient(circle at top right, rgba(255, 107, 127, 0.18), transparent 34%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015)),
-    rgba(9, 13, 27, 0.84);
+  background: var(--bg-surface);
+  border-left: 3px solid rgba(255, 107, 127, 0.6);
 }
 
 .priority-medium {
-  background:
-    radial-gradient(circle at top right, rgba(242, 184, 79, 0.18), transparent 34%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015)),
-    rgba(9, 13, 27, 0.84);
+  background: var(--bg-surface);
+  border-left: 3px solid rgba(242, 184, 79, 0.5);
 }
 
 .priority-low {
-  background:
-    radial-gradient(circle at top right, rgba(47, 211, 157, 0.16), transparent 34%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015)),
-    rgba(9, 13, 27, 0.84);
+  background: var(--bg-surface);
+  border-left: 3px solid rgba(47, 211, 157, 0.4);
 }
 
 .priority-card-top {
@@ -899,7 +890,7 @@ function joinGoogleMeet() {
   gap: 6px;
   min-height: 28px;
   padding: 0 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.1em;
@@ -911,16 +902,16 @@ function joinGoogleMeet() {
   align-items: center;
   justify-content: center;
   padding: 5px 10px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
   color: var(--text-secondary);
   font-size: 11px;
   font-weight: 700;
 }
 
 .priority-source {
-  border: 1px solid rgba(176, 201, 255, 0.1);
-  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
   color: rgba(226, 232, 240, 0.88);
 }
 
@@ -1016,8 +1007,8 @@ function joinGoogleMeet() {
   display: inline-flex;
   align-items: center;
   padding: 5px 10px;
-  border-radius: 999px;
-  background: rgba(82, 212, 255, 0.08);
+  border-radius: var(--radius-sm);
+  background: rgba(79, 140, 255, 0.08);
   color: rgba(191, 226, 255, 0.92);
   font-size: 11px;
   font-weight: 700;
@@ -1027,9 +1018,9 @@ function joinGoogleMeet() {
   width: 28px;
   height: 28px;
   margin-left: auto;
-  border: 1px solid rgba(176, 201, 255, 0.12);
+  border: 1px solid var(--border-default);
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.045);
+  background: var(--bg-elevated);
   color: rgba(191, 226, 255, 0.82);
   display: inline-flex;
   align-items: center;
@@ -1041,8 +1032,8 @@ function joinGoogleMeet() {
 .priority-expand-btn:hover,
 .priority-expand-btn:focus-visible {
   transform: translateY(-1px);
-  border-color: rgba(82, 212, 255, 0.24);
-  background: rgba(82, 212, 255, 0.1);
+  border-color: rgba(79, 140, 255, 0.24);
+  background: rgba(79, 140, 255, 0.1);
   outline: none;
 }
 
@@ -1059,9 +1050,9 @@ function joinGoogleMeet() {
   flex-direction: column;
   gap: 10px;
   padding: 12px 13px;
-  border-radius: 20px;
-  border: 1px solid rgba(176, 201, 255, 0.1);
-  background: rgba(255, 255, 255, 0.04);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
 }
 
 .priority-message-stack-head {
@@ -1095,9 +1086,9 @@ function joinGoogleMeet() {
 
 .priority-message-toggle {
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   padding: 6px 10px;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--bg-elevated);
   color: rgba(191, 226, 255, 0.86);
   font-size: 11px;
   font-weight: 700;
@@ -1106,7 +1097,7 @@ function joinGoogleMeet() {
 }
 
 .priority-message-toggle:hover {
-  background: rgba(82, 212, 255, 0.12);
+  background: rgba(79, 140, 255, 0.12);
   transform: translateY(-1px);
 }
 
@@ -1138,18 +1129,18 @@ function joinGoogleMeet() {
   flex-direction: column;
   gap: 6px;
   padding: 11px 12px;
-  border-radius: 16px;
-  border: 1px solid rgba(176, 201, 255, 0.08);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
   background: rgba(6, 12, 24, 0.36);
 }
 
 .priority-message-card.latest {
-  border-color: rgba(82, 212, 255, 0.2);
-  background: linear-gradient(180deg, rgba(82, 212, 255, 0.08), rgba(255, 255, 255, 0.03));
+  border-color: rgba(79, 140, 255, 0.2);
+  background: rgba(79, 140, 255, 0.06);
 }
 
 .priority-message-card.outbound {
-  border-color: rgba(139, 125, 255, 0.18);
+  border-color: rgba(79, 140, 255, 0.18);
 }
 
 .priority-message-card--single {
@@ -1194,8 +1185,8 @@ function joinGoogleMeet() {
   min-height: 34px;
   padding: 0 13px;
   border-radius: 12px;
-  border: 1px solid rgba(176, 201, 255, 0.12);
-  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
   color: rgba(226, 232, 240, 0.84);
   font-size: 12px;
   font-weight: 700;
@@ -1206,14 +1197,14 @@ function joinGoogleMeet() {
 .priority-message-action:hover:not(:disabled),
 .priority-message-action:focus-visible {
   transform: translateY(-1px);
-  border-color: rgba(82, 212, 255, 0.26);
-  background: rgba(82, 212, 255, 0.1);
+  border-color: rgba(79, 140, 255, 0.26);
+  background: rgba(79, 140, 255, 0.1);
   color: #f8fbff;
 }
 
 .priority-message-action.active {
-  border-color: rgba(82, 212, 255, 0.28);
-  background: linear-gradient(135deg, rgba(82, 212, 255, 0.18), rgba(139, 125, 255, 0.16));
+  border-color: rgba(79, 140, 255, 0.28);
+  background: rgba(79, 140, 255, 0.12);
   color: #eef2ff;
 }
 
@@ -1247,9 +1238,9 @@ function joinGoogleMeet() {
   flex-direction: column;
   gap: 6px;
   padding: 12px 13px;
-  border-radius: 20px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(176, 201, 255, 0.1);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
 }
 
 .priority-next-label {
@@ -1285,10 +1276,10 @@ function joinGoogleMeet() {
 .priority-control,
 .priority-mini-action,
 .priority-secondary-action {
-  border: 1px solid rgba(176, 201, 255, 0.1);
-  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
   color: rgba(226, 232, 240, 0.82);
-  border-radius: 14px;
+  border-radius: var(--radius-md);
   padding: 10px 14px;
   font-size: 12px;
   font-weight: 600;
@@ -1298,10 +1289,10 @@ function joinGoogleMeet() {
 
 .priority-control.approve,
 .priority-primary-action {
-  border: 1px solid rgba(82, 212, 255, 0.22);
-  background: linear-gradient(135deg, rgba(82, 212, 255, 0.2), rgba(139, 125, 255, 0.2));
+  border: 1px solid rgba(79, 140, 255, 0.22);
+  background: rgba(79, 140, 255, 0.16);
   color: #eef2ff;
-  border-radius: 14px;
+  border-radius: var(--radius-md);
   padding: 10px 14px;
   font-size: 12px;
   font-weight: 700;
@@ -1312,15 +1303,15 @@ function joinGoogleMeet() {
 .priority-mini-action:hover:not(:disabled),
 .priority-secondary-action:hover:not(:disabled) {
   transform: translateY(-1px);
-  border-color: rgba(176, 201, 255, 0.18);
-  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--border-default);
+  background: var(--bg-elevated);
 }
 
 .priority-control.approve:hover:not(:disabled),
 .priority-primary-action:hover:not(:disabled) {
   transform: translateY(-1px);
-  border-color: rgba(82, 212, 255, 0.3);
-  background: linear-gradient(135deg, rgba(82, 212, 255, 0.26), rgba(139, 125, 255, 0.24));
+  border-color: rgba(79, 140, 255, 0.3);
+  background: rgba(79, 140, 255, 0.16);
 }
 
 .priority-panel {
@@ -1334,12 +1325,10 @@ function joinGoogleMeet() {
   flex-direction: column;
   gap: 8px;
   padding: 11px 12px 12px;
-  border-radius: 18px;
-  border: 1px solid rgba(82, 212, 255, 0.16);
-  background:
-    linear-gradient(180deg, rgba(18, 26, 45, 0.86), rgba(11, 18, 34, 0.88));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
-}
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(79, 140, 255, 0.16);
+  background: var(--bg-surface);
+  }
 
 .priority-reply-composer-inline {
   margin-top: 2px;
@@ -1350,17 +1339,17 @@ function joinGoogleMeet() {
   align-items: flex-end;
   gap: 8px;
   padding: 8px 8px 8px 10px;
-  border-radius: 16px;
-  border: 1px solid rgba(176, 201, 255, 0.12);
-  background: linear-gradient(180deg, rgba(16, 24, 43, 0.96), rgba(10, 17, 32, 0.92));
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
 }
 
 .priority-reply-icon {
   width: 34px;
   height: 34px;
   border-radius: 12px;
-  border: 1px solid rgba(176, 201, 255, 0.12);
-  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
   color: rgba(226, 232, 240, 0.82);
   display: inline-flex;
   align-items: center;
@@ -1373,8 +1362,8 @@ function joinGoogleMeet() {
 .priority-reply-icon:hover:not(:disabled),
 .priority-reply-icon:focus-visible {
   transform: translateY(-1px);
-  border-color: rgba(82, 212, 255, 0.28);
-  background: rgba(82, 212, 255, 0.1);
+  border-color: rgba(79, 140, 255, 0.28);
+  background: rgba(79, 140, 255, 0.1);
   outline: none;
 }
 
@@ -1460,7 +1449,6 @@ button:disabled {
 :global([data-theme="light"]) .priority-card {
   border-color: rgba(148, 163, 184, 0.22);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(244, 247, 255, 0.92)),
     rgba(255, 255, 255, 0.9);
   box-shadow: 0 18px 34px rgba(148, 163, 184, 0.16);
 }
@@ -1479,7 +1467,7 @@ button:disabled {
 @media (max-width: 720px) {
   .priority-card {
     padding: 16px;
-    border-radius: 20px;
+    border-radius: var(--radius-md);
   }
 }
 </style>

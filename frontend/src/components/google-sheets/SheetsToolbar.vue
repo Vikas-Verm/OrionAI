@@ -570,11 +570,10 @@ watch(
   gap: 7px;
   min-height: 42px;
   padding: 6px 8px;
-  border-radius: 14px;
+  border-radius: var(--radius-md);
   background: rgba(18, 24, 40, 0.92);
-  border: 1px solid rgba(176, 201, 255, 0.07);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
-  overflow-x: auto;
+  border: 1px solid var(--border-subtle);
+    overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
 }
@@ -601,7 +600,7 @@ watch(
 .gst-toolbar-divider {
   width: 1px;
   height: 20px;
-  background: rgba(176, 201, 255, 0.08);
+  background: var(--border-subtle);
   flex-shrink: 0;
 }
 
@@ -626,8 +625,8 @@ watch(
 .gst-tool-select:hover,
 .gst-color-chip:hover {
   color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.05);
-  border-color: rgba(176, 201, 255, 0.08);
+  background: var(--bg-elevated);
+  border-color: var(--border-subtle);
 }
 
 .gst-tool-btn:disabled,
@@ -681,8 +680,8 @@ watch(
 }
 
 .gst-size-combo:hover {
-  background: rgba(255, 255, 255, 0.05);
-  border-color: rgba(176, 201, 255, 0.08);
+  background: var(--bg-elevated);
+  border-color: var(--border-subtle);
 }
 
 .gst-size-combo.disabled {
@@ -707,7 +706,7 @@ watch(
   min-width: 24px;
   min-height: 28px;
   border: 0;
-  border-left: 1px solid rgba(176, 201, 255, 0.08);
+  border-left: 1px solid var(--border-subtle);
   border-radius: 0 10px 10px 0;
   background: transparent;
   color: rgba(232, 239, 255, 0.72);
@@ -739,7 +738,7 @@ watch(
   bottom: -2px;
   height: 2px;
   background: currentColor;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
 }
 
 .gst-color-chip-label--fill::after {
@@ -769,8 +768,8 @@ watch(
 
 .gst-tool-mode {
   color: rgba(232, 239, 255, 0.76);
-  background: rgba(255, 255, 255, 0.02);
-  border-color: rgba(176, 201, 255, 0.08);
+  background: var(--bg-surface);
+  border-color: var(--border-subtle);
 }
 
 .gst-toolbar-menu {
@@ -780,8 +779,8 @@ watch(
   flex-direction: column;
   gap: 4px;
   padding: 8px;
-  border-radius: 14px;
-  border: 1px solid rgba(176, 201, 255, 0.12);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
   background: rgba(10, 16, 28, 0.98);
   box-shadow: 0 14px 36px rgba(2, 8, 24, 0.34);
   z-index: 70;
@@ -812,7 +811,7 @@ watch(
 
 .gst-toolbar-menu button:hover,
 .gst-toolbar-menu button.is-active {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--bg-elevated);
   color: white;
 }
 </style>

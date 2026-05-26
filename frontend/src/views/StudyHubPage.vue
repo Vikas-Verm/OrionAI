@@ -965,30 +965,10 @@ onMounted(async () => {
   overflow: auto;
   padding: 32px 32px 48px;
   color: var(--text-primary);
-  background:
-    radial-gradient(circle at 14% 12%, rgba(82, 212, 255, 0.08), transparent 26%),
-    radial-gradient(circle at 82% 14%, rgba(139, 125, 255, 0.1), transparent 28%),
-    var(--bg-base);
+  background: var(--bg-base);
 }
 .sh-aurora {
-  position: absolute;
-  width: 38rem;
-  height: 38rem;
-  border-radius: 999px;
-  filter: blur(110px);
-  opacity: 0.32;
-  pointer-events: none;
-  z-index: 0;
-}
-.sh-aurora--cyan {
-  top: -8rem;
-  right: 12%;
-  background: radial-gradient(circle, rgba(82, 212, 255, 0.28), transparent 60%);
-}
-.sh-aurora--violet {
-  bottom: -10rem;
-  left: 10%;
-  background: radial-gradient(circle, rgba(139, 125, 255, 0.24), transparent 64%);
+  display: none;
 }
 .sh-content {
   position: relative;
@@ -1005,9 +985,9 @@ onMounted(async () => {
   align-items: center;
   gap: 8px;
   padding: 8px 14px;
-  border-radius: 999px;
-  border: 1px solid rgba(176, 201, 255, 0.16);
-  background: rgba(8, 14, 30, 0.55);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
   color: var(--text-secondary);
   font: inherit;
   font-size: 12.5px;
@@ -1016,7 +996,7 @@ onMounted(async () => {
 }
 .sh-back:hover {
   color: var(--text-primary);
-  border-color: rgba(82, 212, 255, 0.32);
+  border-color: rgba(79, 140, 255, 0.32);
   transform: translateY(-1px);
 }
 .sh-back svg { flex: 0 0 auto; }
@@ -1025,8 +1005,8 @@ onMounted(async () => {
   align-self: flex-start;
   padding: 10px 14px;
   border-radius: 12px;
-  border: 1px solid rgba(82, 212, 255, 0.32);
-  background: rgba(82, 212, 255, 0.08);
+  border: 1px solid rgba(79, 140, 255, 0.32);
+  background: rgba(79, 140, 255, 0.08);
   color: var(--accent-hover);
   font-size: 13px;
 }
@@ -1065,7 +1045,7 @@ onMounted(async () => {
   letter-spacing: 0.18em;
   font-size: 11px;
   font-weight: 600;
-  color: rgba(82, 212, 255, 0.78);
+  color: rgba(79, 140, 255, 0.78);
 }
 .sh-header-actions {
   display: flex;
@@ -1076,7 +1056,7 @@ onMounted(async () => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   padding: 9px 18px;
   font: inherit;
   font-weight: 500;
@@ -1087,18 +1067,17 @@ onMounted(async () => {
 .sh-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 .sh-btn--sm { padding: 6px 14px; font-size: 12.5px; }
 .sh-btn--ghost {
-  background: rgba(8, 14, 30, 0.55);
+  background: var(--bg-surface);
   color: var(--text-secondary);
-  border-color: rgba(176, 201, 255, 0.18);
+  border-color: var(--border-default);
 }
-.sh-btn--ghost:hover:not(:disabled) { color: var(--text-primary); border-color: rgba(82, 212, 255, 0.32); }
+.sh-btn--ghost:hover:not(:disabled) { color: var(--text-primary); border-color: rgba(79, 140, 255, 0.32); }
 .sh-btn--primary {
-  color: #050816;
-  background: linear-gradient(135deg, rgba(82, 212, 255, 0.92), rgba(139, 125, 255, 0.82));
-  border-color: rgba(82, 212, 255, 0.42);
-  box-shadow: 0 18px 38px rgba(82, 212, 255, 0.18);
+  color: white;
+  background: var(--accent);
+  border-color: transparent;
 }
-.sh-btn--primary:hover:not(:disabled) { transform: translateY(-1px); }
+.sh-btn--primary:hover:not(:disabled) { opacity: 0.9; }
 
 .sh-empty-hero {
   display: flex;
@@ -1152,23 +1131,21 @@ onMounted(async () => {
 .sh-empty-orb {
   width: 88px;
   height: 88px;
-  border-radius: 999px;
-  background:
-    radial-gradient(circle at 32% 30%, rgba(255, 255, 255, 0.55), rgba(82, 212, 255, 0.42) 30%, rgba(139, 125, 255, 0.22) 60%, transparent 78%);
-  filter: blur(0.4px);
-  box-shadow: 0 24px 60px rgba(82, 212, 255, 0.32);
+  border-radius: var(--radius-md);
+  background: rgba(79, 140, 255, 0.15);
+  border: 1px solid rgba(79, 140, 255, 0.2);
 }
 .sh-empty-ring {
   position: absolute;
   width: 140px;
   height: 140px;
-  border-radius: 999px;
-  border: 1px solid rgba(176, 201, 255, 0.16);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
 }
 .sh-empty-ring--outer {
   width: 188px;
   height: 188px;
-  border-color: rgba(176, 201, 255, 0.08);
+  border-color: var(--border-subtle);
 }
 
 .sh-grid {
@@ -1178,10 +1155,10 @@ onMounted(async () => {
 }
 .sh-panel {
   position: relative;
-  border-radius: 22px;
+  border-radius: var(--radius-lg);
   padding: 22px 22px 20px;
   border: 1px solid var(--border-subtle);
-  background: var(--surface-glass);
+  background: var(--bg-surface);
   box-shadow: var(--shadow-sm);
   display: flex;
   flex-direction: column;
@@ -1218,10 +1195,10 @@ onMounted(async () => {
   align-items: center;
   justify-content: center;
   padding: 3px 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   font-size: 11.5px;
   font-weight: 600;
-  background: rgba(82, 212, 255, 0.14);
+  background: rgba(79, 140, 255, 0.14);
   color: var(--accent-hover);
 }
 .sh-pill--warning {
@@ -1231,7 +1208,7 @@ onMounted(async () => {
 
 .sh-skeleton {
   padding: 20px;
-  border-radius: 14px;
+  border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.025);
   color: var(--text-muted);
   font-size: 13px;
@@ -1239,7 +1216,7 @@ onMounted(async () => {
 }
 .sh-empty-block {
   padding: 20px;
-  border-radius: 14px;
+  border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.025);
   text-align: center;
   display: flex;
@@ -1271,7 +1248,7 @@ onMounted(async () => {
   padding-bottom: 6px;
   /* Custom dark scrollbar */
   scrollbar-width: thin;
-  scrollbar-color: rgba(82, 212, 255, 0.32) transparent;
+  scrollbar-color: rgba(79, 140, 255, 0.32) transparent;
 }
 .sh-goal-list--scroll > .sh-goal-card {
   flex: 0 0 280px;
@@ -1280,24 +1257,24 @@ onMounted(async () => {
 .sh-goal-list--scroll::-webkit-scrollbar { height: 6px; }
 .sh-goal-list--scroll::-webkit-scrollbar-track { background: transparent; }
 .sh-goal-list--scroll::-webkit-scrollbar-thumb {
-  background: rgba(82, 212, 255, 0.32);
-  border-radius: 999px;
+  background: rgba(79, 140, 255, 0.32);
+  border-radius: var(--radius-sm);
 }
 .sh-goal-card {
-  border-radius: 16px;
+  border-radius: var(--radius-md);
   padding: 16px 16px 14px;
-  border: 1px solid rgba(176, 201, 255, 0.12);
-  background: rgba(8, 14, 30, 0.55);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
   cursor: pointer;
   transition: border-color 120ms ease, transform 120ms ease;
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
-.sh-goal-card:hover { border-color: rgba(82, 212, 255, 0.28); }
+.sh-goal-card:hover { border-color: rgba(79, 140, 255, 0.28); }
 .sh-goal-card--active {
-  border-color: rgba(82, 212, 255, 0.45);
-  box-shadow: 0 0 0 1px rgba(82, 212, 255, 0.18), 0 18px 42px rgba(82, 212, 255, 0.06);
+  border-color: rgba(79, 140, 255, 0.45);
+  box-shadow: 0 0 0 1px rgba(79, 140, 255, 0.18);
 }
 .sh-goal-card-head {
   display: flex;
@@ -1325,25 +1302,25 @@ onMounted(async () => {
   font-size: 10.5px;
   letter-spacing: 0.06em;
   padding: 3px 8px;
-  border-radius: 999px;
-  background: rgba(176, 201, 255, 0.08);
+  border-radius: var(--radius-sm);
+  background: var(--border-subtle);
   color: var(--text-secondary);
 }
 .sh-status-pill[data-status="active"] { background: rgba(47, 211, 157, 0.16); color: #6fe0bc; }
 .sh-status-pill[data-status="paused"] { background: rgba(242, 184, 79, 0.16); color: #f6c577; }
-.sh-status-pill[data-status="completed"] { background: rgba(82, 212, 255, 0.16); color: var(--accent-hover); }
+.sh-status-pill[data-status="completed"] { background: rgba(79, 140, 255, 0.16); color: var(--accent-hover); }
 
 .sh-progress { display: flex; flex-direction: column; gap: 6px; }
 .sh-progress-bar {
   width: 100%;
   height: 6px;
-  border-radius: 999px;
-  background: rgba(176, 201, 255, 0.08);
+  border-radius: var(--radius-sm);
+  background: var(--border-subtle);
   overflow: hidden;
 }
 .sh-progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, rgba(82, 212, 255, 0.92), rgba(139, 125, 255, 0.82));
+  background: var(--accent);
   border-radius: inherit;
 }
 .sh-progress-meta { font-size: 11.5px; color: var(--text-muted); }
@@ -1382,13 +1359,13 @@ onMounted(async () => {
   overflow-y: auto;
   padding-right: 6px;
   scrollbar-width: thin;
-  scrollbar-color: rgba(82, 212, 255, 0.32) transparent;
+  scrollbar-color: rgba(79, 140, 255, 0.32) transparent;
 }
 .sh-topic-list--scroll::-webkit-scrollbar { width: 6px; }
 .sh-topic-list--scroll::-webkit-scrollbar-track { background: transparent; }
 .sh-topic-list--scroll::-webkit-scrollbar-thumb {
-  background: rgba(82, 212, 255, 0.32);
-  border-radius: 999px;
+  background: rgba(79, 140, 255, 0.32);
+  border-radius: var(--radius-sm);
 }
 .sh-plan-item,
 .sh-topic-row,
@@ -1398,9 +1375,9 @@ onMounted(async () => {
   justify-content: space-between;
   gap: 14px;
   padding: 14px 14px;
-  border-radius: 14px;
-  border: 1px solid rgba(176, 201, 255, 0.1);
-  background: rgba(8, 14, 30, 0.4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
 }
 .sh-plan-item h4,
 .sh-topic-row h4,
@@ -1423,7 +1400,7 @@ onMounted(async () => {
 .sh-upcoming {
   margin-top: 4px;
   padding-top: 12px;
-  border-top: 1px dashed rgba(176, 201, 255, 0.12);
+  border-top: 1px dashed var(--border-default);
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -1446,8 +1423,8 @@ onMounted(async () => {
   color: var(--text-secondary);
   padding: 6px 10px;
   border-radius: 10px;
-  background: rgba(176, 201, 255, 0.04);
-  border: 1px solid rgba(176, 201, 255, 0.08);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
 }
 .sh-upcoming-title-text {
   white-space: nowrap;
@@ -1468,12 +1445,12 @@ onMounted(async () => {
 .sh-status-tag {
   text-transform: capitalize;
   padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(176, 201, 255, 0.08);
+  border-radius: var(--radius-sm);
+  background: var(--border-subtle);
   color: var(--text-secondary);
   font-size: 11px;
 }
-.sh-status-tag[data-status="in_progress"] { background: rgba(82, 212, 255, 0.16); color: var(--accent-hover); }
+.sh-status-tag[data-status="in_progress"] { background: rgba(79, 140, 255, 0.16); color: var(--accent-hover); }
 .sh-status-tag[data-status="completed"] { background: rgba(47, 211, 157, 0.18); color: #6fe0bc; }
 .sh-status-tag[data-status="weak"] { background: rgba(255, 107, 127, 0.16); color: #ff8ea1; }
 .sh-status-tag[data-status="revision_due"] { background: rgba(242, 184, 79, 0.16); color: #f6c577; }
@@ -1496,9 +1473,9 @@ onMounted(async () => {
 }
 .sh-stat {
   padding: 16px;
-  border-radius: 16px;
-  border: 1px solid rgba(176, 201, 255, 0.1);
-  background: rgba(8, 14, 30, 0.45);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -1509,7 +1486,7 @@ onMounted(async () => {
   transition: border-color 120ms ease, transform 120ms ease, background 120ms ease;
 }
 .sh-stat:hover:not(:disabled) {
-  border-color: rgba(82, 212, 255, 0.36);
+  border-color: rgba(79, 140, 255, 0.36);
   transform: translateY(-1px);
 }
 .sh-stat:disabled {
@@ -1518,8 +1495,8 @@ onMounted(async () => {
 }
 .sh-stat:focus-visible {
   outline: none;
-  border-color: rgba(82, 212, 255, 0.6);
-  box-shadow: 0 0 0 3px rgba(82, 212, 255, 0.12);
+  border-color: rgba(79, 140, 255, 0.6);
+  box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.12);
 }
 .sh-stat-cta {
   margin-top: 6px;

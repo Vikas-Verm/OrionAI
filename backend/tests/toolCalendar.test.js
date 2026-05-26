@@ -4,6 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  calendarDelete,
   __test: { extractMeetLink },
 } = require("../services/tools/toolCalendar");
 
@@ -60,5 +61,12 @@ test("extractMeetLink preserves query params when location contains a meet url",
   assert.equal(
     link,
     "https://meet.google.com/abc-defg-hij?authuser=0&hs=122"
+  );
+});
+
+test("calendarDelete rejects ambiguous delete requests before Google API call", async () => {
+  await assert.rejects(
+    () => calendarDelete({}, { userId: "test-user" }),
+    /Event title or eventId is required/
   );
 });

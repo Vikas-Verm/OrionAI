@@ -208,13 +208,10 @@ function handleKeydown(event) {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-radius: 20px;
-  background:
-    radial-gradient(circle at top left, rgba(118, 70, 255, 0.12), transparent 32%),
-    linear-gradient(180deg, rgba(22, 22, 42, 0.98), rgba(15, 18, 34, 0.98));
-  border: 1px solid rgba(176, 201, 255, 0.06);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
-}
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  }
 
 .gsa-top {
   display: flex;
@@ -251,8 +248,8 @@ function handleKeydown(event) {
 .gsa-dot {
   width: 8px;
   height: 8px;
-  border-radius: 999px;
-  background: linear-gradient(180deg, #4ef0be, #24c58d);
+  border-radius: var(--radius-sm);
+  background: #4ef0be;
   box-shadow: 0 0 10px rgba(47, 211, 157, 0.45);
 }
 
@@ -285,7 +282,7 @@ function handleKeydown(event) {
   right: 0;
   bottom: 0;
   height: 2px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: #4e7fff;
 }
 
@@ -311,8 +308,8 @@ function handleKeydown(event) {
 
 .gsa-action {
   min-height: 38px;
-  border-radius: 14px;
-  border: 1px solid rgba(176, 201, 255, 0.08);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
   background: rgba(255, 255, 255, 0.025);
   color: rgba(228, 236, 250, 0.84);
   font: inherit;
@@ -324,13 +321,13 @@ function handleKeydown(event) {
 }
 
 .gsa-action:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--bg-elevated);
 }
 
 .gsa-suggested {
   margin-top: 18px;
   padding-top: 16px;
-  border-top: 1px solid rgba(176, 201, 255, 0.06);
+  border-top: 1px solid var(--border-subtle);
 }
 
 .gsa-suggested-title {
@@ -374,9 +371,9 @@ function handleKeydown(event) {
 
 .gsa-message {
   padding: 12px 14px;
-  border-radius: 14px;
-  border: 1px solid rgba(176, 201, 255, 0.08);
-  background: rgba(255, 255, 255, 0.03);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
 }
 
 .gsa-message--assistant {
@@ -437,9 +434,9 @@ function handleKeydown(event) {
   width: 100%;
   box-sizing: border-box;
   resize: none;
-  border-radius: 14px;
-  border: 1px solid rgba(176, 201, 255, 0.08);
-  background: rgba(255, 255, 255, 0.03);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
   color: var(--text-primary);
   padding: 14px 44px 14px 14px;
   min-height: 72px;
@@ -453,7 +450,7 @@ function handleKeydown(event) {
   bottom: 22px;
   min-width: 42px;
   height: 32px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   border: none;
   background: #4e7fff;
   color: white;
@@ -482,7 +479,7 @@ function handleKeydown(event) {
 
 @media (max-width: 640px) {
   .gsa-panel {
-    border-radius: 16px;
+    border-radius: var(--radius-md);
   }
 
   .gsa-tabs {

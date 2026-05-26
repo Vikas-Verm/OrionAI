@@ -9,7 +9,7 @@ const {
   exportDocument,
   deleteDocumentWorkspace,
 } = require("../services/googleDocsService");
-const { chatCompleteNoSystem } = require("../services/llmService");
+const { chatCompleteNoSystem, chatComplete } = require("../services/llmService");
 
 const EXPORT_FORMATS = {
   pdf: {
@@ -217,6 +217,9 @@ async function runGoogleDocAi(req, res) {
     const providedOutline = Array.isArray(req.body?.documentOutline)
       ? req.body.documentOutline
       : [];
+    const conversationHistory = Array.isArray(req.body?.conversationHistory)
+      ? req.body.conversationHistory.slice(-10)
+      : [];
     const fallbackWorkspace = await getDocumentWorkspace(
       req.user?.username,
       req.params.id
@@ -251,11 +254,38 @@ async function runGoogleDocAi(req, res) {
             intentType,
           });
 
-    const result = await chatCompleteNoSystem(
-      prompt,
-      tokenBudgetForRequest(intentType, wordCountTarget),
-      intentType === "create_new_content" ? 0.35 : 0.15
-    );
+    let result;
+
+    if (conversationHistory.length > 0 && intentType !== "create_new_content") {
+      // Build multi-turn messages so the LLM has conversation context
+      const messages = [
+        { role: "system", content: prompt },
+      ];
+
+      // Add prior conversation turns (skip the very last user message — it's already in the prompt)
+      const priorTurns = conversationHistory.slice(0, -1);
+      for (const turn of priorTurns) {
+        if (turn.role === "user") {
+          messages.push({ role: "user", content: turn.text || "" });
+        } else if (turn.role === "assistant") {
+          messages.push({ role: "assistant", content: turn.text || "" });
+        }
+      }
+
+      messages.push({ role: "user", content: question });
+
+      result = await chatComplete(
+        messages,
+        tokenBudgetForRequest(intentType, wordCountTarget),
+        0.15
+      );
+    } else {
+      result = await chatCompleteNoSystem(
+        prompt,
+        tokenBudgetForRequest(intentType, wordCountTarget),
+        intentType === "create_new_content" ? 0.35 : 0.15
+      );
+    }
 
     res.json({
       ok: true,

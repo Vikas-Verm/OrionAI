@@ -409,22 +409,44 @@ function normalizeTitle(title) {
 }
 // ── TOOL 6: calendar_delete ───────────────────────────────────────────────────
 async function calendarDelete(params, ctx) {
-  const { calendar } = await getCalendarClient(ctx.userId);
-  let { eventId, title } = params;
+  let { eventId, title, dateFrom, dateTo } = params;
 
   let targetId = eventId;
 
+  if (!targetId && !title) {
+    throw new Error(
+      "Event title or eventId is required to delete a calendar event."
+    );
+  }
+
+  const { calendar } = await getCalendarClient(ctx.userId);
+
   if (!targetId && title) {
     const normalizedTitle = normalizeTitle(title);
-
-    const res = await calendar.events.list({
+    if (!normalizedTitle) {
+      throw new Error(
+        "Please include a specific event title to delete a calendar event."
+      );
+    }
+    const effectiveDateTo = dateTo || dateFrom;
+    const listParams = {
       calendarId: "primary",
       conferenceDataVersion: 1,
-      timeMin: new Date().toISOString(),
+      timeMin: dateFrom
+        ? new Date(`${dateFrom}T00:00:00+05:30`).toISOString()
+        : new Date().toISOString(),
       singleEvents: true,
       maxResults: 20,
       orderBy: "startTime",
-    });
+    };
+
+    if (effectiveDateTo) {
+      listParams.timeMax = new Date(
+        `${effectiveDateTo}T23:59:59+05:30`
+      ).toISOString();
+    }
+
+    const res = await calendar.events.list(listParams);
 
     const events = (res.data.items || []).map((e) => ({
       id: e.id,

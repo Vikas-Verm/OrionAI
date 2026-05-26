@@ -13,6 +13,8 @@ const telegramAgent = require("./telegramAgent");
 const jiraAgent = require("./jiraAgent");
 const gmailAgent = require("./gmailAgent");
 const calendarAgent = require("./calendarAgent");
+const googleDocsAgent = require("./googleDocsAgent");
+const googleSheetsAgent = require("./googleSheetsAgent");
 const documentAgent = require("./documentAgent");
 
 /** Ordered list of all registered sub-agents */
@@ -22,6 +24,8 @@ const AGENTS = [
   jiraAgent,
   gmailAgent,
   calendarAgent,
+  googleDocsAgent,
+  googleSheetsAgent,
   documentAgent,
 ];
 

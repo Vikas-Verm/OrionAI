@@ -64,6 +64,25 @@ const STATIC_TOOL_REGISTRY = {
   telegram_search_messages: { icon: "🔍", label: "Search Telegram" },
   telegram_reply_message: { icon: "↩️", label: "Reply on Telegram" },
   telegram_get_contact_info: { icon: "👤", label: "Telegram contact info" },
+
+  // Google Docs
+  google_docs_list: { icon: "📝", label: "List Google Docs" },
+  google_docs_get: { icon: "📄", label: "Open Google Doc" },
+  google_docs_create: { icon: "➕", label: "Create Google Doc" },
+  google_docs_update: { icon: "✏️", label: "Update Google Doc" },
+  google_docs_share: { icon: "🔗", label: "Share Google Doc" },
+  google_docs_delete: { icon: "🗑️", label: "Delete Google Doc" },
+  google_docs_search: { icon: "🔍", label: "Search Google Docs" },
+
+  // Google Sheets
+  google_sheets_list: { icon: "📊", label: "List Google Sheets" },
+  google_sheets_get: { icon: "📋", label: "Open Google Sheet" },
+  google_sheets_create: { icon: "➕", label: "Create Google Sheet" },
+  google_sheets_rename: { icon: "✏️", label: "Rename Google Sheet" },
+  google_sheets_share: { icon: "🔗", label: "Share Google Sheet" },
+  google_sheets_delete: { icon: "🗑️", label: "Delete Google Sheet" },
+  google_sheets_search: { icon: "🔍", label: "Search Google Sheets" },
+  google_sheets_duplicate: { icon: "📑", label: "Duplicate Google Sheet" },
 };
 
 async function loadToolRegistry() {
@@ -173,6 +192,21 @@ async function buildClassifierPrompt(userMessage) {
     'Format: {"isAgentTask":true,"confidence":0.93,"intent":"...","steps":[{"tool":"telegram_get_messages","params":{"contact":"Rahul","limit":20}}]}',
     "",
 
+    // ── TYPE G: Google Docs ──────────────────────────────────────────────
+    "TYPE G — GOOGLE DOCS:",
+    "- list my google docs / show my documents / recent docs → google_docs_list {limit:12}",
+    "- search google docs for X / find doc about X → google_docs_search {query:'X'}",
+    "- open google doc X / read doc X / get doc X → google_docs_get {documentId:'DOC_ID'}",
+    "  If user mentions doc by name instead of ID, first use google_docs_search to find it, then google_docs_get.",
+    "- create a google doc / new doc titled X → google_docs_create {title:'X'}",
+    "- update / edit google doc → google_docs_update {documentId:'DOC_ID', title:'new title', content:'<p>HTML content</p>'}",
+    "- share google doc with X → google_docs_share {documentId:'DOC_ID', email:'x@example.com', role:'writer'}",
+    "- delete google doc X → google_docs_delete {documentId:'DOC_ID'}",
+    "Note: When user references a doc by title, use google_docs_search first to find the documentId, then chain with the next step.",
+    "Note: When user says 'create a doc about X with content', use google_docs_create then google_docs_update to add content.",
+    'Format: {"isAgentTask":true,"confidence":0.93,"intent":"...","steps":[{"tool":"google_docs_list","params":{"limit":12}}]}',
+    "",
+
     // ── TYPE F: Slack ──────────────────────────────────────────────────────
     "TYPE F — SLACK:",
     "- show slack messages / read #channel / what's in #channel → slack_read_messages {channel:'channel-name', limit:20}",
@@ -235,7 +269,10 @@ function resolveTemplates(params, ctx) {
         .replace(/\{\{ticketKey\}\}/gi, ctx.lastCreatedTicketKey || "")
         .replace(/\{\{ticketUrl\}\}/gi, ctx.lastCreatedTicketUrl || "")
         .replace(/\{\{ticketTitle\}\}/gi, ctx.lastCreatedTicketTitle || "")
-        .replace(/\{\{emailSubject\}\}/gi, ctx.lastEmail?.subject || "");
+        .replace(/\{\{emailSubject\}\}/gi, ctx.lastEmail?.subject || "")
+        .replace(/\{\{googleDocId\}\}/gi, ctx.lastGoogleDoc?.documentId || ctx.lastGoogleDoc?.id || "")
+        .replace(/\{\{googleDocTitle\}\}/gi, ctx.lastGoogleDoc?.title || "")
+        .replace(/\{\{googleDocUrl\}\}/gi, ctx.lastGoogleDoc?.webViewUrl || "");
     } else {
       resolved[key] = value;
     }
@@ -263,6 +300,7 @@ async function runAgent(
     lastCreatedTicketUrl: null,
     lastCreatedTicketTitle: null,
     lastEmail: null,
+    lastGoogleDoc: null,
     fetchResult: null,
     pdfResult: null,
   };

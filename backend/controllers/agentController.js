@@ -10,6 +10,9 @@ const {
   resolveConfirmation,
   getPendingConfirmation,
 } = require("../services/agentConfirmationStore");
+const {
+  resolveDisambiguation,
+} = require("../services/agentDisambiguationStore");
 const { captureException } = require("../services/errorMonitoring");
 
 function buildSessionTitle(text = "") {
@@ -202,8 +205,50 @@ function stepSummary(tool, result) {
     case "whatsapp_list_chats":
       return `${result.total || 0} WhatsApp chats`;
 
+    // Google Docs
+    case "google_docs_list":
+      return `Found ${result.richGoogleDocs?.length || 0} documents`;
+    case "google_docs_search":
+      return (
+        result.summary ||
+        `Found ${result.richGoogleDocs?.length || 0} documents`
+      );
+    case "google_docs_get":
+      return result.summary || `Opened document`;
+    case "google_docs_create":
+      return result.summary || `Created document`;
+    case "google_docs_update":
+      return result.summary || `Updated document`;
+    case "google_docs_share":
+      return result.summary || `Shared document`;
+    case "google_docs_delete":
+      return result.summary || `Deleted document`;
+
+    // Google Sheets
+    case "google_sheets_list":
+      return `Found ${result.richGoogleSheets?.length || 0} spreadsheets`;
+    case "google_sheets_search":
+      return (
+        result.summary ||
+        `Found ${result.richGoogleSheets?.length || 0} spreadsheets`
+      );
+    case "google_sheets_get":
+      return result.summary || `Opened spreadsheet`;
+    case "google_sheets_create":
+      return result.summary || `Created spreadsheet`;
+    case "google_sheets_rename":
+      return result.summary || `Renamed spreadsheet`;
+    case "google_sheets_share":
+      return result.summary || `Shared spreadsheet`;
+    case "google_sheets_delete":
+      return result.summary || `Deleted spreadsheet`;
+    case "google_sheets_duplicate":
+      return result.summary || `Duplicated spreadsheet`;
+
     case "database_query":
-      return result.summary || `Database query returned ${result.count || 0} row(s)`;
+      return (
+        result.summary || `Database query returned ${result.count || 0} row(s)`
+      );
 
     case "meeting_prep":
       return result?.event?.title
@@ -224,7 +269,14 @@ function stepSummary(tool, result) {
 // ── buildFinalSummary ─────────────────────────────────────────────────────────
 function buildFinalSummary(results, TOOL_REGISTRY) {
   const done = results.filter((r) => r.status === "done");
-  if (done.length === 1 && done[0].result?.summary)
+  const hasRichData = done.some(
+    (r) =>
+      r.result?.richGoogleDocs ||
+      r.result?.richGoogleDoc ||
+      r.result?.richGoogleSheets ||
+      r.result?.richGoogleSheet
+  );
+  if (done.length === 1 && done[0].result?.summary && !hasRichData)
     return done[0].result.summary;
 
   const stepLines = done.map((r) => {
@@ -479,6 +531,16 @@ async function runPlan(req, res) {
             slackMessage: r?.slackMessage || null,
             totalUnread: r?.totalUnread || null,
 
+            // ── Google Docs ───────────────────────────────────────────────────
+            richGoogleDocs: r?.richGoogleDocs || null,
+            richGoogleDoc: r?.richGoogleDoc || null,
+            richGoogleDocShare: r?.richGoogleDocShare || null,
+
+            // ── Google Sheets ─────────────────────────────────────────────────
+            richGoogleSheets: r?.richGoogleSheets || null,
+            richGoogleSheet: r?.richGoogleSheet || null,
+            richGoogleSheetShare: r?.richGoogleSheetShare || null,
+
             // ── WhatsApp — FIX: use r not progress.result ─────────────────────
             richWhatsAppMessages: r?.messages || null,
             richWhatsAppUnread: r?.chats || null,
@@ -510,6 +572,17 @@ async function runPlan(req, res) {
             icon: meta.icon,
             label: meta.label,
             preview: progress.preview || null,
+          });
+        }
+
+        if (progress.status === "disambiguate") {
+          send({
+            type: "disambiguate",
+            tool: progress.tool,
+            icon: meta.icon,
+            label: meta.label,
+            items: progress.items || [],
+            message: progress.message || "Multiple results found. Please select one.",
           });
         }
       },
@@ -597,6 +670,16 @@ async function runPlan(req, res) {
               slackSent: r.result?.slackSent || null,
               slackMessage: r.result?.slackMessage || null,
               totalUnread: r.result?.totalUnread || null,
+
+              // Google Docs
+              richGoogleDocs: r.result?.richGoogleDocs || null,
+              richGoogleDoc: r.result?.richGoogleDoc || null,
+              richGoogleDocShare: r.result?.richGoogleDocShare || null,
+
+              // Google Sheets
+              richGoogleSheets: r.result?.richGoogleSheets || null,
+              richGoogleSheet: r.result?.richGoogleSheet || null,
+              richGoogleSheetShare: r.result?.richGoogleSheetShare || null,
 
               // ── WhatsApp — FIX: was missing from persistedSteps ───────────
               richWhatsAppMessages: r.result?.messages || null,
@@ -695,7 +778,9 @@ async function confirmAgentAction(req, res) {
 
   const resolved = resolveConfirmation(sessionId, tool, approved);
   if (!resolved) {
-    return res.status(409).json({ error: "Confirmation could not be resolved" });
+    return res
+      .status(409)
+      .json({ error: "Confirmation could not be resolved" });
   }
 
   await Conversation.findOneAndUpdate(
@@ -703,7 +788,9 @@ async function confirmAgentAction(req, res) {
     {
       $push: {
         activityLog: {
-          message: `Confirmation ${approved ? "approved" : "declined"} for ${tool}`,
+          message: `Confirmation ${
+            approved ? "approved" : "declined"
+          } for ${tool}`,
           queryType: "agent_confirmation",
           explanation: pending.preview?.action || tool,
           createdAt: new Date(),
@@ -870,10 +957,23 @@ async function saveTelegramReply(req, res) {
   }
 }
 
+async function disambiguateSelection(req, res) {
+  const { sessionId, tool, selection } = req.body || {};
+  if (!sessionId || !tool) {
+    return res.status(400).json({ error: "sessionId and tool are required" });
+  }
+  const resolved = resolveDisambiguation(sessionId, tool, selection || null);
+  if (!resolved) {
+    return res.status(404).json({ error: "No pending disambiguation found" });
+  }
+  res.json({ ok: true });
+}
+
 module.exports = {
   parseIntent,
   runPlan,
   confirmAgentAction,
+  disambiguateSelection,
   gmailReplyDirect,
   gmailSuggestReply,
   calendarRsvpDirect,

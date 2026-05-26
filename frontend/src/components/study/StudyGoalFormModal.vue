@@ -212,20 +212,17 @@ async function onSubmit() {
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgba(2, 6, 23, 0.62);
-  backdrop-filter: blur(16px);
-  z-index: 200;
+  background: rgba(0, 0, 0, 0.62);
+    z-index: 200;
 }
 .sh-modal {
   width: min(560px, 100%);
   max-height: 90vh;
   overflow: auto;
-  border-radius: 24px;
-  border: 1px solid rgba(176, 201, 255, 0.18);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015)),
-    rgba(9, 14, 30, 0.92);
-  box-shadow: 0 32px 80px rgba(2, 6, 23, 0.48);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.48);
   color: var(--text-primary);
 }
 .sh-modal-head {
@@ -249,7 +246,7 @@ async function onSubmit() {
 }
 .sh-icon-btn {
   background: transparent;
-  border: 1px solid rgba(176, 201, 255, 0.14);
+  border: 1px solid var(--border-default);
   border-radius: 12px;
   width: 32px;
   height: 32px;
@@ -282,8 +279,8 @@ async function onSubmit() {
 .sh-field select {
   width: 100%;
   border-radius: 12px;
-  border: 1px solid rgba(176, 201, 255, 0.16);
-  background: rgba(8, 14, 30, 0.62);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
   color: var(--text-primary);
   font: inherit;
   padding: 10px 12px;
@@ -292,13 +289,13 @@ async function onSubmit() {
 }
 .sh-field input::placeholder { color: rgba(127, 140, 166, 0.6); }
 .sh-field select option {
-  background: #0b1327;
+  background: var(--bg-elevated);
   color: var(--text-primary);
 }
 .sh-field input:focus,
 .sh-field select:focus {
-  border-color: rgba(82, 212, 255, 0.42);
-  box-shadow: 0 0 0 3px rgba(82, 212, 255, 0.12);
+  border-color: rgba(79, 140, 255, 0.42);
+  box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.12);
 }
 .sh-field input[type="date"]::-webkit-calendar-picker-indicator {
   filter: invert(0.86) hue-rotate(180deg) brightness(1.1);
@@ -321,7 +318,7 @@ async function onSubmit() {
   margin-top: 6px;
 }
 .sh-btn {
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   padding: 9px 18px;
   font: inherit;
   font-weight: 500;
@@ -332,17 +329,17 @@ async function onSubmit() {
 .sh-btn:disabled { opacity: 0.6; cursor: progress; }
 .sh-btn--ghost {
   background: transparent;
-  border-color: rgba(176, 201, 255, 0.16);
+  border-color: var(--border-default);
   color: var(--text-secondary);
 }
 .sh-btn--ghost:hover { color: var(--text-primary); }
 .sh-btn--primary {
-  color: #050816;
-  background: linear-gradient(135deg, rgba(82, 212, 255, 0.92), rgba(139, 125, 255, 0.82));
-  border-color: rgba(82, 212, 255, 0.42);
-  box-shadow: 0 18px 38px rgba(82, 212, 255, 0.22);
+  color: white;
+  background: var(--accent);
+  border-color: rgba(79, 140, 255, 0.42);
+  
 }
-.sh-btn--primary:hover:not(:disabled) { transform: translateY(-1px); }
+.sh-btn--primary:hover:not(:disabled) { opacity: 0.9; }
 @media (max-width: 640px) {
   .sh-field-row { grid-template-columns: 1fr; }
 }

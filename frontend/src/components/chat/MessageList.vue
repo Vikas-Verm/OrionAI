@@ -45,7 +45,7 @@
       </div>
 
       <!-- Messages -->
-      <MessageBubble v-for="(msg, i) in store.messages" :key="i" :msg="msg" :messageIndex="i" />
+      <MessageBubble v-for="(msg, i) in store.messages" :key="i" :msg="msg" :messageIndex="i" @disambiguate="emit('disambiguate', $event)" />
 
       <!-- Typing indicator -->
       <TypingIndicator />
@@ -78,7 +78,7 @@ import ChartContainer from '../chart/ChartContainer.vue'
 import TypingIndicator from './TypingIndicator.vue'
 import RegenButton from './RegenButton.vue'
 
-const emit = defineEmits(['usePrompt', 'regenerate'])
+const emit = defineEmits(['usePrompt', 'regenerate', 'disambiguate'])
 const containerRef = ref(null)
 const showScrollBtn = ref(false)
 let userScrolledUp = false

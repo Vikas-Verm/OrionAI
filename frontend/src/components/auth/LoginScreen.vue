@@ -49,6 +49,7 @@
         <div v-if="GOOGLE_CLIENT_ID" class="auth-google-stack">
           <div
             id="google-signin-btn"
+            ref="googleButtonHost"
             class="auth-google-host"
             :class="{ 'auth-google-host--hidden': !googleReady }"
           ></div>
@@ -116,7 +117,7 @@
               @click="showSignInPassword = !showSignInPassword"
             >
               <svg
-                v-if="showSignInPassword"
+                v-if="!showSignInPassword"
                 class="auth-visibility-icon"
                 viewBox="0 0 24 24"
                 fill="none"
@@ -229,7 +230,7 @@
               @click="showSignUpPassword = !showSignUpPassword"
             >
               <svg
-                v-if="showSignUpPassword"
+                v-if="!showSignUpPassword"
                 class="auth-visibility-icon"
                 viewBox="0 0 24 24"
                 fill="none"
@@ -283,7 +284,7 @@
               @click="showConfirmPassword = !showConfirmPassword"
             >
               <svg
-                v-if="showConfirmPassword"
+                v-if="!showConfirmPassword"
                 class="auth-visibility-icon"
                 viewBox="0 0 24 24"
                 fill="none"
@@ -330,7 +331,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import api from '../../services/api'
 import { setAuth } from '../../stores/app'
 
@@ -342,6 +343,7 @@ const signUpLoading = ref(false)
 const googleLoading = ref(false)
 const googleReady = ref(false)
 const googleLoadFailed = ref(false)
+const googleButtonHost = ref(null)
 
 const feedback = ref({ tone: 'error', message: '' })
 const fieldErrors = ref({})
@@ -365,6 +367,8 @@ const showSignUpPassword = ref(false)
 const showConfirmPassword = ref(false)
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID
+let googleResizeObserver = null
+let googleRenderFrame = 0
 
 const isBusy = computed(
   () => signInLoading.value || signUpLoading.value || googleLoading.value
@@ -407,24 +411,54 @@ onMounted(async () => {
       cancel_on_tap_outside: true,
     })
 
-    window.google.accounts.id.renderButton(
-      document.getElementById('google-signin-btn'),
-      {
-        type: 'standard',
-        theme: 'filled_black',
-        size: 'large',
-        width: 360,
-        text: 'continue_with',
-        shape: 'pill',
-        logo_alignment: 'left',
-      }
-    )
-
-    googleReady.value = true
+    await nextTick()
+    renderGoogleButton()
+    if (window.ResizeObserver && googleButtonHost.value) {
+      googleResizeObserver = new ResizeObserver(scheduleGoogleButtonRender)
+      googleResizeObserver.observe(googleButtonHost.value)
+    }
   } catch {
     googleLoadFailed.value = true
   }
 })
+
+onBeforeUnmount(() => {
+  googleResizeObserver?.disconnect()
+  if (googleRenderFrame) cancelAnimationFrame(googleRenderFrame)
+})
+
+function getGoogleButtonWidth() {
+  const host = googleButtonHost.value
+  if (!host) return 320
+  const width = Math.floor(host.getBoundingClientRect().width)
+  return Math.max(240, Math.min(420, width || 320))
+}
+
+function scheduleGoogleButtonRender() {
+  if (googleRenderFrame) cancelAnimationFrame(googleRenderFrame)
+  googleRenderFrame = requestAnimationFrame(() => {
+    googleRenderFrame = 0
+    renderGoogleButton()
+  })
+}
+
+function renderGoogleButton() {
+  const host = googleButtonHost.value
+  if (!host || !window.google?.accounts?.id) return
+
+  host.innerHTML = ''
+  window.google.accounts.id.renderButton(host, {
+    type: 'standard',
+    theme: 'filled_black',
+    size: 'large',
+    width: getGoogleButtonWidth(),
+    text: 'continue_with',
+    shape: 'pill',
+    logo_alignment: 'left',
+  })
+
+  googleReady.value = true
+}
 
 function loadGoogleScript() {
   return new Promise((resolve, reject) => {
@@ -596,41 +630,19 @@ async function submitSignUp() {
 <style scoped>
 .auth-shell {
   position: relative;
-  min-height: 100vh;
-  min-height: 100svh;
+  height: 100%;
+  min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   display: flex;
+  align-items: flex-start;
   justify-content: center;
   padding: clamp(20px, 4vh, 40px) 24px;
-  background:
-    radial-gradient(circle at top, rgba(82, 212, 255, 0.14), transparent 32%),
-    linear-gradient(180deg, #040713 0%, #050816 48%, #070d1c 100%);
+  background: var(--bg-base);
 }
 
-.auth-glow {
-  position: absolute;
-  border-radius: 999px;
-  filter: blur(24px);
-  opacity: 0.75;
-}
-
-.auth-glow--cyan {
-  top: -100px;
-  left: -80px;
-  width: 320px;
-  height: 320px;
-  background: rgba(82, 212, 255, 0.12);
-}
-
-.auth-glow--violet {
-  right: -120px;
-  bottom: -120px;
-  width: 360px;
-  height: 360px;
-  background: rgba(139, 125, 255, 0.12);
-}
-
+.auth-glow,
 .auth-grid {
   display: none;
 }
@@ -638,19 +650,14 @@ async function submitSignUp() {
 .auth-card {
   position: relative;
   z-index: 1;
-  width: min(100%, 560px);
+  width: min(100%, 480px);
   margin: auto 0;
   flex-shrink: 0;
   padding: 34px 30px 24px;
-  border-radius: 28px;
-  border: 1px solid rgba(176, 201, 255, 0.16);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
-    rgba(6, 12, 28, 0.86);
-  box-shadow:
-    0 36px 120px rgba(0, 0, 0, 0.46),
-    0 0 0 1px rgba(82, 212, 255, 0.06);
-  backdrop-filter: blur(24px);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-lg);
 }
 
 .auth-brand {
@@ -662,30 +669,26 @@ async function submitSignUp() {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 72px;
-  height: 72px;
+  width: 64px;
+  height: 64px;
   margin: 0 auto 16px;
-  border-radius: 24px;
-  background:
-    linear-gradient(145deg, rgba(82, 212, 255, 0.24), rgba(139, 125, 255, 0.18)),
-    rgba(10, 19, 39, 0.92);
-  border: 1px solid rgba(82, 212, 255, 0.22);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
 }
 
 .auth-logo-glyph {
-  font-size: 2rem;
+  font-size: 1.8rem;
   line-height: 1;
-  filter: drop-shadow(0 6px 18px rgba(82, 212, 255, 0.24));
 }
 
 .auth-title {
   margin: 0;
   color: var(--text-primary);
   font-family: var(--font-brand);
-  font-size: clamp(2rem, 5vw, 2.6rem);
-  font-weight: 400;
-  letter-spacing: 0.02em;
+  font-size: clamp(1.6rem, 4vw, 2rem);
+  font-weight: 600;
+  letter-spacing: -0.02em;
 }
 
 .auth-tagline {
@@ -706,57 +709,54 @@ async function submitSignUp() {
 .auth-tabs {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 8px;
-  padding: 6px;
+  gap: 4px;
+  padding: 4px;
   margin-bottom: 16px;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(176, 201, 255, 0.08);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
 }
 
 .auth-tab {
   border: 0;
-  border-radius: 12px;
-  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
   color: var(--text-secondary);
   background: transparent;
-  font-size: 0.95rem;
-  font-weight: 600;
+  font-size: 0.9rem;
+  font-weight: 500;
   cursor: pointer;
-  transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease;
+  transition: background 0.12s, color 0.12s;
 }
 
 .auth-tab:hover:not(:disabled) {
   color: var(--text-primary);
-  transform: translateY(-1px);
 }
 
 .auth-tab--active {
   color: var(--text-primary);
-  background:
-    linear-gradient(135deg, rgba(82, 212, 255, 0.18), rgba(139, 125, 255, 0.16)),
-    rgba(255, 255, 255, 0.05);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
 }
 
 .auth-banner {
   margin-bottom: 14px;
-  padding: 12px 14px;
-  border-radius: 14px;
-  font-size: 0.92rem;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 0.88rem;
   line-height: 1.45;
 }
 
 .auth-banner--error {
-  color: #ffb2bd;
-  border: 1px solid rgba(255, 107, 127, 0.24);
-  background: rgba(255, 107, 127, 0.11);
+  color: #FCA5A5;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  background: rgba(239, 68, 68, 0.08);
 }
 
 .auth-banner--success {
-  color: #b4ffe5;
-  border: 1px solid rgba(47, 211, 157, 0.24);
-  background: rgba(47, 211, 157, 0.12);
+  color: #86EFAC;
+  border: 1px solid rgba(34, 197, 94, 0.2);
+  background: rgba(34, 197, 94, 0.08);
 }
 
 .auth-social {
@@ -766,12 +766,19 @@ async function submitSignUp() {
 .auth-google-stack {
   position: relative;
   min-height: 46px;
+  width: 100%;
 }
 
 .auth-google-host {
   display: flex;
   justify-content: center;
+  width: 100%;
   min-height: 44px;
+}
+
+.auth-google-host :deep(div),
+.auth-google-host :deep(iframe) {
+  max-width: 100%;
 }
 
 .auth-google-host--hidden {
@@ -784,13 +791,13 @@ async function submitSignUp() {
   justify-content: center;
   gap: 12px;
   width: 100%;
-  min-height: 46px;
-  border-radius: 999px;
-  border: 1px solid rgba(176, 201, 255, 0.12);
-  background: rgba(255, 255, 255, 0.03);
+  min-height: 44px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  background: transparent;
   color: var(--text-secondary);
-  font-size: 0.95rem;
-  font-weight: 600;
+  font-size: 0.9rem;
+  font-weight: 500;
 }
 
 .auth-google-stack .auth-google-fallback {
@@ -833,7 +840,7 @@ async function submitSignUp() {
   content: '';
   flex: 1;
   height: 1px;
-  background: rgba(176, 201, 255, 0.08);
+  background: var(--border-subtle);
 }
 
 .auth-form {
@@ -852,6 +859,7 @@ async function submitSignUp() {
   display: flex;
   flex-direction: column;
   gap: 7px;
+  min-width: 0;
 }
 
 .auth-field--wide {
@@ -868,25 +876,25 @@ async function submitSignUp() {
 
 .auth-field input {
   width: 100%;
-  min-height: 48px;
+  min-width: 0;
+  min-height: 44px;
   padding: 0 14px;
-  border-radius: 14px;
-  border: 1px solid rgba(176, 201, 255, 0.12);
-  background: rgba(255, 255, 255, 0.04);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
   color: var(--text-primary);
-  font-size: 0.97rem;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  font-size: 0.9rem;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 
 .auth-field input::placeholder {
-  color: rgba(127, 140, 166, 0.78);
+  color: var(--text-muted);
 }
 
 .auth-field input:focus {
   outline: none;
-  border-color: rgba(82, 212, 255, 0.4);
-  box-shadow: 0 0 0 4px rgba(82, 212, 255, 0.08);
-  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.1);
 }
 
 .auth-field input:disabled,
@@ -913,21 +921,20 @@ async function submitSignUp() {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 38px;
-  height: 38px;
+  width: 34px;
+  height: 34px;
   padding: 0;
-  border: 1px solid rgba(176, 201, 255, 0.08);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.03);
-  color: var(--accent-hover);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
   cursor: pointer;
-  transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+  transition: background 0.12s, color 0.12s;
 }
 
 .auth-visibility:hover:not(:disabled) {
-  background: rgba(82, 212, 255, 0.08);
-  border-color: rgba(82, 212, 255, 0.18);
-  color: #d4f7ff;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
 }
 
 .auth-visibility-icon {
@@ -948,29 +955,27 @@ async function submitSignUp() {
   align-items: center;
   justify-content: center;
   gap: 10px;
-  min-height: 50px;
+  min-height: 44px;
   margin-top: 4px;
   border: 0;
-  border-radius: 16px;
-  background: linear-gradient(135deg, rgba(82, 212, 255, 0.92), rgba(139, 125, 255, 0.9));
-  color: #04101e;
-  font-size: 0.98rem;
-  font-weight: 700;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: white;
+  font-size: 0.9rem;
+  font-weight: 600;
   cursor: pointer;
-  box-shadow: 0 18px 36px rgba(82, 212, 255, 0.14);
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition: background 0.15s;
 }
 
 .auth-submit:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 22px 46px rgba(82, 212, 255, 0.18);
+  background: var(--accent-hover);
 }
 
 .auth-spinner {
   width: 16px;
   height: 16px;
-  border: 2px solid rgba(4, 16, 30, 0.24);
-  border-top-color: rgba(4, 16, 30, 0.9);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
   border-radius: 999px;
   animation: auth-spin 0.8s linear infinite;
 }
@@ -992,16 +997,40 @@ async function submitSignUp() {
 
 @media (max-width: 640px) {
   .auth-shell {
-    padding: 16px;
+    padding: 12px;
   }
 
   .auth-card {
-    padding: 26px 18px 20px;
-    border-radius: 22px;
+    width: 100%;
+    margin: 0;
+    padding: 22px 16px 18px;
+    border-radius: var(--radius-md);
+  }
+
+  .auth-brand {
+    margin-bottom: 18px;
+  }
+
+  .auth-logo {
+    width: 52px;
+    height: 52px;
+    margin-bottom: 12px;
+    border-radius: 12px;
+  }
+
+  .auth-tabs {
+    gap: 4px;
+    margin-bottom: 14px;
+  }
+
+  .auth-tab {
+    min-height: 40px;
+    padding: 8px;
   }
 
   .auth-grid-fields {
     grid-template-columns: 1fr;
+    gap: 14px;
   }
 
   .auth-field--wide {
@@ -1014,6 +1043,64 @@ async function submitSignUp() {
 
   .auth-support {
     font-size: 0.9rem;
+  }
+}
+
+@media (max-height: 820px) {
+  .auth-shell {
+    padding-block: 14px;
+  }
+
+  .auth-card {
+    margin: 0;
+    padding-block: 22px 18px;
+  }
+
+  .auth-brand {
+    margin-bottom: 16px;
+  }
+
+  .auth-logo {
+    width: 58px;
+    height: 58px;
+    margin-bottom: 10px;
+    border-radius: var(--radius-md);
+  }
+
+  .auth-title {
+    font-size: 2rem;
+  }
+
+  .auth-tagline {
+    margin-block: 6px;
+  }
+
+  .auth-support {
+    line-height: 1.45;
+  }
+
+  .auth-tabs,
+  .auth-divider {
+    margin-block: 12px;
+  }
+
+  .auth-form,
+  .auth-grid-fields {
+    gap: 12px;
+  }
+
+  .auth-field input {
+    min-height: 44px;
+  }
+
+  .auth-submit {
+    min-height: 46px;
+  }
+}
+
+@supports (height: 100dvh) {
+  .auth-shell {
+    height: 100dvh;
   }
 }
 </style>

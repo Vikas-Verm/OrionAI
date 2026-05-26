@@ -244,14 +244,11 @@ function togglePanel() {
   flex-direction: column;
   gap: 8px;
   padding: 10px 11px;
-  border-radius: 20px;
-  border: 1px solid rgba(176, 201, 255, 0.1);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.015)),
-    rgba(9, 16, 34, 0.72);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
   box-shadow: var(--shadow-sm);
-  backdrop-filter: blur(18px);
-  transition:
+    transition:
     padding 0.18s ease,
     border-color 0.18s ease,
     background 0.18s ease,
@@ -261,10 +258,8 @@ function togglePanel() {
 .comm-insights.mode-zero {
   gap: 6px;
   padding: 7px 10px;
-  border-color: rgba(176, 201, 255, 0.08);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.01)),
-    rgba(9, 16, 34, 0.64);
+  border-color: var(--border-subtle);
+  background: var(--bg-surface);
 }
 
 .comm-insights.mode-low {
@@ -273,10 +268,9 @@ function togglePanel() {
 
 .comm-insights.mode-high {
   padding: 10px 11px;
-  border-color: rgba(82, 212, 255, 0.18);
-  background:
-    linear-gradient(180deg, rgba(82, 212, 255, 0.06), rgba(255, 255, 255, 0.012)),
-    rgba(9, 16, 34, 0.74);
+  border-color: rgba(79, 140, 255, 0.18);
+  background: rgba(79, 140, 255, 0.06),
+    var(--bg-base);
   box-shadow: 0 16px 32px rgba(2, 8, 24, 0.22);
 }
 
@@ -303,7 +297,7 @@ function togglePanel() {
 .comm-insights-kicker {
   display: inline-flex;
   padding: 3px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: rgba(242, 198, 109, 0.12);
   color: var(--accent-warm);
   font-size: 9.5px;
@@ -315,7 +309,7 @@ function togglePanel() {
 .comm-insights-status {
   display: inline-flex;
   padding: 3px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: rgba(255, 107, 127, 0.14);
   color: #ffc3cf;
   font-size: 9.5px;
@@ -369,14 +363,14 @@ function togglePanel() {
   align-items: center;
   gap: 5px;
   padding: 4px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   font-size: 9.5px;
   font-weight: 600;
 }
 
 .comm-insights-chip {
   border: 1px solid transparent;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--bg-elevated);
   color: var(--text-secondary);
   cursor: pointer;
 }
@@ -388,8 +382,8 @@ function togglePanel() {
 }
 
 .comm-insights-chip.active {
-  border-color: rgba(82, 212, 255, 0.24);
-  background: rgba(82, 212, 255, 0.12);
+  border-color: rgba(79, 140, 255, 0.24);
+  background: rgba(79, 140, 255, 0.12);
   color: var(--text-primary);
 }
 
@@ -409,12 +403,12 @@ function togglePanel() {
 }
 
 .comm-insights-chip.state-needs_follow_up {
-  background: rgba(82, 212, 255, 0.14);
+  background: rgba(79, 140, 255, 0.14);
   color: #bdefff;
 }
 
 .comm-insights-quiet-pill {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--bg-elevated);
   color: var(--text-muted);
 }
 
@@ -431,7 +425,7 @@ function togglePanel() {
 
 .comm-insights-btn {
   border: 1px solid var(--border-default);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--bg-elevated);
   color: var(--text-secondary);
   border-radius: 12px;
   padding: 7px 10px;
@@ -456,8 +450,8 @@ function togglePanel() {
 }
 
 .comm-insights-btn--primary {
-  border-color: rgba(82, 212, 255, 0.22);
-  background: rgba(82, 212, 255, 0.12);
+  border-color: rgba(79, 140, 255, 0.22);
+  background: rgba(79, 140, 255, 0.12);
   color: var(--text-primary);
 }
 
@@ -468,7 +462,7 @@ function togglePanel() {
 
 .comm-insights-panel {
   padding-top: 8px;
-  border-top: 1px solid rgba(176, 201, 255, 0.08);
+  border-top: 1px solid var(--border-subtle);
 }
 
 .comm-insights.mode-zero .comm-insights-panel {

@@ -23,6 +23,7 @@
         >
           <div class="step-icon-wrap">
             <span v-if="step.status === 'running'" class="step-spinner"></span>
+            <span v-else-if="step.status === 'disambiguating'" class="step-spinner"></span>
             <span v-else-if="step.status === 'done'" class="step-check">✓</span>
             <span v-else-if="step.status === 'error'" class="step-err">✕</span>
             <span v-else class="step-pending-dot"></span>
@@ -30,8 +31,22 @@
           <div class="step-body">
             <span class="step-label">{{ step.label || step.tool }}</span>
             <span v-if="step.status === 'running'" class="step-sub running">Working…</span>
+            <span v-else-if="step.status === 'disambiguating'" class="step-sub running">Choose one below…</span>
             <span v-else-if="step.status === 'done' && step.summary" class="step-sub done">{{ step.summary }}</span>
             <span v-else-if="step.status === 'error'" class="step-sub error">{{ step.error }}</span>
+            <!-- Disambiguation picker -->
+            <div v-if="step.status === 'disambiguating' && step.disambiguateItems?.length" class="disambiguate-list">
+              <button
+                v-for="item in step.disambiguateItems"
+                :key="item.id"
+                class="disambiguate-item"
+                @click="$emit('disambiguate', item)"
+              >
+                <span class="disambiguate-icon">{{ step.tool?.includes('sheet') ? '📊' : '📄' }}</span>
+                <span class="disambiguate-title">{{ item.title }}</span>
+                <span v-if="item.ownerName" class="disambiguate-owner">{{ item.ownerName }}</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -264,6 +279,16 @@
           <SlackRenderer :steps="msg.steps || []" :msg="msg" />
         </template>
 
+        <!-- ── GOOGLE DOCS — delegated to GoogleDocsRenderer ── -->
+        <template v-else-if="hasGoogleDocsStep">
+          <GoogleDocsRenderer :steps="msg.steps || []" :msg="msg" />
+        </template>
+
+        <!-- ── GOOGLE SHEETS — delegated to GoogleSheetsRenderer ── -->
+        <template v-else-if="hasGoogleSheetsStep">
+          <GoogleSheetsRenderer :steps="msg.steps || []" :msg="msg" />
+        </template>
+
         <!-- Fallback plain text -->
         <div v-else-if="msg.content" class="agent-text-content" v-html="formattedContent"></div>
 
@@ -374,6 +399,10 @@ import { store } from '../../stores/app'
 import TelegramRenderer from '../../components/agent/renderers/TelegramRenderer.vue'
 import CalendarRenderer from '../../components/agent/renderers/CalendarRenderer.vue'
 import SlackRenderer    from '../../components/agent/renderers/SlackRenderer.vue'
+import GoogleDocsRenderer   from '../../components/agent/renderers/GoogleDocsRenderer.vue'
+import GoogleSheetsRenderer from '../../components/agent/renderers/GoogleSheetsRenderer.vue'
+
+const emit = defineEmits(['disambiguate'])
 
 const props = defineProps({
   msg: { type: Object, required: true },
@@ -521,6 +550,26 @@ const hasSlackStep = computed(() =>
   (props.msg.steps || []).some(s => SLACK_TOOLS.includes(s.tool))
 )
 
+// ── Google Docs ───────────────────────────────────────────────────────────
+const GDOCS_TOOLS = [
+  'google_docs_list', 'google_docs_get', 'google_docs_create',
+  'google_docs_update', 'google_docs_share', 'google_docs_delete',
+  'google_docs_search',
+]
+const hasGoogleDocsStep = computed(() =>
+  (props.msg.steps || []).some(s => GDOCS_TOOLS.includes(s.tool))
+)
+
+// ── Google Sheets ─────────────────────────────────────────────────────────
+const GSHEETS_TOOLS = [
+  'google_sheets_list', 'google_sheets_get', 'google_sheets_create',
+  'google_sheets_rename', 'google_sheets_share', 'google_sheets_delete',
+  'google_sheets_search', 'google_sheets_duplicate',
+]
+const hasGoogleSheetsStep = computed(() =>
+  (props.msg.steps || []).some(s => GSHEETS_TOOLS.includes(s.tool))
+)
+
 // ── Gmail helpers ──────────────────────────────────────────────────────────
 const expandedId      = ref(null)
 const replyingTo      = ref(null)
@@ -647,7 +696,7 @@ async function submitFeedback(rating) {
 .feedback-btn {
   width: 30px;
   height: 30px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border-subtle);
   background: var(--bg-overlay);
   color: var(--text-secondary);

@@ -63,7 +63,7 @@ export const dbAPI = {
 };
 
 // ── Streaming chat (returns raw fetch Response) ───────────
-export function streamChat(message, sessionId, webSearch = false) {
+export function streamChat(message, sessionId, webSearch = false, signal) {
   const token = localStorage.getItem("token");
   return fetch(`${API_BASE}/chat`, {
     method: "POST",
@@ -72,6 +72,7 @@ export function streamChat(message, sessionId, webSearch = false) {
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({ message, sessionId, webSearch }),
+    signal,
   });
 }
 
@@ -185,7 +186,7 @@ export const studyAPI = {
     api.post(`/api/study/revision/${id}/snooze`, { days }),
 };
 
-export function streamAgentRun(steps, sessionId, userMessage) {
+export function streamAgentRun(steps, sessionId, userMessage, signal) {
   const token = localStorage.getItem("token");
   return fetch(`${API_BASE}/api/agent/run`, {
     method: "POST",
@@ -194,6 +195,7 @@ export function streamAgentRun(steps, sessionId, userMessage) {
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({ steps, sessionId, userMessage }),
+    signal,
   });
 }
 

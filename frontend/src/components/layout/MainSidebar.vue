@@ -43,7 +43,15 @@
           <div v-for="n in bellNotifications.slice(0, 15)" :key="n.id" class="bell-history-row"
             :class="{ 'bell-unread': !n.read }">
             <div class="bell-history-main" @click="openBellNotification(n)">
-              <span class="bell-history-icon">{{ n.icon }}</span>
+              <img
+                v-if="bellIconUrl(n) && !brokenBellIconIds.has(n.id)"
+                :src="bellIconUrl(n)"
+                :alt="n.label || ''"
+                class="bell-history-app-icon"
+                loading="lazy"
+                @error="brokenBellIconIds.add(n.id)"
+              />
+              <span v-else class="bell-history-icon">{{ n.icon }}</span>
               <div class="bell-history-body">
                 <div class="bell-history-text">{{ n.summary }}</div>
                 <div class="bell-history-meta">{{ bellMeta(n) }}</div>
@@ -656,6 +664,13 @@ function bellMeta(notification) {
   return parts.join(' · ')
 }
 
+const brokenBellIconIds = reactive(new Set())
+function bellIconUrl(notification) {
+  const key = notification?.app || notification?.route
+  if (!key) return ''
+  return getAppIconUrl(key)
+}
+
 const { getStatus, getErrorMessage, startAutoCheck, stopAutoCheck, checkHealth } = useIntegrationHealth()
 
 async function refreshConnected(integrations) {
@@ -683,10 +698,8 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
 <style scoped>
 .sidebar {
   width: var(--sidebar-width);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.012)),
-    rgba(7, 12, 26, 0.8);
-  border-right: 1px solid var(--border-subtle);
+  background: var(--bg-surface, #111318);
+  border-right: 1px solid var(--border-subtle, #1E2230);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
@@ -696,8 +709,6 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   overflow: hidden;
   padding: 14px 12px;
   gap: 10px;
-  backdrop-filter: blur(24px);
-  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.02);
 }
 
 .sidebar-brand {
@@ -706,11 +717,10 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
-  border: 1px solid var(--border-default);
-  border-radius: 24px;
-  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--border-default, #232834);
+  border-radius: var(--radius-lg, 12px);
+  background: var(--bg-elevated, #181A22);
   flex-shrink: 0;
-  box-shadow: var(--shadow-sm);
   min-width: 0;
 }
 
@@ -723,7 +733,6 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
 .sidebar-brand-icon {
   font-size: 22px;
   line-height: 1;
-  filter: drop-shadow(0 8px 16px rgba(82, 212, 255, 0.18));
 }
 
 .sidebar-brand-name {
@@ -742,7 +751,7 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   background: rgba(242, 198, 109, 0.12);
   color: var(--accent-warm);
   padding: 4px 8px;
-  border-radius: 20px;
+  border-radius: var(--radius-sm, 6px);
   border: 1px solid rgba(242, 198, 109, 0.18);
   font-weight: 700;
   letter-spacing: 0.12em;
@@ -771,16 +780,16 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   position: relative;
   width: 40px;
   height: 40px;
-  border-radius: 16px;
-  border: 1px solid rgba(176, 201, 255, 0.12);
-  background: rgba(255, 255, 255, 0.04);
+  border-radius: var(--radius-md, 10px);
+  border: 1px solid var(--border-default, #232834);
+  background: var(--bg-elevated, #181A22);
   color: rgba(226, 232, 240, 0.88);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   flex-shrink: 0;
-  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
 
 .sidebar-quick-btn::after {
@@ -793,21 +802,19 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   pointer-events: none;
   white-space: nowrap;
   padding: 5px 8px;
-  border-radius: 999px;
-  border: 1px solid rgba(176, 201, 255, 0.14);
-  background: rgba(8, 14, 28, 0.95);
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid var(--border-default, #232834);
+  background: var(--bg-base, #0B0D12);
   color: rgba(226, 232, 240, 0.84);
   font-size: 10px;
   font-weight: 700;
-  transition: opacity 140ms ease, transform 140ms ease;
+  transition: opacity 0.12s ease, transform 0.12s ease;
 }
 
 .sidebar-quick-btn:hover,
 .sidebar-quick-btn:focus-visible {
-  transform: translateY(-1px);
-  border-color: rgba(82, 212, 255, 0.24);
-  background: rgba(82, 212, 255, 0.12);
-  box-shadow: 0 10px 20px rgba(4, 8, 20, 0.24);
+  border-color: rgba(79, 140, 255, 0.24);
+  background: rgba(79, 140, 255, 0.1);
   outline: none;
 }
 
@@ -818,8 +825,8 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
 }
 
 .sidebar-quick-btn-primary {
-  background: linear-gradient(135deg, rgba(82, 212, 255, 0.16), rgba(139, 125, 255, 0.14));
-  border-color: rgba(82, 212, 255, 0.22);
+  background: rgba(79, 140, 255, 0.12);
+  border-color: rgba(79, 140, 255, 0.22);
 }
 
 .sidebar-search-shell {
@@ -830,10 +837,9 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   min-width: 0;
   height: 40px;
   padding: 0 8px 0 12px;
-  border-radius: 16px;
-  border: 1px solid rgba(176, 201, 255, 0.14);
-  background: rgba(255, 255, 255, 0.045);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  border-radius: var(--radius-md, 10px);
+  border: 1px solid var(--border-default, #232834);
+  background: var(--bg-elevated, #181A22);
 }
 
 .sidebar-search-shell-icon {
@@ -872,8 +878,8 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
 
 .sidebar-search-inline-btn:hover,
 .sidebar-search-inline-btn:focus-visible {
-  border-color: rgba(82, 212, 255, 0.18);
-  background: rgba(82, 212, 255, 0.08);
+  border-color: rgba(79, 140, 255, 0.18);
+  background: rgba(79, 140, 255, 0.08);
   color: var(--text-primary);
   outline: none;
 }
@@ -909,29 +915,24 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   align-items: center;
   gap: 8px;
   padding: 9px 10px;
-  border-radius: 16px;
+  border-radius: var(--radius-md, 10px);
   cursor: pointer;
-  border: 1px solid rgba(255, 255, 255, 0.02);
+  border: 1px solid transparent;
   color: var(--text-secondary);
   font-size: 11.5px;
-  background: rgba(255, 255, 255, 0.02);
-  transition: background 0.12s, border-color 0.12s, transform 0.12s, box-shadow 0.12s;
+  background: transparent;
+  transition: background 0.12s, border-color 0.12s;
 }
 
 .session-item:hover {
-  background: rgba(255, 255, 255, 0.05);
-  border-color: rgba(176, 201, 255, 0.1);
-  transform: translateY(-1px);
-  box-shadow: 0 10px 18px rgba(4, 8, 20, 0.16);
+  background: var(--bg-elevated, #181A22);
+  border-color: var(--border-subtle, #1E2230);
 }
 
 .session-item.active {
-  background:
-    linear-gradient(135deg, rgba(82, 212, 255, 0.08), rgba(139, 125, 255, 0.08)),
-    rgba(255, 255, 255, 0.04);
-  border-color: rgba(82, 212, 255, 0.18);
+  background: rgba(79, 140, 255, 0.08);
+  border-color: rgba(79, 140, 255, 0.18);
   color: var(--text-primary);
-  box-shadow: var(--shadow-sm);
 }
 
 .session-icon {
@@ -950,13 +951,13 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   display: none;
   width: 22px;
   height: 22px;
-  background: rgba(255, 255, 255, 0.04);
+  background: transparent;
   border: 1px solid transparent;
   color: var(--text-faint);
   cursor: pointer;
   font-size: 11px;
   padding: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-sm, 6px);
   flex-shrink: 0;
 }
 
@@ -972,12 +973,11 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
 
 /* ── Integrations ── */
 .int-section {
-  border: 1px solid var(--border-default);
+  border: 1px solid var(--border-default, #232834);
   padding: 12px 12px 8px;
   flex-shrink: 0;
-  border-radius: 22px;
-  background: rgba(255, 255, 255, 0.03);
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-lg, 12px);
+  background: var(--bg-elevated, #181A22);
 }
 
 .int-header {
@@ -1000,12 +1000,12 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
 }
 
 .int-total-pill {
-  background: linear-gradient(135deg, rgba(82, 212, 255, 0.92), rgba(139, 125, 255, 0.82));
+  background: var(--accent, #4F8CFF);
   color: white;
   font-size: 9px;
   font-weight: 700;
   padding: 3px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm, 6px);
   min-width: 14px;
   text-align: center;
   animation: pulse-badge 2s infinite;
@@ -1053,12 +1053,12 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   min-width: 38px;
   height: 38px;
   padding: 0 10px;
-  border-radius: 14px;
-  border: 1px dashed rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-md, 10px);
+  border: 1px dashed var(--border-default, #232834);
   color: var(--text-secondary);
   font-size: 11px;
   font-weight: 600;
-  background: rgba(255, 255, 255, 0.02);
+  background: transparent;
 }
 
 .int-no-msg {
@@ -1078,8 +1078,7 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   cursor: pointer;
   transition: all 0.15s;
   flex-shrink: 0;
-  backdrop-filter: blur(14px);
-}
+ }
 
 .int-badge:hover {
   transform: translateY(-1px) scale(1.03);
@@ -1087,7 +1086,7 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
 }
 
 .int-badge-active {
-  box-shadow: 0 0 0 1px rgba(82, 212, 255, 0.18), 0 14px 28px rgba(82, 212, 255, 0.1);
+  box-shadow: none;
 }
 
 /* Glow pulse when has unread */
@@ -1147,7 +1146,7 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   width: 100%;
   padding: 9px 12px 9px 34px;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: rgba(255, 255, 255, 0.035);
   color: var(--text-primary);
   font-size: 12px;
@@ -1161,8 +1160,8 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
 }
 
 .int-search-input:focus {
-  border-color: rgba(82, 212, 255, 0.22);
-  box-shadow: 0 0 0 4px rgba(82, 212, 255, 0.06);
+  border-color: rgba(79, 140, 255, 0.22);
+  box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.08);
 }
 
 .int-list-scroll {
@@ -1170,7 +1169,7 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   overflow-y: auto;
   padding-right: 4px;
   scrollbar-width: thin;
-  scrollbar-color: rgba(139, 125, 255, 0.35) transparent;
+  scrollbar-color: rgba(79, 140, 255, 0.35) transparent;
 }
 
 .int-list-scroll::-webkit-scrollbar {
@@ -1182,8 +1181,8 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
 }
 
 .int-list-scroll::-webkit-scrollbar-thumb {
-  border-radius: 999px;
-  background: linear-gradient(180deg, rgba(82, 212, 255, 0.36), rgba(139, 125, 255, 0.36));
+  border-radius: var(--radius-sm);
+  background: rgba(79, 140, 255, 0.2);
 }
 
 .int-empty {
@@ -1272,9 +1271,9 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   gap: 6px;
   padding: 10px 12px;
   margin-top: 6px;
-  background: linear-gradient(135deg, rgba(82, 212, 255, 0.08), rgba(139, 125, 255, 0.08));
-  border: 1px solid rgba(82, 212, 255, 0.16);
-  border-radius: 18px;
+  background: rgba(79, 140, 255, 0.06);
+  border: 1px solid rgba(79, 140, 255, 0.16);
+  border-radius: var(--radius-md);
   font-size: 11px;
   color: var(--text-secondary);
   line-height: 1.4;
@@ -1293,7 +1292,7 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   border: 1px solid var(--border-default);
   padding: 10px;
   flex-shrink: 0;
-  border-radius: 22px;
+  border-radius: var(--radius-lg);
   background: rgba(255, 255, 255, 0.03);
   box-shadow: var(--shadow-sm);
 }
@@ -1327,19 +1326,19 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
 }
 
 .int-settings-row.active {
-  background: rgba(82, 212, 255, 0.08);
-  border-color: rgba(82, 212, 255, 0.18);
+  background: rgba(79, 140, 255, 0.08);
+  border-color: rgba(79, 140, 255, 0.18);
   color: var(--text-primary);
 }
 
 .int-settings-count {
   margin-left: auto;
-  background: rgba(82, 212, 255, 0.16);
+  background: rgba(79, 140, 255, 0.16);
   color: var(--accent-hover);
   font-size: 9px;
   font-weight: 700;
   padding: 3px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
 }
 
 .user-row-wrapper {
@@ -1365,7 +1364,7 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: linear-gradient(135deg, rgba(82, 212, 255, 0.94), rgba(139, 125, 255, 0.84));
+  background: var(--accent);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1373,7 +1372,7 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   font-size: 11px;
   color: white;
   flex-shrink: 0;
-  box-shadow: 0 14px 24px rgba(82, 212, 255, 0.22);
+  box-shadow: none;
 }
 
 .username {
@@ -1400,14 +1399,13 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   bottom: calc(100% + 6px);
   left: 0;
   right: 0;
-  background: var(--surface-glass-strong);
+  background: var(--bg-surface);
   border: 1px solid var(--border-default);
-  border-radius: 22px;
+  border-radius: var(--radius-lg);
   padding: 12px;
   z-index: 200;
   box-shadow: var(--shadow-lg);
-  backdrop-filter: blur(24px);
-}
+ }
 
 .popup-section-label {
   font-size: 10px;
@@ -1446,8 +1444,8 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
 }
 
 .popup-theme-btn.active {
-  background: rgba(82, 212, 255, 0.1);
-  border-color: rgba(82, 212, 255, 0.22);
+  background: rgba(79, 140, 255, 0.1);
+  border-color: rgba(79, 140, 255, 0.22);
   color: var(--accent-hover);
 }
 
@@ -1502,7 +1500,7 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   position: relative;
   width: 28px;
   height: 28px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--border-default);
   color: var(--text-muted, rgba(255, 255, 255, 0.35));
@@ -1517,7 +1515,7 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
 .sidebar-close {
   width: 28px;
   height: 28px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border-default);
   background: rgba(255, 255, 255, 0.04);
   color: var(--text-muted, rgba(255, 255, 255, 0.35));
@@ -1537,11 +1535,11 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
 .sidebar-close:hover {
   background: rgba(255, 255, 255, 0.07);
   color: var(--text-primary);
-  border-color: rgba(176, 201, 255, 0.18);
+  border-color: var(--border-default);
 }
 
 .sidebar-bell.bell-active {
-  border-color: rgba(82, 212, 255, 0.28);
+  border-color: rgba(79, 140, 255, 0.28);
   color: var(--accent-hover);
 }
 
@@ -1554,7 +1552,7 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   position: absolute;
   top: -5px;
   right: -5px;
-  background: linear-gradient(135deg, rgba(82, 212, 255, 0.92), rgba(139, 125, 255, 0.82));
+  background: var(--accent);
   color: white;
   font-size: 8px;
   font-weight: 700;
@@ -1574,14 +1572,13 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   margin: 0 12px 4px;
   max-height: 420px;
   overflow-y: auto;
-  background: var(--surface-glass-strong);
+  background: var(--bg-surface);
   border: 1px solid var(--border-default);
-  border-radius: 24px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   flex-shrink: 0;
   scrollbar-width: thin;
-  backdrop-filter: blur(24px);
-}
+ }
 
 .bell-panel-head {
   display: flex;
@@ -1612,7 +1609,7 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
 }
 
 .bell-btn-text:hover {
-  background: rgba(82, 212, 255, 0.1);
+  background: rgba(79, 140, 255, 0.1);
 }
 
 .bell-btn-close {
@@ -1714,13 +1711,22 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
 }
 
 .bell-history-row.bell-unread {
-  background: rgba(82, 212, 255, 0.08);
+  background: rgba(79, 140, 255, 0.08);
 }
 
 .bell-history-icon {
   font-size: 14px;
   flex-shrink: 0;
   margin-top: 1px;
+}
+
+.bell-history-app-icon {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  flex-shrink: 0;
+  margin-top: 1px;
+  border-radius: 3px;
 }
 
 .bell-history-body {
@@ -1744,7 +1750,7 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   width: 20px;
   height: 20px;
   border: none;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
@@ -1840,7 +1846,7 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
 .reconnect-banner button {
   background: none;
   border: 1px solid rgba(255, 107, 127, 0.28);
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   color: #ffb4c1;
   font-size: 10px;
   font-weight: 600;
@@ -1872,7 +1878,7 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   .sidebar-brand,
   .sidebar-footer,
   .int-section {
-    border-radius: 20px;
+    border-radius: var(--radius-md);
   }
 }
 
@@ -1889,7 +1895,7 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
     top: 0;
     z-index: 3;
     background:
-      linear-gradient(180deg, rgba(18, 27, 49, 0.98), rgba(11, 17, 34, 0.94)),
+      var(--bg-base),
       rgba(7, 12, 26, 0.92);
   }
 
@@ -1928,7 +1934,7 @@ defineExpose({ searchInputRef, refreshConnected, focusSearch })
   .sidebar-brand,
   .sidebar-footer,
   .int-section {
-    border-radius: 18px;
+    border-radius: var(--radius-md);
   }
 
   .sidebar-brand {

@@ -400,8 +400,7 @@ defineExpose({ show })
     inset: 0;
     z-index: 9999;
     background: rgba(0, 0, 0, 0.72);
-    backdrop-filter: blur(8px);
-    display: flex;
+        display: flex;
     align-items: center;
     justify-content: center;
     padding: 20px;
@@ -411,7 +410,7 @@ defineExpose({ show })
 .ob-card {
     background: var(--bg-elevated, #13131f);
     border: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
-    border-radius: 20px;
+    border-radius: var(--radius-md);
     width: 100%;
     max-width: 560px;
     box-shadow: 0 32px 80px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(99, 102, 241, 0.15);
@@ -516,7 +515,7 @@ defineExpose({ show })
     padding: 6px 12px;
     background: rgba(99, 102, 241, 0.08);
     border: 1px solid rgba(99, 102, 241, 0.2);
-    border-radius: 20px;
+    border-radius: var(--radius-md);
     font-size: 12.5px;
     color: var(--text-secondary, rgba(255, 255, 255, 0.7));
 }

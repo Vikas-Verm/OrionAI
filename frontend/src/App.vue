@@ -140,11 +140,16 @@
         <!-- ── Normal chat view ── -->
         <template v-else>
           <MainHeader @exportPDF="exportChatPDF" @openModule="onOpenModuleFromSettings" />
-          <div class="split-view">
+          <div
+            class="split-view"
+            :class="{
+              'split-view--with-header-actions': store.canvasCode || store.messages.length > 0,
+            }"
+          >
             <div class="chat-pane">
               <DocPanel />
-              <MessageList ref="messageListRef" @usePrompt="usePrompt" @regenerate="onRegenerate" />
-              <InputArea ref="inputAreaRef" @send="onSend" @upload="onUpload" @removeFile="removeAttachment"
+              <MessageList ref="messageListRef" @usePrompt="usePrompt" @regenerate="onRegenerate" @disambiguate="selectDisambiguation" />
+              <InputArea ref="inputAreaRef" @send="onSend" @stop="onStop" @upload="onUpload" @removeFile="removeAttachment"
                 @connectDB="connectDatabase" />
               <ParamPrompt v-if="pendingParams" :pending="pendingParams" @submit="onAgentParamsSubmit"
                 @cancel="pendingParams = null" />
@@ -210,9 +215,9 @@ const authBooting = ref(Boolean(store.token))
 
 // Composables
 const { loadSessions, startNewChat, switchSession: _switchSession, deleteSession } = useSession()
-const { sendMessage, regenerate } = useChat()
+const { sendMessage, regenerate, stopChat } = useChat()
 const { handleFileSelect, removeAttachment, connectDatabase } = useFiles()
-const { handleAgentMessage, provideMissingParams, pendingParams } = useAgent()
+const { handleAgentMessage, provideMissingParams, pendingParams, disambiguateData, selectDisambiguation, stopAgent } = useAgent()
 const { start, stop, unreadNotifCount, hasUrgent } = useWebSocket()
 // Refs
 const sidebarRef = ref(null)
@@ -940,6 +945,11 @@ async function onRegenerate() {
   )
 }
 
+function onStop() {
+  stopAgent()
+  stopChat()
+}
+
 function usePrompt(prompt) {
   const mode = prompt.mode || 'chat'
   const text = prompt.prompt || prompt.text || ''
@@ -1050,37 +1060,10 @@ async function onOnboardingStepComplete(status = null) {
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background:
-    radial-gradient(circle at top, rgba(82, 212, 255, 0.14), transparent 34%),
-    linear-gradient(180deg, #040713 0%, #050816 48%, #070d1c 100%);
+  background: var(--bg-base, #0B0D12);
 }
 
 .app-auth-loading__glow,
-.app-auth-loading__grid {
-  position: absolute;
-  pointer-events: none;
-}
-
-.app-auth-loading__glow {
-  width: 40rem;
-  height: 40rem;
-  border-radius: 999px;
-  filter: blur(96px);
-  opacity: 0.3;
-}
-
-.app-auth-loading__glow--cyan {
-  top: -12rem;
-  right: 12%;
-  background: radial-gradient(circle, rgba(82, 212, 255, 0.28) 0%, rgba(82, 212, 255, 0.08) 38%, transparent 72%);
-}
-
-.app-auth-loading__glow--violet {
-  bottom: -16rem;
-  left: 12%;
-  background: radial-gradient(circle, rgba(139, 125, 255, 0.26) 0%, rgba(139, 125, 255, 0.08) 34%, transparent 72%);
-}
-
 .app-auth-loading__grid {
   display: none;
 }
@@ -1088,58 +1071,50 @@ async function onOnboardingStepComplete(status = null) {
 .app-auth-loading__card {
   position: relative;
   z-index: 1;
-  width: min(480px, 100%);
+  width: min(440px, 100%);
   padding: 40px 34px;
-  border-radius: 30px;
-  border: 1px solid rgba(137, 157, 213, 0.18);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
-    rgba(9, 14, 30, 0.88);
-  box-shadow: 0 30px 80px rgba(2, 6, 23, 0.42);
-  backdrop-filter: blur(28px);
+  border-radius: 12px;
+  border: 1px solid var(--border-default, #232834);
+  background: var(--bg-surface, #111318);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
   text-align: center;
 }
 
 .app-auth-loading__logo {
-  width: 72px;
-  height: 72px;
+  width: 64px;
+  height: 64px;
   margin: 0 auto 18px;
-  border-radius: 24px;
+  border-radius: 14px;
   display: grid;
   place-items: center;
-  font-size: 34px;
-  background:
-    radial-gradient(circle at 40% 35%, rgba(210, 234, 255, 0.96), rgba(196, 201, 255, 0.78) 28%, rgba(111, 142, 255, 0.16) 32%, transparent 56%),
-    linear-gradient(180deg, rgba(62, 129, 255, 0.22), rgba(85, 104, 255, 0.1)),
-    rgba(24, 36, 72, 0.92);
-  border: 1px solid rgba(93, 139, 255, 0.24);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    0 20px 34px rgba(44, 90, 255, 0.16);
+  font-size: 30px;
+  background: var(--bg-elevated, #181A22);
+  border: 1px solid var(--border-default, #232834);
 }
 
 .app-auth-loading__card h1 {
   margin: 0;
-  color: #f8fbff;
-  font-size: clamp(28px, 4vw, 38px);
-  line-height: 1.05;
+  color: var(--text-primary, #F5F7FA);
+  font-size: clamp(24px, 4vw, 32px);
+  font-weight: 600;
+  line-height: 1.1;
 }
 
 .app-auth-loading__card p {
-  margin: 14px auto 0;
+  margin: 12px auto 0;
   max-width: 32ch;
-  color: rgba(207, 217, 238, 0.76);
-  font-size: 15px;
-  line-height: 1.65;
+  color: var(--text-secondary, #9CA3AF);
+  font-size: 14px;
+  line-height: 1.6;
 }
 
 .app-auth-loading__spinner {
-  width: 34px;
-  height: 34px;
-  margin-top: 22px;
+  width: 28px;
+  height: 28px;
+  margin-top: 20px;
   border-radius: 999px;
-  border: 2px solid rgba(168, 190, 255, 0.16);
-  border-top-color: rgba(108, 210, 255, 0.92);
+  border: 2px solid var(--border-default, #232834);
+  border-top-color: var(--accent, #4F8CFF);
   display: inline-block;
   animation: app-auth-spin 0.85s linear infinite;
 }
@@ -1211,37 +1186,33 @@ async function onOnboardingStepComplete(status = null) {
 .sidebar-float-brand,
 .sidebar-float-bell {
   position: relative;
-  border: 1px solid rgba(176, 201, 255, 0.16);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015)),
-    rgba(8, 14, 30, 0.88);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
   color: var(--text-primary);
-  box-shadow: 0 18px 42px rgba(2, 6, 23, 0.28);
-  backdrop-filter: blur(24px);
-  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+  box-shadow: var(--shadow-md);
+  transition: background 150ms ease, border-color 150ms ease;
 }
 
 .sidebar-float-brand:hover,
 .sidebar-float-bell:hover {
-  transform: translateY(-1px);
-  border-color: rgba(82, 212, 255, 0.24);
+  background: var(--bg-elevated);
+  border-color: var(--accent);
 }
 
 .sidebar-float-brand {
-  width: 48px;
-  height: 48px;
+  width: 42px;
+  height: 42px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0;
-  border-radius: 18px;
+  border-radius: 10px;
   cursor: pointer;
 }
 
 .sidebar-float-brand-mark {
-  font-size: 21px;
+  font-size: 20px;
   line-height: 1;
-  filter: drop-shadow(0 8px 16px rgba(82, 212, 255, 0.18));
 }
 
 .sidebar-float-tooltip {
@@ -1251,15 +1222,15 @@ async function onOnboardingStepComplete(status = null) {
   opacity: 0;
   transform: translateY(-4px);
   pointer-events: none;
-  padding: 7px 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(176, 201, 255, 0.14);
-  background: rgba(9, 16, 34, 0.94);
-  color: rgba(226, 232, 240, 0.82);
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 500;
   white-space: nowrap;
-  transition: opacity 160ms ease, transform 160ms ease;
+  transition: opacity 150ms ease, transform 150ms ease;
 }
 
 .sidebar-float-brand:hover .sidebar-float-tooltip {
@@ -1268,9 +1239,9 @@ async function onOnboardingStepComplete(status = null) {
 }
 
 .sidebar-float-bell {
-  width: 46px;
-  height: 46px;
-  border-radius: 18px;
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1278,31 +1249,31 @@ async function onOnboardingStepComplete(status = null) {
 }
 
 .sidebar-float-bell.bell-active {
-  border-color: rgba(82, 212, 255, 0.28);
-  color: var(--accent-hover);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .sidebar-float-bell.bell-urgent {
-  border-color: rgba(255, 107, 127, 0.38);
-  color: #ff8ea1;
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
 .sidebar-float-bell-badge {
   position: absolute;
-  top: -5px;
-  right: -5px;
+  top: -4px;
+  right: -4px;
   min-width: 16px;
   height: 16px;
   padding: 0 3px;
   border-radius: 999px;
-  background: linear-gradient(135deg, rgba(82, 212, 255, 0.92), rgba(139, 125, 255, 0.84));
+  background: var(--accent);
   color: white;
   font-size: 8px;
   font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1.5px solid rgba(8, 14, 30, 0.94);
+  border: 2px solid var(--bg-base);
 }
 
 .main {
@@ -1320,8 +1291,7 @@ async function onOnboardingStepComplete(status = null) {
   inset: 0;
   z-index: 20;
   border: 0;
-  background: rgba(3, 8, 20, 0.62);
-  backdrop-filter: blur(4px);
+  background: rgba(0, 0, 0, 0.5);
   cursor: pointer;
 }
 
@@ -1343,39 +1313,7 @@ async function onOnboardingStepComplete(status = null) {
 
 .app-aurora,
 .app-grid-glow {
-  position: absolute;
-  inset: auto;
-  pointer-events: none;
-  z-index: 0;
-}
-
-.app-aurora {
-  width: 44rem;
-  height: 44rem;
-  border-radius: 999px;
-  filter: blur(90px);
-  opacity: 0.34;
-}
-
-.app-aurora-cyan {
-  top: -10rem;
-  right: 18%;
-  background: radial-gradient(circle, rgba(82, 212, 255, 0.28) 0%, rgba(82, 212, 255, 0.08) 36%, transparent 72%);
-}
-
-.app-aurora-violet {
-  bottom: -16rem;
-  left: 20%;
-  background: radial-gradient(circle, rgba(139, 125, 255, 0.28) 0%, rgba(139, 125, 255, 0.08) 34%, transparent 72%);
-}
-
-.app-grid-glow {
-  inset: 0;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent 24%),
-    radial-gradient(circle at 58% 12%, rgba(82, 212, 255, 0.08), transparent 22%),
-    radial-gradient(circle at 82% 82%, rgba(139, 125, 255, 0.08), transparent 24%);
-  opacity: 0.8;
+  display: none;
 }
 
 @media (max-width: 1024px) {
@@ -1393,7 +1331,7 @@ async function onOnboardingStepComplete(status = null) {
 
   .sidebar-panel {
     width: min(var(--sidebar-mobile-width), calc(100vw - 16px));
-    border-radius: 0 24px 24px 0;
+    border-radius: 0 12px 12px 0;
     box-shadow: var(--shadow-lg);
   }
 
@@ -1406,18 +1344,18 @@ async function onOnboardingStepComplete(status = null) {
 @media (max-width: 640px) {
   .sidebar-panel {
     width: min(var(--sidebar-mobile-width), calc(100vw - 12px));
-    border-radius: 0 20px 20px 0;
+    border-radius: 0 12px 12px 0;
   }
 
   .sidebar-float-brand,
   .sidebar-float-bell {
-    width: 42px;
-    height: 42px;
-    border-radius: 15px;
+    width: 38px;
+    height: 38px;
+    border-radius: 8px;
   }
 
   .sidebar-float-brand-mark {
-    font-size: 18px;
+    font-size: 17px;
   }
 }
 </style>

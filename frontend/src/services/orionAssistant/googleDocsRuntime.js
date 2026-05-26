@@ -16,7 +16,7 @@ function getPermissions(runtime = {}) {
   return runtime.getPermissions?.() || {};
 }
 
-export async function executeGoogleDocsAssistantCommand({ intent, runtime }) {
+export async function executeGoogleDocsAssistantCommand({ intent, runtime, conversationHistory = [] }) {
   const activeDocumentId = runtime.getActiveEntityId?.();
   if (!activeDocumentId) {
     return {
@@ -252,6 +252,46 @@ export async function executeGoogleDocsAssistantCommand({ intent, runtime }) {
       };
     }
 
+    if (intent.action === "add_content") {
+      if (!getPermissions(runtime).canEdit) {
+        return {
+          handled: true,
+          assistantText:
+            "This document is view-only right now, so I can't add content.",
+        };
+      }
+
+      const data = await runtime.runAiAction({
+        action: "chat",
+        question:
+          `The user asked: "${intent.question}"\n\nBased on the document context, generate ONLY the new content to add. Do not repeat existing content. Do not include instructions or meta commentary. Return only clean markdown text ready to insert.`,
+        intentType: ASSISTANT_INTENT_TYPES.EDIT_EXISTING_CONTENT,
+        conversationHistory,
+      });
+
+      if (!isStillActive()) {
+        return {
+          handled: true,
+          assistantText:
+            "The active document changed before the content was ready, so I stopped before writing into the wrong file.",
+        };
+      }
+
+      const result = data?.result || "";
+      if (result) {
+        await runtime.streamInsertContent?.(result);
+        return {
+          handled: true,
+          assistantText: `I added the content to "${activeDocumentLabel(runtime)}".`,
+        };
+      }
+
+      return {
+        handled: true,
+        assistantText: "I couldn't generate the content to add. Please try again with more details.",
+      };
+    }
+
     if (intent.action === "delete_document") {
       if (!getPermissions(runtime).canDelete) {
         return {
@@ -274,6 +314,7 @@ export async function executeGoogleDocsAssistantCommand({ intent, runtime }) {
     action: intent.action || "chat",
     question: intent.question,
     intentType: intent.type || ASSISTANT_INTENT_TYPES.CHAT,
+    conversationHistory,
   });
 
   if (!isStillActive()) {
