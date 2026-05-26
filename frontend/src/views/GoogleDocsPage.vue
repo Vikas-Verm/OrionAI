@@ -222,8 +222,20 @@
 
           <section class="gd-center" :class="{ 'gd-center--wide': !aiPanelOpen }">
             <div class="gd-center-surface">
+              <GoogleDocsTiptapEditor
+                v-if="currentDocument && useTiptap"
+                ref="editorRef"
+                :model-value="editorHtml"
+                :zoom="zoom"
+                :document-id="currentDocument.documentId"
+                :disabled="!currentPermissions.canEdit"
+                @update:model-value="updateEditorHtml"
+                @outline-change="updateOutline"
+                @selection-change="handleSelectionChange"
+                @metrics-change="pageMetrics = $event"
+              />
               <GoogleDocsEditor
-                v-if="currentDocument"
+                v-else-if="currentDocument && !useTiptap"
                 ref="editorRef"
                 :model-value="editorHtml"
                 :zoom="zoom"
@@ -560,12 +572,14 @@ import { useGoogleDocs } from "../composables/useGoogleDocs";
 import GoogleDocsToolbar from "../components/google-docs/GoogleDocsToolbar.vue";
 import GoogleDocsOutlinePanel from "../components/google-docs/GoogleDocsOutlinePanel.vue";
 import GoogleDocsEditor from "../components/google-docs/GoogleDocsEditor.vue";
+import GoogleDocsTiptapEditor from "../components/google-docs/GoogleDocsTiptapEditor.vue";
 import GoogleDocsAiPanel from "../components/google-docs/GoogleDocsAiPanel.vue";
 import { executeScopedAssistantCommand } from "../services/orionAssistant/orchestrator";
 import { buildChartSnapshot } from "../services/googleDocsVisuals";
 
 const emit = defineEmits(["close", "open-integrations"]);
 
+const useTiptap = ref(true); // Feature flag: true = Tiptap editor, false = legacy contenteditable editor
 const editorRef = ref(null);
 const localImageInputRef = ref(null);
 const titleInputRef = ref(null);
@@ -1547,7 +1561,11 @@ console.log("Header menu action:", action);
 
   if (action === "select_all") {
     editorRef.value?.focusEditor();
-    document.execCommand("selectAll", false);
+    if (useTiptap.value) {
+      editorRef.value?.execCommand("selectAll");
+    } else {
+      document.execCommand("selectAll", false);
+    }
     return;
   }
 

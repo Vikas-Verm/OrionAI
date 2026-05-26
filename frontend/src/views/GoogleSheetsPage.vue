@@ -2289,10 +2289,11 @@ function buildSheetsRuntime() {
     getPermissions: () => currentPermissions.value,
     getActiveCell: () => currentCell.value,
     getActiveRangeLabel: () => selectedRangeLabel.value,
-    runAiAction: ({ action, question }) =>
+    runAiAction: ({ action, question, conversationHistory: history }) =>
       runAiAction({
         action,
         question,
+        conversationHistory: history,
         workbookTitle: currentWorkbook.value?.title,
         activeSheet: currentSheet.value,
         selection: normalizedSelection.value,
@@ -2339,10 +2340,17 @@ async function handleAiSend(question) {
 
   const requestId = ++aiRequestCounter.value;
   try {
+    // Pass recent conversation history for context continuity
+    const recentHistory = aiMessages.value
+      .slice(-10)
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .map((m) => ({ role: m.role, text: m.text }));
+
     const result = await executeScopedAssistantCommand({
       question: trimmed,
       scope: "google_sheets",
       runtime: buildSheetsRuntime(),
+      conversationHistory: recentHistory,
     });
     if (requestId !== aiRequestCounter.value) return;
     aiMessages.value.push({
@@ -2801,6 +2809,15 @@ async function handleGridKeydown(event) {
     } else if (key === "f") {
       event.preventDefault();
       findDialogOpen.value = true;
+    } else if (key === "b") {
+      event.preventDefault();
+      await applyUniformFormat({ bold: !currentCellFormat.value?.bold });
+    } else if (key === "i") {
+      event.preventDefault();
+      await applyUniformFormat({ italic: !currentCellFormat.value?.italic });
+    } else if (key === "u") {
+      event.preventDefault();
+      await applyUniformFormat({ underline: !currentCellFormat.value?.underline });
     }
     return;
   }
@@ -2913,6 +2930,8 @@ watch(
     if (spreadsheetId !== previousSpreadsheetId || activeSheetId !== previousActiveSheetId) {
       resetSelection();
       filterDraft.columnIndex = 0;
+      aiRequestCounter.value += 1;
+      aiMessages.value = [];
     }
     syncDraftsToSelection();
     sheetMenuSheetId.value = null;

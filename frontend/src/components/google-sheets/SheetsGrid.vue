@@ -372,15 +372,26 @@ function stopSelecting() {
   window.removeEventListener("mouseup", stopSelecting);
 }
 
-function onCellMouseDown(rowIndex, columnIndex) {
+function onCellMouseDown(rowIndex, columnIndex, event) {
   const anchor = activeCellFor(rowIndex, columnIndex);
   selecting.value = true;
-  emit("select", {
-    anchorRow: anchor.row,
-    anchorColumn: anchor.column,
-    focusRow: anchor.row,
-    focusColumn: anchor.column,
-  });
+
+  if (event?.shiftKey) {
+    // Shift-click: extend selection from current anchor to clicked cell
+    emit("select", {
+      anchorRow: normalizedSelection.value.anchorRow,
+      anchorColumn: normalizedSelection.value.anchorColumn,
+      focusRow: anchor.row,
+      focusColumn: anchor.column,
+    });
+  } else {
+    emit("select", {
+      anchorRow: anchor.row,
+      anchorColumn: anchor.column,
+      focusRow: anchor.row,
+      focusColumn: anchor.column,
+    });
+  }
   window.addEventListener("mouseup", stopSelecting, { once: true });
 }
 

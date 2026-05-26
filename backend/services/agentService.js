@@ -1571,8 +1571,15 @@ async function runAgent(steps, db, onProgress, userId, sessionId = "default") {
             await onProgress({
               status: "disambiguate",
               tool,
-              items: docs.map((d) => ({ id: d.id, title: d.title, modifiedTime: d.modifiedTime, ownerName: d.ownerName })),
-              message: `Found ${docs.length} documents matching "${params.query || ""}". Which one do you want to use?`,
+              items: docs.map((d) => ({
+                id: d.id,
+                title: d.title,
+                modifiedTime: d.modifiedTime,
+                ownerName: d.ownerName,
+              })),
+              message: `Found ${docs.length} documents matching "${
+                params.query || ""
+              }". Which one do you want to use?`,
             });
             const selection = await waitForDisambiguation(sessionId, tool);
             if (selection?.id) {
@@ -1654,12 +1661,20 @@ async function runAgent(steps, db, onProgress, userId, sessionId = "default") {
             await onProgress({
               status: "disambiguate",
               tool,
-              items: sheets.map((s) => ({ id: s.id, title: s.title, modifiedTime: s.modifiedTime, ownerName: s.ownerName })),
-              message: `Found ${sheets.length} spreadsheets matching "${params.query || ""}". Which one do you want to use?`,
+              items: sheets.map((s) => ({
+                id: s.id,
+                title: s.title,
+                modifiedTime: s.modifiedTime,
+                ownerName: s.ownerName,
+              })),
+              message: `Found ${sheets.length} spreadsheets matching "${
+                params.query || ""
+              }". Which one do you want to use?`,
             });
             const selection = await waitForDisambiguation(sessionId, tool);
             if (selection?.id) {
-              const picked = sheets.find((s) => s.id === selection.id) || sheets[0];
+              const picked =
+                sheets.find((s) => s.id === selection.id) || sheets[0];
               ctx.lastGoogleSheet = picked;
               result.richGoogleSheets = [picked];
               result.summary = `Selected "${picked.title}"`;

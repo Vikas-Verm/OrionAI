@@ -12,7 +12,7 @@ const {
   shareSpreadsheetWorkspace,
 } = require("../services/googleSheetsService");
 const { buildSheetAiContext } = require("../services/googleSheets/context");
-const { chatCompleteNoSystem } = require("../services/llmService");
+const { chatCompleteNoSystem, chatComplete } = require("../services/llmService");
 
 function buildSheetsPrompt({ action = "chat", question = "", context = {} }) {
   const instructionMap = {
@@ -160,8 +160,35 @@ async function runGoogleSheetAi(req, res) {
     const context = buildSheetAiContext(req.body || {});
     const action = String(req.body?.action || "chat").trim() || "chat";
     const question = String(req.body?.question || "").trim();
+    const conversationHistory = Array.isArray(req.body?.conversationHistory)
+      ? req.body.conversationHistory.slice(-10)
+      : [];
     const prompt = buildSheetsPrompt({ action, question, context });
-    const result = await chatCompleteNoSystem(prompt, 1600, 0.2);
+
+    let result;
+
+    if (conversationHistory.length > 0) {
+      // Build multi-turn messages so the LLM has conversation context
+      const messages = [
+        { role: "system", content: prompt },
+      ];
+
+      // Add prior conversation turns (skip the very last user message — it's already in the prompt)
+      const priorTurns = conversationHistory.slice(0, -1);
+      for (const turn of priorTurns) {
+        if (turn.role === "user") {
+          messages.push({ role: "user", content: turn.text || "" });
+        } else if (turn.role === "assistant") {
+          messages.push({ role: "assistant", content: turn.text || "" });
+        }
+      }
+
+      messages.push({ role: "user", content: question });
+
+      result = await chatComplete(messages, 1600, 0.2);
+    } else {
+      result = await chatCompleteNoSystem(prompt, 1600, 0.2);
+    }
 
     res.json({
       ok: true,
