@@ -68,19 +68,61 @@ function getMatrixAdminAccessToken() {
   return token;
 }
 
+// Transient network errors. Synapse occasionally drops connections
+// (especially when Docker overlay networks are under churn) — retrying
+// makes account creation/lookup resilient to one-off blips.
+const ADMIN_RETRIABLE_CODES = new Set([
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "ECONNABORTED",
+  "EAI_AGAIN",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "EPIPE",
+]);
+
+function isRetriableAdminError(error) {
+  if (!error) return false;
+  const code = String(error.code || "").toUpperCase();
+  if (ADMIN_RETRIABLE_CODES.has(code)) return true;
+  const status = Number(error.response?.status || 0);
+  return status === 502 || status === 503 || status === 504;
+}
+
 async function synapseAdminRequest(method, path, options = {}) {
-  return axios({
-    method,
-    url: `${normalizeHomeserverUrl(defaultHomeserverUrl())}${path}`,
-    params: options.params,
-    data: options.data,
-    timeout: options.timeout || 20_000,
-    validateStatus: options.validateStatus,
-    headers: {
-      Authorization: `Bearer ${getMatrixAdminAccessToken()}`,
-      ...(options.headers || {}),
-    },
-  });
+  const maxAttempts = options.maxAttempts || 3;
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await axios({
+        method,
+        url: `${normalizeHomeserverUrl(defaultHomeserverUrl())}${path}`,
+        params: options.params,
+        data: options.data,
+        timeout: options.timeout || 20_000,
+        validateStatus: options.validateStatus,
+        headers: {
+          Authorization: `Bearer ${getMatrixAdminAccessToken()}`,
+          ...(options.headers || {}),
+        },
+      });
+    } catch (err) {
+      lastError = err;
+      if (attempt >= maxAttempts || !isRetriableAdminError(err)) throw err;
+      const backoffMs = Math.min(500 * 2 ** (attempt - 1) + 500, 4000);
+      console.warn(
+        "[Synapse admin] %s %s failed (%s) attempt %d/%d, retrying in %dms",
+        method,
+        path,
+        err.code || err.response?.status || err.message,
+        attempt,
+        maxAttempts,
+        backoffMs
+      );
+      await new Promise((r) => setTimeout(r, backoffMs));
+    }
+  }
+  throw lastError;
 }
 
 async function ensureHiddenMatrixAccount(
@@ -149,18 +191,45 @@ async function loginToMatrix({
     },
   ];
 
+  // Retry transient network errors per payload — login is a critical path
+  // and ECONNRESET / 502 here aborts the whole connect flow with an opaque
+  // error. 3 attempts with exponential backoff covers transient blips.
+  async function tryLogin(payload) {
+    const maxAttempts = 3;
+    let attemptErr = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const { data } = await axios.post(
+          `${base}/_matrix/client/v3/login`,
+          payload,
+          { timeout: 15_000 }
+        );
+        return { data };
+      } catch (err) {
+        attemptErr = err;
+        if (attempt >= maxAttempts || !isRetriableAdminError(err)) {
+          return { error: err };
+        }
+        const backoffMs = Math.min(500 * 2 ** (attempt - 1) + 500, 4000);
+        console.warn(
+          "[Matrix login] %s attempt %d/%d failed (%s), retrying in %dms",
+          localpart,
+          attempt,
+          maxAttempts,
+          err.code || err.response?.status || err.message,
+          backoffMs
+        );
+        await new Promise((r) => setTimeout(r, backoffMs));
+      }
+    }
+    return { error: attemptErr };
+  }
+
   let lastError = null;
   for (const payload of payloads) {
-    try {
-      const { data } = await axios.post(
-        `${base}/_matrix/client/v3/login`,
-        payload,
-        { timeout: 15_000 }
-      );
-      return data;
-    } catch (error) {
-      lastError = error;
-    }
+    const { data, error } = await tryLogin(payload);
+    if (data) return data;
+    lastError = error;
   }
 
   throw new Error(

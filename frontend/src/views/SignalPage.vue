@@ -1,13 +1,13 @@
 <template>
-  <div class="sg-page">
-    <aside class="sg-sidebar">
+  <div class="sg-page" :class="{ 'is-collapsed': sidebarCollapsed }">
+    <aside class="sg-sidebar" :class="{ collapsed: sidebarCollapsed }">
       <div class="sg-sidebar-head">
         <button
           class="sg-brand sg-brand-btn"
           type="button"
-          :disabled="!status.connected"
-          title="View your Signal profile"
-          @click="showProfilePanel = !showProfilePanel"
+          :disabled="!sidebarCollapsed && !status.connected"
+          :title="sidebarCollapsed ? 'Expand sidebar' : (status.connected ? 'View your Signal profile' : 'Signal not connected')"
+          @click="sidebarCollapsed ? (sidebarCollapsed = false) : (showProfilePanel = !showProfilePanel)"
         >
           <div class="sg-brand-icon">
             <img
@@ -26,12 +26,12 @@
               <path d="M12 7.35a4.65 4.65 0 1 0 0 9.3 4.65 4.65 0 0 0 0-9.3Zm0 8.1a3.45 3.45 0 1 1 0-6.9 3.45 3.45 0 0 1 0 6.9Z" fill="#3b82f6" />
             </svg>
           </div>
-          <div class="sg-brand-copy">
+          <div v-if="!sidebarCollapsed" class="sg-brand-copy">
             <strong>Signal</strong>
             <span>{{ status.connected ? (status.profile?.displayName || 'Connected') : 'Connect Signal in Integrations' }}</span>
           </div>
         </button>
-        <div class="sg-head-actions">
+        <div v-if="!sidebarCollapsed" class="sg-head-actions">
           <button class="sg-icon-btn" title="Refresh Signal" :disabled="refreshing" @click="refreshAll">
             <span v-if="refreshing" class="sg-spinner sg-spinner-sm"></span>
             <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -41,16 +41,15 @@
               <path d="M1 14l4.6 4.4A9 9 0 0 0 20.5 15" />
             </svg>
           </button>
-          <button class="sg-icon-btn" title="Back to integrations" @click="emit('close')">
+          <button class="sg-icon-btn" title="Collapse sidebar" @click="sidebarCollapsed = true">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M19 12H5" />
-              <path d="m12 5-7 7 7 7" />
+              <path d="m15 18-6-6 6-6" />
             </svg>
           </button>
         </div>
       </div>
 
-      <div v-if="showProfilePanel && status.connected" class="sg-profile-popover">
+      <div v-if="showProfilePanel && status.connected && !sidebarCollapsed" class="sg-profile-popover">
         <div class="sg-profile-card">
           <div class="sg-profile-actions">
             <button class="sg-icon-btn sg-icon-btn--ghost" title="Close profile" @click="showProfilePanel = false">
@@ -99,7 +98,7 @@
         </div>
       </div>
 
-      <div v-if="status.connected" class="sg-action-panel-wrap">
+      <div v-if="!sidebarCollapsed && status.connected" class="sg-action-panel-wrap">
         <CommunicationInsightsWidget
           title="OrionAI insights"
           panel-title="Reply / Action Required"
@@ -119,7 +118,7 @@
         />
       </div>
 
-      <div class="sg-search-wrap">
+      <div v-show="!sidebarCollapsed" class="sg-search-wrap">
         <input
           v-model="roomQuery"
           class="sg-search"
@@ -128,29 +127,32 @@
         />
       </div>
 
-      <div v-if="loadingRooms" class="sg-state">
+      <div v-if="!sidebarCollapsed && loadingRooms" class="sg-state">
         <span class="sg-spinner"></span>
         <span>Loading Signal rooms...</span>
       </div>
 
-      <div v-else-if="!status.connected" class="sg-empty">
+      <div v-else-if="!sidebarCollapsed && !status.connected" class="sg-empty">
         <div class="sg-empty-icon">🛡️</div>
         <strong>Signal is not connected</strong>
         <p>{{ status.lastError || status.error || 'Connect Signal in Integrations to load conversations.' }}</p>
         <button class="sg-empty-btn" @click="emit('open-integrations')">Open Integrations</button>
       </div>
 
-      <div v-else-if="filteredRooms.length === 0" class="sg-empty sg-empty--rooms">
-        <div class="sg-empty-icon">💬</div>
-        <strong>{{ roomQuery ? 'No matching rooms' : 'No Signal rooms yet' }}</strong>
+      <div v-else-if="!sidebarCollapsed && filteredRooms.length === 0" class="sg-empty sg-empty--rooms">
+        <div class="sg-empty-icon">
+          <span v-if="roomQuery">💬</span>
+          <span v-else class="sg-empty-spinner" aria-hidden="true"></span>
+        </div>
+        <strong>{{ roomQuery ? 'No matching rooms' : 'Syncing your Signal chats…' }}</strong>
         <p>
           {{ roomQuery
             ? 'Try a different search term.'
-            : 'If you just linked Signal, give OrionAI a moment to finish syncing your chats.' }}
+            : 'Signal is backfilling your conversations. Chats will appear here as they finish syncing.' }}
         </p>
       </div>
 
-      <div v-else class="sg-room-list">
+      <div v-else-if="!sidebarCollapsed" class="sg-room-list">
         <button
           v-for="room in filteredRooms"
           :key="room.roomId"
@@ -537,6 +539,7 @@ const status = ref({
   unreadCount: 0,
   profile: null,
 })
+const sidebarCollapsed = ref(false)
 const rooms = ref([])
 const selectedRoom = ref(null)
 const messages = ref([])
@@ -1584,14 +1587,24 @@ onUnmounted(() => {
 .sg-sidebar {
   position: relative;
   width: 342px;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding: 16px 14px 14px;
   border-right: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(4, 9, 22, 0.74);
-  }
+  background: rgba(7, 12, 22, 0.78);
+  box-sizing: border-box;
+}
+
+.sg-sidebar.collapsed {
+  padding-inline: 10px;
+  width: auto;
+  flex-shrink: 0;
+}
 
 .sg-sidebar-head,
 .sg-chat-head {
@@ -1987,6 +2000,23 @@ onUnmounted(() => {
 
 .sg-empty-icon {
   font-size: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sg-empty-spinner {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid rgba(120, 200, 255, 0.25);
+  border-top-color: #79c8ff;
+  animation: sg-spin 0.9s linear infinite;
+  display: inline-block;
+}
+
+@keyframes sg-spin {
+  to { transform: rotate(360deg); }
 }
 
 .sg-room-list {

@@ -38,5 +38,62 @@ signing_key_path: "/data/orion.local.signing.key"
 trusted_key_servers:
   - server_name: "matrix.org"
 
+# ---------------------------------------------------------------------------
+# Rate limits.
+#
+# Synapse defaults are very restrictive (e.g. rc_message: 0.2/sec burst 10).
+# With the mautrix bridges + our backend polling, those defaults cause:
+#   - "Too Many Requests" errors on the backend's connect/status flows
+#   - Silent drops of the bridge bot's "Successfully logged in" confirmation
+#     message → user's phone shows "linked" but our backend never sees it,
+#     so the UI shows "Scan timed out" even though the link succeeded
+#
+# These limits are raised to development/Beeper-style values. For a
+# self-hosted single-user instance this is safe; for a public homeserver
+# you'd tune these lower per workload.
+# ---------------------------------------------------------------------------
+rc_message:
+  per_second: 1000
+  burst_count: 10000
+rc_registration:
+  per_second: 1000
+  burst_count: 10000
+rc_login:
+  address:
+    per_second: 1000
+    burst_count: 10000
+  account:
+    per_second: 1000
+    burst_count: 10000
+  failed_attempts:
+    per_second: 1000
+    burst_count: 10000
+rc_admin_redaction:
+  per_second: 1000
+  burst_count: 10000
+rc_joins:
+  local:
+    per_second: 1000
+    burst_count: 10000
+  remote:
+    per_second: 1000
+    burst_count: 10000
+rc_invites:
+  per_room:
+    per_second: 1000
+    burst_count: 10000
+  per_user:
+    per_second: 1000
+    burst_count: 10000
+  per_issuer:
+    per_second: 1000
+    burst_count: 10000
+rc_federation:
+  window_size: 1000
+  sleep_limit: 1000
+  sleep_delay: 50
+  reject_limit: 100000
+  concurrent: 100
+federation_rr_transactions_per_room_per_second: 1000
 
 # vim:ft=yaml

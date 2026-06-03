@@ -18,8 +18,12 @@ const {
   toggleSignalReaction,
   markSignalRoomAsRead,
   sendBridgeCommand,
+  getSignalBridgeLogin,
+  purgeSignalBridgeLogin,
+  findSignalLoginIdFromBridgeBotMessages,
   fetchSignalMedia,
   invalidateSignalCache,
+  invalidateSignalCacheForReconnect,
 } = require("../services/signalMatrixService");
 
 router.use(authenticate);
@@ -62,11 +66,55 @@ router.get("/status", async (req, res) => {
 
 router.post("/disconnect", async (req, res) => {
   try {
+    const userId = req.user?.username;
+    try {
+      // Send `logout` via the proper Matrix protocol command. Bridge handles
+      // disconnect, DB cleanup, and in-memory state on its own. We never
+      // touch the bridge's DB directly.
+      const integration = await Integration.findOne({ userId, type: "signal" });
+      const mxid = integration?.matrix?.mxid || integration?.signal?.mxid || "";
+      const bridgeLogin = mxid ? getSignalBridgeLogin({ mxid }) : null;
+      let loginId = bridgeLogin?.loginId || "";
+      // SQLite snapshot empty? Recover loginId from bridge bot messages.
+      if (!loginId) {
+        loginId = await findSignalLoginIdFromBridgeBotMessages(userId, {
+          managementRoomId: integration?.matrix?.managementRoomId || "",
+          bridgeBotMxid: integration?.matrix?.bridgeBotMxid || "",
+        }).catch(() => "");
+        if (loginId) {
+          console.log(
+            "[Signal disconnect] Recovered loginId=%s from bridge bot messages",
+            loginId
+          );
+        }
+      }
+      console.log("[Signal disconnect] mxid=%s loginId=%s", mxid, loginId);
+      if (loginId) {
+        try {
+          await sendBridgeCommand(userId, `logout ${loginId}`);
+          console.log("[Signal disconnect] Bridge logout command sent");
+          await new Promise((r) => setTimeout(r, 2500));
+        } catch (e) {
+          console.warn("[Signal disconnect] Bridge logout command failed:", e.message);
+        }
+      } else {
+        console.log("[Signal disconnect] No loginId found — sending bare `logout` as last resort");
+        try {
+          await sendBridgeCommand(userId, "logout");
+          await new Promise((r) => setTimeout(r, 1500));
+        } catch (e) {
+          console.warn("[Signal disconnect] Bare logout failed:", e.message);
+        }
+      }
+    } catch (logoutErr) {
+      console.error("[Signal disconnect] Bridge cleanup failed:", logoutErr.message);
+    }
+    // Always remove our Integration doc regardless of bridge state.
     await Integration.findOneAndDelete({
-      userId: req.user?.username,
+      userId,
       type: "signal",
     });
-    invalidateSignalCache(req.user?.username);
+    invalidateSignalCacheForReconnect(userId);
     res.json({ ok: true });
   } catch (err) {
     console.error("Signal disconnect error:", err.message);

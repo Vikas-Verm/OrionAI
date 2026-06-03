@@ -19,7 +19,12 @@ const {
   fetchWhatsAppMedia,
   getWhatsAppUnreadSummary,
   invalidateWhatsAppCache,
+  invalidateWhatsAppCacheForReconnect,
   syncWhatsAppContacts,
+  sendBridgeCommand,
+  readWhatsAppBridgeSnapshot,
+  purgeWhatsAppBridgeLogin,
+  findLoginIdFromBridgeBotMessages,
 } = require("../services/whatsappMatrixService");
 
 router.use(authenticate);
@@ -64,11 +69,78 @@ router.get("/status", async (req, res) => {
 
 router.post("/disconnect", async (req, res) => {
   try {
+    const userId = req.user?.username;
+    try {
+      // Ask the bridge to log out via its proper Matrix protocol command.
+      // The bridge processes this asynchronously: disconnects from WhatsApp,
+      // cleans up its own DB row, and removes the session from memory.
+      // We do NOT touch the bridge's database directly — that breaks the
+      // bridge's invariants and is why "disconnect didn't actually disconnect"
+      // in earlier attempts.
+      const integration = await Integration.findOne({
+        userId,
+        type: "whatsapp",
+      });
+      const mxid = integration?.matrix?.mxid || "";
+      const bridgeSnapshot = mxid ? readWhatsAppBridgeSnapshot(mxid) : null;
+      let loginId = bridgeSnapshot?.loginId || "";
+      // SQLite snapshot is empty? Try to recover the loginId from the bridge
+      // bot's "Successfully logged in as +XXX" message in the management
+      // room. This is the Matrix-protocol path — works regardless of whether
+      // the bridge is on SQLite or Postgres.
+      if (!loginId) {
+        loginId = await findLoginIdFromBridgeBotMessages(userId, {
+          managementRoomId: integration?.matrix?.managementRoomId || "",
+          bridgeBotMxid: integration?.matrix?.bridgeBotMxid || "",
+        }).catch(() => "");
+        if (loginId) {
+          console.log(
+            "[WhatsApp disconnect] Recovered loginId=%s from bridge bot messages (SQLite snapshot was empty)",
+            loginId
+          );
+        }
+      }
+      console.log("[WhatsApp disconnect] mxid=%s loginId=%s", mxid, loginId);
+      if (loginId) {
+        try {
+          await sendBridgeCommand(userId, `logout ${loginId}`);
+          console.log("[WhatsApp disconnect] Bridge logout command sent");
+          // Wait for the bridge to process the logout asynchronously
+          await new Promise((r) => setTimeout(r, 2500));
+        } catch (e) {
+          console.warn(
+            "[WhatsApp disconnect] Bridge logout command failed:",
+            e.message
+          );
+        }
+      } else {
+        // Last resort: send `logout` without arguments. mautrix-whatsapp's
+        // bridgev2 may reject this with a usage message, but we still try
+        // because otherwise the bridge keeps the session and the user is
+        // stuck. The bridge may also accept "list-logins"-then-"logout id"
+        // workflows in future versions.
+        console.log(
+          "[WhatsApp disconnect] No loginId found — sending bare `logout` as last resort"
+        );
+        try {
+          await sendBridgeCommand(userId, "logout");
+          await new Promise((r) => setTimeout(r, 1500));
+        } catch (e) {
+          console.warn("[WhatsApp disconnect] Bare logout failed:", e.message);
+        }
+      }
+    } catch (logoutErr) {
+      console.error(
+        "[WhatsApp disconnect] Bridge cleanup failed:",
+        logoutErr.message
+      );
+    }
+    // Always remove our Integration doc regardless of bridge state.
     await Integration.findOneAndDelete({
-      userId: req.user?.username,
+      userId,
       type: "whatsapp",
     });
-    invalidateWhatsAppCache(req.user?.username);
+    invalidateWhatsAppCacheForReconnect(userId);
     res.json({ ok: true });
   } catch (err) {
     console.error("WhatsApp disconnect error:", err.message);

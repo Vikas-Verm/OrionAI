@@ -1,4 +1,28 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mautrix-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mautrix
+      POSTGRES_PASSWORD: mautrix_bridge_secret
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --lc-collate=C --lc-ctype=C"
+    # Expose the bridge's Postgres on host port 5433 so the OrionAI backend
+    # can read bridge state directly (user_login table → connected user's
+    # phone, profile name, etc.). We avoid host port 5432 because macOS often
+    # has Postgres.app / Homebrew Postgres listening there with a different
+    # mautrix user.
+    ports:
+      - "5433:5432"
+    volumes:
+      - mautrix_postgres_data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mautrix"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   synapse:
     image: matrixdotorg/synapse:latest
     container_name: synapse
@@ -12,16 +36,105 @@ services:
     image: dock.mau.dev/mautrix/signal:latest
     container_name: mautrix-signal
     restart: unless-stopped
+    # Publish the bridge's HTTP listener (appservice + provisioning API) to the
+    # host loopback so the OrionAI backend can drive logins via the bridgev2
+    # Provisioning API directly (real-time QR streaming, like Beeper) instead of
+    # scraping laggy m.replace QR edits out of a Matrix room. Bound to 127.0.0.1
+    # only — never exposed to the LAN. Synapse still reaches the bridge over the
+    # internal docker network, so this is purely additive.
+    ports:
+      - "127.0.0.1:29328:29328"
     depends_on:
-      - synapse
+      synapse:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    # Explicit DNS — Docker Desktop on macOS has a flaky embedded DNS resolver
+    # (127.0.0.11) that intermittently returns "no such host" for external
+    # domains like signal.org / web.whatsapp.com. Pointing the container
+    # directly at public resolvers fixes those failed WebSocket handshakes.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    # Docker Desktop on macOS still proxies all DNS through its embedded
+    # resolver (127.0.0.11) regardless of the `dns:` setting above, and that
+    # resolver flakes intermittently over UDP — producing errors like
+    # "read udp ...->127.0.0.11:53: i/o timeout" which break the bridge's
+    # reconnect loop and silently drop a logged-in account offline.
+    # `use-vc` forces DNS queries over TCP (instead of UDP), which is immune
+    # to those UDP timeouts; the retry/timeout tuning adds extra resilience.
+    dns_opt:
+      - use-vc
+      - timeout:2
+      - attempts:5
+    # Keep long-lived upstream WebSockets alive. Docker Desktop on macOS reaps
+    # idle NAT mappings after ~45s, which silently kills the Signal *provisioning*
+    # socket while it waits for the phone to scan the QR. signalmeow then has to
+    # reconnect and rotate the QR (logs: "context canceled" + "too many QR code
+    # refreshes"), so the QR the user is looking at is already dead on Signal's
+    # servers -> the phone shows "Network error" on scan. Forcing the kernel to
+    # emit TCP keepalive probes every ~20s holds the NAT mapping open for the
+    # full link window, so a single QR stays scannable end-to-end (like Beeper).
+    sysctls:
+      - net.ipv4.tcp_keepalive_time=20
+      - net.ipv4.tcp_keepalive_intvl=15
+      - net.ipv4.tcp_keepalive_probes=4
     volumes:
       - ./mautrix-signal:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:29328/_matrix/mau/live || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
   mautrix-whatsapp:
     image: dock.mau.dev/mautrix/whatsapp:latest
     container_name: mautrix-whatsapp
     restart: unless-stopped
+    # Publish the bridge HTTP listener (appservice + provisioning API) to host
+    # loopback for the OrionAI backend's real-time QR login (see mautrix-signal).
+    ports:
+      - "127.0.0.1:29318:29318"
     depends_on:
-      - synapse
+      synapse:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    # Explicit DNS — see comment on mautrix-signal above. Without this you
+    # get "dial tcp: lookup web.whatsapp.com on 127.0.0.11:53: no such host"
+    # which prevents the bridge from completing the WhatsApp handshake even
+    # though the user successfully scanned the QR.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    # Force DNS over TCP (use-vc) to dodge Docker Desktop macOS's flaky
+    # embedded UDP resolver. The "read udp ...->127.0.0.11:53: i/o timeout"
+    # errors in the bridge logs were dropping a logged-in WhatsApp account
+    # offline for days — messages showed as "sent" in OrionAI but never
+    # reached WhatsApp because whatsmeow couldn't re-dial web.whatsapp.com.
+    dns_opt:
+      - use-vc
+      - timeout:2
+      - attempts:5
+    # Keep long-lived upstream WebSockets alive (see mautrix-signal above for the
+    # full rationale). whatsmeow's login socket and live session socket both get
+    # idle-reaped by Docker Desktop's NAT on macOS (logs: "Keepalive timed out"
+    # + "failed to read frame header: EOF"), which drops a logged-in account
+    # offline and makes QR pairing time out. Kernel TCP keepalive probes every
+    # ~20s hold the NAT mapping open so the socket survives.
+    sysctls:
+      - net.ipv4.tcp_keepalive_time=20
+      - net.ipv4.tcp_keepalive_intvl=15
+      - net.ipv4.tcp_keepalive_probes=4
     volumes:
       - ./mautrix-whatsapp:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:29318/_matrix/mau/live || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  mautrix_postgres_data:

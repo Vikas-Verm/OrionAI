@@ -59,7 +59,7 @@ bridge:
     bridge_status_notices: errors
     # How long after an unknown error should the bridge attempt a full reconnect?
     # Must be at least 1 minute. The bridge will add an extra ±20% jitter to this value.
-    unknown_error_auto_reconnect: null
+    unknown_error_auto_reconnect: 2m
     # Maximum number of times to do the auto-reconnect above.
     # The counter is per login, but is never reset except on logout and restart.
     unknown_error_max_auto_reconnects: 10
@@ -67,7 +67,7 @@ bridge:
     # Should leaving Matrix rooms be bridged as leaving groups on the remote network?
     bridge_matrix_leave: false
     # Should `m.notice` messages be bridged?
-    bridge_notices: false
+    bridge_notices: true
     # Should room tags only be synced when creating the portal? Tags mean things like favorite/pin and archive/low priority.
     # Tags currently can't be synced back to the remote network, so a continuous sync means tagging from Matrix will be undone.
     tag_only_on_create: true
@@ -89,6 +89,8 @@ bridge:
     # Should the bridge listen to com.beeper.state_request events?
     # This is not necessary for anything outside of Beeper.
     enable_send_state_requests: false
+    # Should the com.beeper.bridge.identifiers list in global ghost profiles include phone numbers?
+    phone_numbers_in_profile: false
     
     # What should be done to portal rooms when a user logs out or is logged out?
     # Permitted values:
@@ -125,6 +127,9 @@ bridge:
         # Should only admins be allowed to set themselves as relay users?
         # If true, non-admins can only set users listed in default_relays as relays in a room.
         admin_only: true
+        # Should default relays be preferred when an explicit login ID isn't specified even if the user is logged in?
+        # This applies to the set-relay and bridge commands sent by any user, including admins.
+        prefer_default: true
         # Should non-admins be allowed to use the bridge and sync-chat commands via default relays specified below?
         allow_bridge: true
         # List of user login IDs which anyone can set as a relay, as long as the relay user is in the room.
@@ -185,16 +190,16 @@ bridge:
 # Config for the bridge's database.
 database:
     # The database type. "sqlite3-fk-wal" and "postgres" are supported.
-    type: sqlite3-fk-wal
+    type: postgres
     # The database URI.
     #   SQLite: A raw file path is supported, but `file:<path>?_txlock=immediate` is recommended.
     #           https://github.com/mattn/go-sqlite3#connection-string
     #   Postgres: Connection string. For example, postgres://user:password@host/database?sslmode=disable
     #             To connect via Unix socket, use something like postgres:///dbname?host=/var/run/postgresql
-    uri: file:/data/mautrix-signal.db?_txlock=immediate
+    uri: postgres://mautrix:mautrix_bridge_secret@postgres/mautrix_signal?sslmode=disable
     # Maximum number of connections.
-    max_open_conns: 5
-    max_idle_conns: 1
+    max_open_conns: 20
+    max_idle_conns: 2
     # Maximum connection idle time and lifetime before they're closed. Disabled if null.
     # Parsed with https://pkg.go.dev/time#ParseDuration
     max_conn_idle_time: null
@@ -282,7 +287,7 @@ matrix:
     # Whether the bridge should send the message status as a custom com.beeper.message_send_status event.
     message_status_events: false
     # Whether the bridge should send a read receipt after successfully bridging a message.
-    delivery_receipts: false
+    delivery_receipts: true
     # Whether the bridge should send error notices via m.notice events when a message fails to bridge.
     message_error_notices: true
     # Whether the bridge should update the m.direct account data event when double puppeting is enabled.
@@ -373,21 +378,24 @@ backfill:
     # Whether to do backfilling at all.
     enabled: true
     # Maximum number of messages to backfill in empty rooms.
-    max_initial_messages: 50
+    # If this is zero or negative, backfill will be disabled in new rooms.
+    max_initial_messages: 20
     # Maximum number of missed messages to backfill after bridge restarts.
-    max_catchup_messages: 500
+    max_catchup_messages: 100
     # If a backfilled chat is older than this number of hours,
     # mark it as read even if it's unread on the remote network.
     unread_hours_threshold: 720
     # Settings for backfilling threads within other backfills.
     threads:
         # Maximum number of messages to backfill in a new thread.
-        max_initial_messages: 50
+        max_initial_messages: 10
     # Settings for the backwards backfill queue. This only applies when connecting to
     # Beeper as standard Matrix servers don't support inserting messages into history.
     queue:
         # Should the backfill queue be enabled?
         enabled: false
+        # Should manual calls to backfill queue tasks be allowed?
+        manual: false
         # Number of messages to backfill in one batch.
         batch_size: 100
         # Delay between batches in seconds.
@@ -513,13 +521,13 @@ env_config_prefix: null
 
 # Logging config. See https://github.com/tulir/zeroconfig for details.
 logging:
-    min_level: debug
+    min_level: info
     writers:
         - type: stdout
           format: pretty-colored
         - type: file
           format: json
-          filename: ./logs/bridge.log
+          filename: /data/logs/signal-bridge.log
           max_size: 100
           max_backups: 10
-          compress: false
+          compress: true

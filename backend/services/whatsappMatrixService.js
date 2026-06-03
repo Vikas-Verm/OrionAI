@@ -5,7 +5,9 @@ const fs = require("fs");
 const path = require("path");
 const QRCode = require("qrcode");
 const Database = require("better-sqlite3");
+const { Pool: PgPool } = require("pg");
 const Integration = require("../models/Integration");
+const provisioningLogin = require("./bridgeProvisioningLogin");
 const {
   findBestCommunicationMatch,
   normalizeDigits,
@@ -30,9 +32,41 @@ const WHATSAPP_SYNC_CACHE_TTL_MS = 10 * 1000;
 const WHATSAPP_QR_CACHE = new Map();
 const WHATSAPP_QR_CACHE_TTL_MS = 60 * 1000;
 const WHATSAPP_BRIDGE_JOIN_BATCH_SIZE = 80;
+// Short-lived status cache. Multiple UI components poll /status every 1.5–8s.
+// Without this, every poll triggers Matrix syncs + portal hydration that take
+// 3–10s and pile up. With a 1.5s TTL, rapid polls return instantly while
+// slow background changes are still picked up within ~2s.
+const WHATSAPP_STATUS_CACHE = new Map();
+const WHATSAPP_STATUS_CACHE_TTL_MS = 6000;
+// In-flight portal hydration tasks, keyed by userId. Lets us fire-and-forget
+// the room-join work in the background instead of blocking /status responses.
+const WHATSAPP_BG_HYDRATION = new Map();
+// One-shot contact-sync flag per user — we send `sync contacts` to the
+// bridge once shortly after first detecting a connected session so that
+// portal ghost names populate with the user's phone-book contact names
+// (FullName) instead of just phone numbers.
+const WHATSAPP_CONTACT_SYNC_SENT = new Set();
+// Tracks when we last asked the bridge for a QR (`login qr`) per user. The
+// mautrix-whatsapp `login qr` flow keeps a single QR alive for ~160s (whatsmeow
+// rotates through several codes), then the bridge posts a "scanning QR timed
+// out" message. That timeout is NOT a hard failure — it just means nobody
+// scanned in time. While the user is still on the connect screen (i.e. /status
+// is being polled) we treat that timeout as retryable: keep the UI in
+// "logging_in" and silently re-issue `login qr` to surface a fresh QR.
+const WHATSAPP_LOGIN_REQUESTED_AT = new Map();
+// Throttle for the silent QR re-issue so we never flood the bridge.
+const WHATSAPP_LOGIN_RESEND_AT = new Map();
+// How long after a connect click we keep auto-refreshing the QR on timeout.
+const WHATSAPP_LOGIN_ACTIVE_WINDOW_MS = 5 * 60 * 1000;
+// Minimum gap between two silent `login qr` re-issues for the same user.
+const WHATSAPP_LOGIN_RESEND_THROTTLE_MS = 60 * 1000;
 const WHATSAPP_PORTAL_REQUEST_BACKOFF_MS = 15 * 1000;
 const WHATSAPP_CONTACT_ROOM_PREFIX = "wa-contact:";
 const WHATSAPP_GHOST_RE = /^@whatsapp_[^:]+:/i;
+const MATRIX_DEFAULT_TIMEOUT_MS = 30_000;
+const MATRIX_SYNC_TIMEOUT_MS = 45_000;
+const MATRIX_BRIDGE_COMMAND_TIMEOUT_MS = 45_000;
+const MATRIX_MEDIA_TIMEOUT_MS = 90_000;
 const WHATSAPP_LOGIN_STATE_VALUES = new Set([
   "disconnected",
   "creating_account",
@@ -161,6 +195,16 @@ function formatWhatsAppPhone(value = "") {
   return digits.startsWith("+") ? digits : `+${digits}`;
 }
 
+function phoneDigitsMatch(left = "", right = "") {
+  const leftDigits = normalizeDigits(left || "");
+  const rightDigits = normalizeDigits(right || "");
+  if (!leftDigits || !rightDigits) return false;
+  if (leftDigits === rightDigits) return true;
+  const minLength = Math.min(leftDigits.length, rightDigits.length);
+  if (minLength < 8) return false;
+  return leftDigits.endsWith(rightDigits) || rightDigits.endsWith(leftDigits);
+}
+
 function sanitizeWhatsAppDisplayLabel(value = "") {
   return String(value || "")
     .trim()
@@ -268,6 +312,109 @@ function safeJsonParse(value, fallback = null) {
     return JSON.parse(String(value));
   } catch {
     return fallback;
+  }
+}
+
+// ---- Postgres reader for bridge state ------------------------------------
+// The bridge is configured to use Postgres (see infra/mautrix-whatsapp/config.yaml).
+// The SQLite file path is now ignored by the bridge, so any read attempt
+// against SQLite returns null. We provide a Postgres path here so the backend
+// can resolve the user's WhatsApp phone/login info reliably.
+//
+// Default URI matches the docker-compose service. Override via
+// MAUTRIX_WHATSAPP_PG_URI if you run a non-default Postgres setup.
+let whatsappPgPool = null;
+function getWhatsAppPgPool() {
+  if (whatsappPgPool) return whatsappPgPool;
+  // Default port is 5433 — the bridge's Postgres is exposed there in
+  // infra/docker-compose.yml (avoiding conflict with any host-installed
+  // Postgres on 5432, which is a common cause of "password authentication
+  // failed" errors).
+  const connectionString =
+    process.env.MAUTRIX_WHATSAPP_PG_URI ||
+    "postgres://mautrix:mautrix_bridge_secret@localhost:5433/mautrix_whatsapp";
+  try {
+    whatsappPgPool = new PgPool({
+      connectionString,
+      max: 4,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 3_000,
+    });
+    whatsappPgPool.on("error", (err) => {
+      console.warn("[WhatsApp PG] pool error:", err.message);
+    });
+  } catch (err) {
+    console.warn("[WhatsApp PG] pool init failed:", err.message);
+    whatsappPgPool = null;
+  }
+  return whatsappPgPool;
+}
+
+/**
+ * Read the connected user's WhatsApp login info from the bridge's Postgres
+ * `user_login` table. This is the most reliable source for the user's phone
+ * number — works regardless of whether the bridge has sent any management-room
+ * messages yet. Returns null if Postgres is unreachable / no row exists.
+ *
+ * The Postgres lookup is cached briefly per mxid to avoid hammering it.
+ */
+const WHATSAPP_PG_LOGIN_CACHE = new Map();
+const WHATSAPP_PG_LOGIN_CACHE_TTL_MS = 10_000;
+
+async function readWhatsAppBridgePostgresLogin(matrixMxid = "") {
+  const normalizedMxid = normalizeMxid(matrixMxid);
+  if (!normalizedMxid) return null;
+
+  const cached = WHATSAPP_PG_LOGIN_CACHE.get(normalizedMxid);
+  if (cached && cached.expiresAt > nowTs()) return cached.value;
+
+  const pool = getWhatsAppPgPool();
+  if (!pool) return null;
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, remote_name, remote_profile, metadata
+       FROM user_login
+       WHERE user_mxid = $1
+       ORDER BY remote_name DESC
+       LIMIT 1`,
+      [normalizedMxid]
+    );
+    if (!rows || !rows.length) {
+      WHATSAPP_PG_LOGIN_CACHE.set(normalizedMxid, {
+        expiresAt: nowTs() + WHATSAPP_PG_LOGIN_CACHE_TTL_MS,
+        value: null,
+      });
+      return null;
+    }
+    const row = rows[0];
+    const remoteProfile = row.remote_profile || {};
+    const value = {
+      loginId: String(row.id || "").trim(),
+      phone: String(
+        remoteProfile.phone || row.remote_name || ""
+      )
+        .replace(/^\+/, "")
+        .trim(),
+      profileName: String(remoteProfile.name || row.remote_name || "").trim(),
+    };
+    WHATSAPP_PG_LOGIN_CACHE.set(normalizedMxid, {
+      expiresAt: nowTs() + WHATSAPP_PG_LOGIN_CACHE_TTL_MS,
+      value,
+    });
+    return value;
+  } catch (err) {
+    console.warn(
+      "[WhatsApp PG] login lookup failed for %s:",
+      normalizedMxid,
+      err.message
+    );
+    // Cache the null so we don't hammer a broken pool
+    WHATSAPP_PG_LOGIN_CACHE.set(normalizedMxid, {
+      expiresAt: nowTs() + WHATSAPP_PG_LOGIN_CACHE_TTL_MS,
+      value: null,
+    });
+    return null;
   }
 }
 
@@ -408,6 +555,87 @@ function readWhatsAppBridgeSnapshot(matrixMxid = "") {
     return buildWhatsAppBridgeSnapshot(loginRow, portalRows);
   } catch {
     return null;
+  }
+}
+
+/**
+ * NUCLEAR OPTION: directly delete the bridge's user_login + user_portal rows
+ * for the given mxid. The bridge's `logout` command via Matrix message has
+ * been observed to NOT delete the row, leaving stale sessions that prevent
+ * fresh QR generation. This function opens a separate read-write SQLite
+ * connection and removes the rows so the next `login qr` generates a fresh
+ * QR every time.
+ *
+ * Safe to call even if the bridge is running: SQLite WAL mode + busy_timeout
+ * handles concurrent access. Returns { ok, loginRowsDeleted, portalRowsDeleted }.
+ */
+function purgeWhatsAppBridgeLogin(mxid = "") {
+  const normalizedMxid = normalizeMxid(mxid);
+  if (!normalizedMxid) {
+    return { ok: false, reason: "no_mxid" };
+  }
+
+  const dbPath = resolveWhatsAppBridgeDbPath();
+  if (!dbPath || !fs.existsSync(dbPath)) {
+    console.warn("[WhatsApp purge] Bridge DB file not found at %s", dbPath);
+    return { ok: false, reason: "db_not_found" };
+  }
+
+  // Close our cached readonly connection first to avoid lock conflicts
+  if (whatsappBridgeDb) {
+    try { whatsappBridgeDb.close(); } catch {}
+    whatsappBridgeDb = null;
+    whatsappBridgeDbPath = "";
+  }
+
+  let writeDb = null;
+  try {
+    writeDb = new Database(dbPath, {
+      readonly: false,
+      fileMustExist: true,
+      timeout: 5_000,
+    });
+    try { writeDb.pragma("busy_timeout = 5000"); } catch {}
+    try { writeDb.pragma("journal_mode = WAL"); } catch {}
+    try { writeDb.pragma("foreign_keys = ON"); } catch {}
+
+    const txn = writeDb.transaction((targetMxid) => {
+      let portalRowsDeleted = 0;
+      let loginRowsDeleted = 0;
+      try {
+        const r1 = writeDb
+          .prepare("DELETE FROM user_portal WHERE user_mxid = ?")
+          .run(targetMxid);
+        portalRowsDeleted = r1.changes || 0;
+      } catch (e) {
+        console.warn("[WhatsApp purge] user_portal delete error:", e.message);
+      }
+      try {
+        const r2 = writeDb
+          .prepare("DELETE FROM user_login WHERE user_mxid = ?")
+          .run(targetMxid);
+        loginRowsDeleted = r2.changes || 0;
+      } catch (e) {
+        console.warn("[WhatsApp purge] user_login delete error:", e.message);
+      }
+      return { portalRowsDeleted, loginRowsDeleted };
+    });
+
+    const result = txn(normalizedMxid);
+    console.log(
+      "[WhatsApp purge] mxid=%s deleted login=%d portal=%d",
+      normalizedMxid,
+      result.loginRowsDeleted,
+      result.portalRowsDeleted
+    );
+    return { ok: true, ...result };
+  } catch (err) {
+    console.error("[WhatsApp purge] failed:", err.message);
+    return { ok: false, reason: err.message };
+  } finally {
+    if (writeDb) {
+      try { writeDb.close(); } catch {}
+    }
   }
 }
 
@@ -1102,6 +1330,10 @@ function deriveWhatsAppConnectionState({
   fallbackConfig = {},
   bridgeState = {},
   bridgeSnapshot = null,
+  // True when the user clicked "Connect" recently and is still watching the
+  // QR screen. In that window a "scanning QR timed out" message is treated as
+  // retryable rather than a hard error.
+  activeLoginWindow = false,
 }) {
   let loginState = normalizeLoginState(
     bridgeState.loginState,
@@ -1129,6 +1361,23 @@ function deriveWhatsAppConnectionState({
   const hasRetryableLoginTimeout =
     /\b(timed out|timeout)\b/i.test(lastErrorText) &&
     /\b(login failed|entering code|scan|qr)\b/i.test(lastErrorText);
+  // A "hard logout" means WhatsApp actually invalidated the session (the user
+  // must re-scan). These MUST surface as disconnected.
+  const isHardLogout =
+    /\b(logged out|loggedout|bad[_\s-]?credentials|not logged in|invalid credentials|unauthorized|401|403)\b/i.test(
+      lastErrorText
+    );
+  // A "transient disconnect" is a recoverable network blip (e.g. the laptop
+  // slept and woke). whatsmeow auto-reconnects — the session is still valid.
+  // We must NOT show the user a scary "disconnected" error for these. Examples:
+  //   "State update for +91…: TRANSIENT_DISCONNECT (wa-transient-disconnect)
+  //    not resolved after waiting 3 minutes: Disconnected from WhatsApp.
+  //    Trying to reconnect."
+  const hasTransientDisconnect =
+    !isHardLogout &&
+    /\b(transient[\s_-]?disconnect|wa-transient-disconnect|trying to reconnect|reconnecting|connection lost|temporary failure|stream replaced|keepalive timeout|will retry)\b/i.test(
+      lastErrorText
+    );
   const hasFreshError =
     latestErrorTs > 0 &&
     latestErrorTs >= latestConnectedTs &&
@@ -1152,23 +1401,53 @@ function deriveWhatsAppConnectionState({
       ? lastErrorText || fallbackConfig.lastError || ""
       : "";
   let connected = false;
+  // A QR-scan timeout is "soft" when either the bridge still has a live
+  // session (reconnect case) OR the user is mid-connect and watching the QR
+  // screen. In both cases we should NOT surface a scary error — we just need a
+  // fresh QR. `retryableTimeout` tells getWhatsAppStatus to silently re-issue
+  // `login qr`.
+  const softLoginTimeout =
+    hasFreshError &&
+    hasRetryableLoginTimeout &&
+    (bridgeSnapshotConnected || activeLoginWindow);
+  // A transient disconnect on a session that WAS connected is non-fatal: keep
+  // the user "connected" while the bridge reconnects in the background.
+  const wasConnected =
+    bridgeSnapshotConnected || Boolean(fallbackConfig.connectedAt);
+  const softTransientDisconnect =
+    hasFreshError && hasTransientDisconnect && wasConnected;
+  let retryableTimeout = false;
 
-  if (hasFreshError && !(bridgeSnapshotConnected && hasRetryableLoginTimeout)) {
+  if (hasFreshError && !softLoginTimeout && !softTransientDisconnect) {
     loginState = "error";
     lastError = lastErrorText || fallbackConfig.lastError || "";
     connected = false;
   } else if (
     hasFreshConnection ||
     (bridgeSnapshotConnected && !hasFreshQr) ||
-    (fallbackConfig.connectedAt && !hasFreshQr && loginState !== "error")
+    (fallbackConfig.connectedAt && !hasFreshQr && loginState !== "error") ||
+    softTransientDisconnect
   ) {
     connected = true;
     loginState = "connected";
     connectedAt = connectedAt || new Date(latestConnectedTs || nowTs());
     lastError = "";
-  } else if (hasFreshQr && loginState !== "logging_in") {
+  } else if (hasFreshQr) {
+    // A fresh QR ALWAYS wins. `hasFreshQr` already requires the QR to be newer
+    // than any error/connection event, so we never override a real error or a
+    // live session here. Critically, we must NOT gate this on the incoming
+    // loginState: right after the user clicks "Connect" the persisted state is
+    // "logging_in", and gating QR display on that left the UI stuck forever on
+    // "Preparing QR code…" because qrImageUrl is only resolved for pending_qr.
     loginState = "pending_qr";
     lastError = "";
+  } else if (softLoginTimeout) {
+    // Stale "scanning QR timed out" during an active connect attempt. Keep the
+    // UI in a non-error "still working on it" state and ask the caller to
+    // re-issue the QR command so a fresh code appears.
+    loginState = "logging_in";
+    lastError = "";
+    retryableTimeout = true;
   }
 
   return {
@@ -1179,6 +1458,7 @@ function deriveWhatsAppConnectionState({
     latestConnectedTs,
     latestQrTs,
     latestErrorTs,
+    retryableTimeout,
   };
 }
 
@@ -1304,18 +1584,131 @@ function collectMemberMap(roomData = {}) {
   return map;
 }
 
+/**
+ * Decide whether a room member represents the CONNECTED USER (the person
+ * who just linked their WhatsApp), as opposed to other people in the chat.
+ * The bridge gives the connected user multiple Matrix identities per room:
+ *
+ *   - @orion_u_<user>_whatsapp:orion.local       ← Matrix login (currentUserId)
+ *   - @whatsapp_<phone>:orion.local              ← phone-based ghost
+ *   - @whatsapp_lid-<lid_number>:orion.local     ← LID-based ghost
+ *   - and the displayname for all of these is usually "+<phone>"
+ *
+ * All of those must be filtered out of room-title/avatar member iteration,
+ * otherwise the user's own phone shows up in every chat title and the user's
+ * avatar shows up on every chat row.
+ *
+ * We can't easily get the user's LID from our backend (it's only in the
+ * bridge's DB / Postgres), so we use a defence-in-depth approach:
+ *   1. mxid equality with currentUserId / bridgeBotMxid / selfGhostMxid
+ *   2. displayname equality with the user's phone (in various formats)
+ *
+ * Step (2) catches the LID-based ghost without needing to know the LID,
+ * because both the phone ghost and the LID ghost share the same displayname
+ * — the user's own phone number.
+ */
+function isOwnWhatsAppMember(member, { currentUserId, selfGhostMxid, selfPhoneDigits }) {
+  if (!member) return false;
+  const mxid = String(member.mxid || "").trim();
+  if (mxid && mxid === String(currentUserId || "").trim()) return true;
+  if (selfGhostMxid && mxid === String(selfGhostMxid || "").trim()) return true;
+
+  if (selfPhoneDigits && isWhatsAppGhostMxid(mxid)) {
+    const ghostLocalpart = localpartFromMxid(mxid).replace(/^whatsapp_/i, "");
+    if (phoneDigitsMatch(ghostLocalpart, selfPhoneDigits)) return true;
+  }
+
+  // Heuristic for the LID-based ghost: same displayname as the phone ghost.
+  // mautrix-whatsapp sets the displayname to "+<phone>" or "+<phone> (WA)"
+  // for the user's own ghosts.
+  if (selfPhoneDigits && member.displayName) {
+    const nameDigits = String(member.displayName).replace(/\D/g, "");
+    if (phoneDigitsMatch(nameDigits, selfPhoneDigits)) return true;
+  }
+  return false;
+}
+
+function isSelfMember(member, { currentUserId, bridgeBotMxid, selfGhostMxid, selfPhoneDigits }) {
+  if (!member) return false;
+  if (isOwnWhatsAppMember(member, { currentUserId, selfGhostMxid, selfPhoneDigits })) {
+    return true;
+  }
+  return String(member.mxid || "").trim() === String(bridgeBotMxid || "").trim();
+}
+
+/**
+ * Clean up a chat title:
+ *   1. Remove the user's own phone from comma-separated member lists. The
+ *      phone may appear as "+919773767632", "919773767632",
+ *      "+91 97737 67632", or "+91-97737-67632" (etc.) — we split the title
+ *      into fragments by commas, then drop any fragment whose digit content
+ *      matches the user's phone.
+ *   2. Strip " (WA)" suffixes — they were appended by the old bridge
+ *      template; this is defence-in-depth even after the bridge config fix.
+ *   3. Tidy up dangling commas/whitespace.
+ *
+ * This is robust against any phone formatting because we compare digit
+ * sequences directly, not regex patterns.
+ */
+function cleanRoomTitle(rawTitle, selfPhoneDigits) {
+  let title = String(rawTitle || "").trim();
+  if (!title) return title;
+
+  const targetDigits = String(selfPhoneDigits || "").replace(/\D/g, "");
+
+  if (targetDigits) {
+    // Split on commas, drop fragments that are JUST the user's own phone
+    // (in any formatting), keep the rest.
+    const fragments = title.split(",").map((f) => f.trim()).filter(Boolean);
+    const filtered = fragments.filter((fragment) => {
+      // Strip "(WA)" before digit comparison so "+919773767632 (WA)" matches
+      const stripped = fragment.replace(/\s*\(WA\)\s*/g, "").trim();
+      const digits = stripped.replace(/\D/g, "");
+      // Drop ONLY if the fragment is "essentially just" the phone — i.e.
+      // its digits match AND there's no other alphabetic content left.
+      // This protects names like "Vikas (+919773767632)" if the bridge ever
+      // produced them.
+      const alphaContent = stripped.replace(/[^a-zA-Z]/g, "").trim();
+      if (alphaContent.length === 0 && phoneDigitsMatch(digits, targetDigits)) return false;
+      return true;
+    });
+    title = filtered.join(", ");
+  }
+
+  // Strip " (WA)" suffixes universally
+  title = title.replace(/\s*\(WA\)/g, "");
+
+  // Tidy up
+  title = title.replace(/^[\s,]+|[\s,]+$/g, "");
+  title = title.replace(/,\s*,/g, ",");
+  title = title.replace(/\s{2,}/g, " ");
+
+  return title.trim();
+}
+
 function getRoomName(
   roomId,
   roomData,
   memberMap,
   currentUserId,
-  bridgeBotMxid
+  bridgeBotMxid,
+  selfGhostMxid = "",
+  selfPhoneDigits = ""
 ) {
   const stateEvents = roomData.state?.events || [];
   const explicitName =
     stateEvents.find((event) => event.type === "m.room.name")?.content?.name ||
     "";
-  if (String(explicitName).trim()) return String(explicitName).trim();
+  if (String(explicitName).trim()) {
+    // Don't blindly use the explicit name. The bridge sets names for unnamed
+    // small groups by listing members, including the connected user — that's
+    // why "Ashirvad" chats show as "Ashirvad (WA), +919773767632 (WA)".
+    // Clean it up before returning.
+    const cleaned = cleanRoomTitle(explicitName, selfPhoneDigits);
+    if (cleaned) return cleaned;
+    // If cleaning emptied the title (e.g. explicit name was ONLY user's own
+    // phone), fall through to member-based naming.
+  }
 
   const canonicalAlias =
     stateEvents.find((event) => event.type === "m.room.canonical_alias")
@@ -1324,23 +1717,27 @@ function getRoomName(
     return String(canonicalAlias).replace(/^#/, "").split(":")[0];
   }
 
+  const selfCtx = { currentUserId, bridgeBotMxid, selfGhostMxid, selfPhoneDigits };
   const otherMembers = [...memberMap.values()].filter(
-    (member) =>
-      member.mxid !== currentUserId &&
-      member.mxid !== bridgeBotMxid &&
-      member.membership !== "leave"
+    (member) => !isSelfMember(member, selfCtx) && member.membership !== "leave"
   );
 
   if (otherMembers.length === 1) {
-    return (
-      otherMembers[0].displayName || localpartFromMxid(otherMembers[0].mxid)
+    return cleanRoomTitle(
+      otherMembers[0].displayName || localpartFromMxid(otherMembers[0].mxid),
+      selfPhoneDigits
     );
   }
 
   if (otherMembers.length > 1) {
     const names = otherMembers
       .slice(0, 3)
-      .map((member) => member.displayName || localpartFromMxid(member.mxid))
+      .map((member) =>
+        cleanRoomTitle(
+          member.displayName || localpartFromMxid(member.mxid),
+          selfPhoneDigits
+        )
+      )
       .filter(Boolean);
     return names.join(", ");
   }
@@ -1348,19 +1745,35 @@ function getRoomName(
   return roomId;
 }
 
-function getRoomAvatar(roomData, memberMap, currentUserId, bridgeBotMxid) {
+function getRoomAvatar(
+  roomData,
+  memberMap,
+  currentUserId,
+  bridgeBotMxid,
+  selfGhostMxid = "",
+  selfPhoneDigits = ""
+) {
   const explicitAvatar =
     (roomData.state?.events || []).find(
       (event) => event.type === "m.room.avatar"
     )?.content?.url || null;
-  if (explicitAvatar) return explicitAvatar;
 
-  const directMember = [...memberMap.values()].find(
-    (member) =>
-      member.mxid !== currentUserId &&
-      member.mxid !== bridgeBotMxid &&
-      member.avatarMxc
+  const selfCtx = { currentUserId, bridgeBotMxid, selfGhostMxid, selfPhoneDigits };
+  const ownCtx = { currentUserId, selfGhostMxid, selfPhoneDigits };
+  const selfAvatarMxcs = new Set(
+    [...memberMap.values()]
+      .filter((member) => isOwnWhatsAppMember(member, ownCtx) && member.avatarMxc)
+      .map((member) => String(member.avatarMxc))
   );
+  const directMember = [...memberMap.values()].find(
+    (member) => !isSelfMember(member, selfCtx) && member.avatarMxc
+  );
+
+  if (explicitAvatar) {
+    if (!selfAvatarMxcs.has(String(explicitAvatar))) {
+      return explicitAvatar;
+    }
+  }
 
   return directMember?.avatarMxc || null;
 }
@@ -1381,8 +1794,11 @@ function parseRoomEvents({
   currentUserId = "",
   fallbackRoomName = "",
   bridgeBotMxid = "",
+  selfGhostMxid = "",
+  selfPhoneDigits = "",
 }) {
   const memberMap = collectMemberMap(roomData);
+  const ownCtx = { currentUserId, selfGhostMxid, selfPhoneDigits };
   const events = [
     ...(roomData.state?.events || []),
     ...(roomData.timeline?.events || []),
@@ -1402,11 +1818,17 @@ function parseRoomEvents({
   const resolveSenderProfile = (sender = "") => {
     const normalizedSender = String(sender || "");
     const senderMeta = memberMap.get(normalizedSender) || null;
+    const senderMember =
+      senderMeta || {
+        mxid: normalizedSender,
+        displayName: localpartFromMxid(normalizedSender),
+      };
 
-    if (normalizedSender === currentUserId) {
+    if (isOwnWhatsAppMember(senderMember, ownCtx)) {
       return {
         senderName: "You",
         senderAvatarUrl: "",
+        fromMe: true,
       };
     }
 
@@ -1419,6 +1841,7 @@ function parseRoomEvents({
         fallbackRoomName ||
         "WhatsApp",
       senderAvatarUrl: buildWhatsAppMediaUrl(senderMeta?.avatarMxc || ""),
+      fromMe: false,
     };
   };
 
@@ -1558,7 +1981,7 @@ function parseRoomEvents({
         ? new Date(event.origin_server_ts).toISOString()
         : null,
       timeLabel: formatTimestamp(event.origin_server_ts),
-      fromMe: sender === currentUserId,
+      fromMe: Boolean(senderProfile.fromMe),
       text,
       previewText: text || summarizeEventContent(content),
       replyToEventId: relation["m.in_reply_to"]?.event_id || null,
@@ -1708,18 +2131,25 @@ function extractTypingUsers(
   roomData = {},
   memberMap = new Map(),
   currentUserId = "",
-  bridgeBotMxid = ""
+  bridgeBotMxid = "",
+  selfGhostMxid = "",
+  selfPhoneDigits = ""
 ) {
   const typingUsers = new Set();
+  const selfCtx = { currentUserId, bridgeBotMxid, selfGhostMxid, selfPhoneDigits };
 
   for (const event of roomData.ephemeral?.events || []) {
     if (event?.type !== "m.typing") continue;
     for (const userId of event?.content?.user_ids || []) {
       const normalizedUserId = String(userId || "").trim();
+      const typingMember =
+        memberMap.get(normalizedUserId) || {
+          mxid: normalizedUserId,
+          displayName: localpartFromMxid(normalizedUserId),
+        };
       if (
         !normalizedUserId ||
-        normalizedUserId === String(currentUserId || "") ||
-        normalizedUserId === String(bridgeBotMxid || "")
+        isSelfMember(typingMember, selfCtx)
       ) {
         continue;
       }
@@ -1745,6 +2175,11 @@ function buildRoomDescriptor({
   bridgeBotMxid = "",
   managementRoomId = "",
   directMap = new Map(),
+  // The user's own WhatsApp ghost mxid (phone-based variant). Combined with
+  // selfPhoneDigits this lets us exclude both phone-based AND LID-based
+  // ghosts of the connected user from member lists used for title/avatar.
+  selfGhostMxid = "",
+  selfPhoneDigits = "",
 }) {
   const memberMap = collectMemberMap(roomData);
   const memberIds = [...memberMap.keys()];
@@ -1754,20 +2189,28 @@ function buildRoomDescriptor({
     roomData,
     memberMap,
     currentUserId,
-    bridgeBotMxid
+    bridgeBotMxid,
+    selfGhostMxid,
+    selfPhoneDigits
   );
   const roomNameLower = String(roomName || "").toLowerCase();
 
-  const containsWhatsAppGhost = memberIds.some((mxid) =>
-    isWhatsAppGhostMxid(mxid)
+  // Identify the connected user's own ghosts in this room (could be 1 or 2:
+  // phone variant + LID variant). We exclude both from "other ghost" lists
+  // so DM detection and member iteration aren't fooled.
+  const selfCtx = { currentUserId, bridgeBotMxid, selfGhostMxid, selfPhoneDigits };
+  const selfGhostSet = new Set(
+    memberIds.filter((mxid) => {
+      if (!isWhatsAppGhostMxid(mxid)) return false;
+      const member = memberMap.get(mxid);
+      return isSelfMember(member, selfCtx);
+    })
   );
-  // Capture the first WhatsApp ghost mxid so we can extract a contact id and
-  // build a JID lookup key. Without this the bridgeContactMap lookup chain
-  // had only `roomId` and `room.contactJid` (which was empty until the
-  // portal merge ran) — meaning rooms whose portal entry had drifted out
-  // of the bridge snapshot kept showing as a phone number.
-  const whatsAppGhostMxid =
-    memberIds.find((mxid) => isWhatsAppGhostMxid(mxid)) || "";
+  const otherGhostMxids = memberIds.filter(
+    (mxid) => isWhatsAppGhostMxid(mxid) && !selfGhostSet.has(mxid)
+  );
+  const containsWhatsAppGhost = otherGhostMxids.length > 0;
+  const whatsAppGhostMxid = otherGhostMxids[0] || "";
   const whatsAppGhostId = whatsAppGhostMxid
     ? extractWhatsAppIdentifier(whatsAppGhostMxid.replace(/^@whatsapp_/i, ""))
     : "";
@@ -1775,6 +2218,20 @@ function buildRoomDescriptor({
   const containsWhatsAppBot = memberIds.includes(bridgeBotMxid);
   const containsSignalBot = memberIds.some((mxid) => isSignalBotMxid(mxid));
   const memberCount = getRoomMemberCount(roomData, memberMap);
+  const remoteJoinedMembers = [...memberMap.values()].filter(
+    (member) => member.membership !== "leave" && !isSelfMember(member, selfCtx)
+  );
+  const remoteWhatsAppMembers = remoteJoinedMembers.filter((member) =>
+    isWhatsAppGhostMxid(member.mxid)
+  );
+  const remoteWhatsAppIdentityCount = new Set(
+    remoteWhatsAppMembers.map((member) => {
+      const displayName = sanitizeWhatsAppDisplayLabel(member.displayName || "");
+      const displayDigits = normalizeDigits(displayName);
+      if (displayDigits.length >= 6) return `phone:${displayDigits}`;
+      return `name:${normalizeSearchValue(displayName) || member.mxid}`;
+    })
+  ).size;
 
   const isForeignBridgeRoom =
     containsSignalGhost ||
@@ -1797,12 +2254,18 @@ function buildRoomDescriptor({
     roomData,
     memberMap,
     currentUserId,
-    bridgeBotMxid
+    bridgeBotMxid,
+    selfGhostMxid,
+    selfPhoneDigits
   );
 
   const isDirect =
     directMap.get(String(roomId)) === true ||
-    (!isManagement && memberCount <= 2 && containsWhatsAppGhost);
+    (!isManagement &&
+      containsWhatsAppGhost &&
+      remoteWhatsAppMembers.length > 0 &&
+      remoteWhatsAppIdentityCount === 1 &&
+      remoteJoinedMembers.every((member) => isWhatsAppGhostMxid(member.mxid)));
 
   const rawMessages = applyDeliveryStateToMessages(
     parseRoomEvents({
@@ -1811,6 +2274,8 @@ function buildRoomDescriptor({
       currentUserId,
       fallbackRoomName: roomName,
       bridgeBotMxid,
+      selfGhostMxid,
+      selfPhoneDigits,
     }),
     roomData,
     currentUserId,
@@ -1828,7 +2293,9 @@ function buildRoomDescriptor({
     roomData,
     memberMap,
     currentUserId,
-    bridgeBotMxid
+    bridgeBotMxid,
+    selfGhostMxid,
+    selfPhoneDigits
   );
 
   const lastMessage = [...messages]
@@ -1870,6 +2337,7 @@ function buildRoomDescriptor({
       // Empty for groups and management rooms — only direct chats get these.
       contactGhostId: whatsAppGhostId || "",
       contactGhostMxid: whatsAppGhostMxid || "",
+      contactMxid: whatsAppGhostMxid || "",
     },
     messages,
     memberMap,
@@ -2158,21 +2626,69 @@ async function loginHiddenMatrixAccount(userId) {
   }
 }
 
+// Transient network errors that we should retry. Synapse, the bridge bot,
+// and the Docker overlay network can all blip momentarily — without retry,
+// one ECONNRESET kills the whole connect flow and the user sees a generic
+// "WhatsApp connect error: read ECONNRESET" instead of a working QR.
+const MATRIX_RETRIABLE_CODES = new Set([
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "ECONNABORTED",
+  "EAI_AGAIN",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "EPIPE",
+]);
+
+function isRetriableMatrixError(error) {
+  if (!error) return false;
+  const code = String(error.code || "").toUpperCase();
+  if (MATRIX_RETRIABLE_CODES.has(code)) return true;
+  // 502 (bad gateway), 503 (unavailable), 504 (gateway timeout) — all
+  // transient and worth retrying.
+  const status = Number(error.response?.status || 0);
+  return status === 502 || status === 503 || status === 504;
+}
+
 async function matrixRequest(config, method, path, options = {}) {
   const headers = { ...(options.headers || {}) };
   if (config.accessToken) {
     headers.Authorization = `Bearer ${config.accessToken}`;
   }
-  return axios({
-    method,
-    url: `${config.homeserverUrl}${path}`,
-    params: options.params,
-    data: options.data,
-    headers,
-    responseType: options.responseType || "json",
-    timeout: options.timeout || 20_000,
-    validateStatus: options.validateStatus,
-  });
+  const maxAttempts = options.maxAttempts || 3;
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await axios({
+        method,
+        url: `${config.homeserverUrl}${path}`,
+        params: options.params,
+        data: options.data,
+        headers,
+        responseType: options.responseType || "json",
+        timeout: options.timeout || MATRIX_DEFAULT_TIMEOUT_MS,
+        validateStatus: options.validateStatus,
+      });
+    } catch (err) {
+      lastError = err;
+      if (attempt >= maxAttempts || !isRetriableMatrixError(err)) {
+        throw err;
+      }
+      // Exponential backoff: 500ms, 1500ms, 3500ms (caps at attempt 3)
+      const backoffMs = Math.min(500 * 2 ** (attempt - 1) + 500, 4000);
+      console.warn(
+        "[WhatsApp matrix] %s %s failed (%s) attempt %d/%d, retrying in %dms",
+        method,
+        path,
+        err.code || err.response?.status || err.message,
+        attempt,
+        maxAttempts,
+        backoffMs
+      );
+      await new Promise((r) => setTimeout(r, backoffMs));
+    }
+  }
+  throw lastError;
 }
 
 async function ensureWhatsAppAccess(userId, { forceLogin = false } = {}) {
@@ -2228,6 +2744,66 @@ function invalidateWhatsAppCache(userId) {
   for (const key of [...WHATSAPP_SYNC_CACHE.keys()]) {
     if (key.startsWith(`${userId}:`)) WHATSAPP_SYNC_CACHE.delete(key);
   }
+  WHATSAPP_STATUS_CACHE.delete(userId);
+  // NOTE: we deliberately do NOT clear WHATSAPP_CONTACT_SYNC_SENT here.
+  // This function is called from ~18 call-sites (send message, load chats,
+  // refresh, etc.) and clearing the one-shot flag causes `sync contacts` to
+  // fire on every subsequent /status poll — flooding the bridge with 570+
+  // contact resyncs and starving QR-login requests. The flag is only reset
+  // in invalidateWhatsAppCacheForReconnect() which runs on explicit
+  // disconnect/logout.
+}
+
+/**
+ * Full cache + flag reset for disconnect / logout flows. Unlike the regular
+ * invalidateWhatsAppCache, this also clears the one-shot contact-sync flag
+ * so the next connect cycle re-issues `sync contacts`.
+ */
+function invalidateWhatsAppCacheForReconnect(userId) {
+  invalidateWhatsAppCache(userId);
+  WHATSAPP_CONTACT_SYNC_SENT.delete(userId);
+  WHATSAPP_LOGIN_REQUESTED_AT.delete(userId);
+  WHATSAPP_LOGIN_RESEND_AT.delete(userId);
+}
+
+/**
+ * Background portal-hydration. Joins bridge-created Matrix portal rooms so
+ * they show up in the user's chat list. Returns immediately and runs in the
+ * background — never blocks /status responses. De-duped per user so we don't
+ * spin up many concurrent joins. The bridge keeps creating portals as it
+ * backfills WhatsApp history, so this runs frequently in the first 1–2
+ * minutes after a fresh connect.
+ */
+function kickoffBackgroundHydration(
+  userId,
+  { config, bridgeSnapshot, selfPhone = "" }
+) {
+  if (!userId) return;
+  if (WHATSAPP_BG_HYDRATION.has(userId)) return;
+
+  const task = (async () => {
+    try {
+      await ensureBridgePortalRoomsJoined(userId, {
+        config,
+        joinedRoomIds: new Set(),
+        bridgeSnapshot,
+        maxRooms: WHATSAPP_BRIDGE_JOIN_BATCH_SIZE * 2,
+        selfPhone,
+      });
+      // After joining new portals, drop status cache so next /status reflects
+      // the new room count.
+      WHATSAPP_STATUS_CACHE.delete(userId);
+    } catch (err) {
+      console.warn(
+        "[WhatsApp hydration] background portal join failed:",
+        err.message
+      );
+    } finally {
+      WHATSAPP_BG_HYDRATION.delete(userId);
+    }
+  })();
+
+  WHATSAPP_BG_HYDRATION.set(userId, task);
 }
 
 async function fetchSyncSnapshot(
@@ -2259,7 +2835,7 @@ async function fetchSyncSnapshot(
     "/_matrix/client/v3/sync",
     {
       params: { timeout: 0, filter },
-      timeout: 20_000,
+      timeout: MATRIX_SYNC_TIMEOUT_MS,
     }
   );
 
@@ -2418,6 +2994,16 @@ async function fetchRoomDescriptorById(
   if (!currentSnapshot?.config) return null;
 
   const directMap = parseDirectMap(currentSnapshot.data || {});
+  const bridgeSnapshot = readWhatsAppBridgeSnapshot(currentSnapshot.config.mxid);
+  const selfPhone = await resolveWhatsAppSelfPhone(
+    userId,
+    currentSnapshot.config,
+    bridgeSnapshot
+  );
+  const selfDescriptorContext = buildWhatsAppSelfDescriptorContext(
+    currentSnapshot.config,
+    selfPhone
+  );
   const syncRoomData =
     currentSnapshot.data?.rooms?.join?.[targetRoomId] || null;
   if (syncRoomData) {
@@ -2428,6 +3014,7 @@ async function fetchRoomDescriptorById(
       bridgeBotMxid: currentSnapshot.config.bridgeBotMxid,
       managementRoomId: currentSnapshot.config.managementRoomId || targetRoomId,
       directMap,
+      ...selfDescriptorContext,
     });
   }
 
@@ -2473,6 +3060,7 @@ async function fetchRoomDescriptorById(
       bridgeBotMxid: currentSnapshot.config.bridgeBotMxid,
       managementRoomId: currentSnapshot.config.managementRoomId || targetRoomId,
       directMap,
+      ...selfDescriptorContext,
     });
   };
 
@@ -2749,6 +3337,50 @@ async function resolveQrImageUrl(userId, bridgeState = {}) {
   return directUrl || null;
 }
 
+/**
+ * Extract the WhatsApp loginId from the bridge bot's "Successfully logged in as +XXX"
+ * message in the management room. Used when the SQLite snapshot is empty (e.g. when
+ * the bridge is running on Postgres or its DB read failed) — relies purely on Matrix
+ * protocol data, so it works regardless of bridge storage backend.
+ *
+ * mautrix-whatsapp messages look like:
+ *   "Successfully logged in as +1 234 567 8900 (device 12345)"
+ *   "Logged in as +12345678900"
+ *   "Already logged in as +12345678900"
+ *
+ * Returns the digit-only phone number (which is the loginId in mautrix-whatsapp),
+ * or empty string if no such message is found.
+ */
+async function findLoginIdFromBridgeBotMessages(
+  userId,
+  { managementRoomId = "", bridgeBotMxid = "" } = {}
+) {
+  const roomId = String(managementRoomId || "").trim();
+  if (!roomId) return "";
+  try {
+    const descriptor = await getManagementRoomDescriptor(userId, {
+      force: false,
+      timelineLimit: 80,
+    }).catch(() => null);
+    const botMessages = (descriptor?.messages || []).filter((m) =>
+      isBridgeBotMessage(m, bridgeBotMxid)
+    );
+    // Walk newest-first: most recent "logged in" message wins
+    for (let i = botMessages.length - 1; i >= 0; i -= 1) {
+      const text = String(
+        botMessages[i]?.text || botMessages[i]?.previewText || ""
+      );
+      // "logged in as +XX XXX XXX XXXX" — strip spaces, take leading digits
+      const match = text.match(/logged in as\s*\+?([\d\s\-()]{6,})/i);
+      if (match) {
+        const digits = match[1].replace(/\D/g, "");
+        if (digits.length >= 6) return digits;
+      }
+    }
+  } catch {}
+  return "";
+}
+
 async function resolveBridgeState(
   userId,
   {
@@ -2800,13 +3432,13 @@ async function resolveBridgeState(
  * Best-effort. If the bridge is offline / not yet logged in, the underlying
  * sendBridgeTextCommand throws and the caller surfaces the error.
  */
-async function syncWhatsAppContacts(userId) {
-  const result = await sendBridgeTextCommand(userId, "sync contacts");
+async function syncWhatsAppContacts(userId, options = {}) {
+  const result = await sendBridgeTextCommand(userId, "sync contacts", options);
   invalidateWhatsAppCache(userId);
   return result;
 }
 
-async function sendBridgeTextCommand(userId, command) {
+async function sendBridgeTextCommand(userId, command, { timeout = MATRIX_BRIDGE_COMMAND_TIMEOUT_MS } = {}) {
   const roomId = await ensureManagementRoom(userId);
   const content = {
     msgtype: "m.text",
@@ -2821,7 +3453,7 @@ async function sendBridgeTextCommand(userId, command) {
       `/_matrix/client/v3/rooms/${encodeURIComponent(
         roomId
       )}/send/m.room.message/${buildTxnId("whatsapp-bridge")}`,
-      { data: content }
+      { data: content, timeout }
     );
     invalidateWhatsAppCache(userId);
     return {
@@ -2836,13 +3468,13 @@ async function sendBridgeTextCommand(userId, command) {
       managementRoomId: "",
     }).catch(() => null);
     invalidateWhatsAppCache(userId);
-    return sendBridgeTextCommand(userId, command);
+    return sendBridgeTextCommand(userId, command, { timeout });
   }
 }
 
 async function waitForLoginState(
   userId,
-  { timeoutMs = 20_000, intervalMs = 1_500 } = {}
+  { timeoutMs = 20_000, intervalMs = 1_200 } = {}
 ) {
   const startedAt = nowTs();
   let latestStatus = await getWhatsAppStatus(userId, { forceRefresh: true });
@@ -2857,10 +3489,49 @@ async function waitForLoginState(
     }
 
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
-    latestStatus = await getWhatsAppStatus(userId, { forceRefresh: true });
+    // Use cached status during polling — the short status cache (1.5s) keeps
+    // us responsive while avoiding redundant Matrix syncs each loop.
+    latestStatus = await getWhatsAppStatus(userId, { forceRefresh: false });
   }
 
   return latestStatus;
+}
+
+/**
+ * Pull pending Matrix invites from /sync and return the room IDs that look
+ * like they came from the WhatsApp bridge (inviter is the bridge bot or a
+ * WhatsApp ghost). This is the Matrix-native way to discover newly-created
+ * portal rooms — works regardless of whether the bridge is on SQLite or
+ * Postgres, because it goes through the Matrix protocol, not the bridge DB.
+ */
+async function discoverPendingBridgeInvites(userId, { bridgeBotMxid = "" } = {}) {
+  try {
+    const syncSnapshot = await fetchSyncSnapshot(userId, {
+      timelineLimit: 5,
+      force: false,
+    });
+    const invites = syncSnapshot?.data?.rooms?.invite || {};
+    const targetMxid = String(bridgeBotMxid || "").trim();
+    const matches = [];
+    for (const [roomId, roomData] of Object.entries(invites)) {
+      const events = roomData?.invite_state?.events || [];
+      const inviter = events.find(
+        (ev) =>
+          ev?.type === "m.room.member" &&
+          ev?.content?.membership === "invite"
+      )?.sender || "";
+      // Accept invites from the bridge bot OR any WhatsApp ghost user.
+      if (
+        (targetMxid && inviter === targetMxid) ||
+        isWhatsAppGhostMxid(inviter)
+      ) {
+        matches.push(roomId);
+      }
+    }
+    return matches;
+  } catch {
+    return [];
+  }
 }
 
 async function ensureBridgePortalRoomsJoined(
@@ -2870,13 +3541,27 @@ async function ensureBridgePortalRoomsJoined(
     joinedRoomIds = new Set(),
     bridgeSnapshot = null,
     maxRooms = WHATSAPP_BRIDGE_JOIN_BATCH_SIZE,
+    // `selfPhone` (the connected user's WhatsApp phone digits) is another
+    // way to prove there's an active login — needed when the bridge runs on
+    // Postgres because our SQLite snapshot is then empty.
+    selfPhone = "",
   } = {}
 ) {
   const snapshot =
     bridgeSnapshot || readWhatsAppBridgeSnapshot(config?.mxid || "");
-  if (!snapshot) {
+
+  // GUARD: only auto-join bridge invites when we have a CONFIRMED active
+  // login. We accept either:
+  //   (a) SQLite snapshot has a loginId (bridge on SQLite + bridge has data)
+  //   (b) selfPhone is non-empty (extracted upstream from bridge bot's
+  //       "Successfully logged in" message — works on Postgres too)
+  // Without this guard we'd accept orphan invites from old sessions and
+  // overload the bridge during a fresh login.
+  const hasActiveLogin =
+    Boolean(snapshot?.loginId) || Boolean(String(selfPhone || "").trim());
+  if (!hasActiveLogin) {
     return {
-      bridgeSnapshot: null,
+      bridgeSnapshot: snapshot,
       joinedRoomIds: [],
       failedRoomIds: [],
     };
@@ -2889,8 +3574,20 @@ async function ensureBridgePortalRoomsJoined(
   );
   const targets = [];
 
-  if (snapshot.spaceRoomId) targets.push(String(snapshot.spaceRoomId));
-  for (const portalRoom of snapshot.portalRooms || []) {
+  // PRIMARY source: pending Matrix invites from the bridge bot. Safe now
+  // that we've gated on `hasActiveLogin` above — these will only be
+  // freshly-created portals for the current session.
+  const pendingInvites = await discoverPendingBridgeInvites(userId, {
+    bridgeBotMxid: config?.bridgeBotMxid,
+  });
+  for (const inviteRoomId of pendingInvites) {
+    targets.push(String(inviteRoomId));
+  }
+
+  // SECONDARY source: SQLite snapshot's portal rows. Filter to portals
+  // belonging to THIS login only (skip orphaned portals from older logins).
+  if (snapshot?.spaceRoomId) targets.push(String(snapshot.spaceRoomId));
+  for (const portalRoom of snapshot?.portalRooms || []) {
     if (portalRoom?.roomId) targets.push(String(portalRoom.roomId));
   }
 
@@ -3015,13 +3712,69 @@ async function connectWhatsAppIntegration(userId, payload = {}) {
       }
     );
 
+    // If the bridge has an existing session for this mxid (e.g. user disconnected
+    // and reconnected, but bridge memory still has the old login), ask the bridge
+    // to log it out via the proper protocol command. We do NOT touch the bridge's
+    // database directly — that breaks the bridge's in-memory invariants. The
+    // bridge will process the `logout` Matrix message, disconnect from WhatsApp,
+    // and clean up its own state. Then we send `login qr` to start fresh.
+    //
+    // SAFETY: only do this on a fresh connect (no Integration in MongoDB) or
+    // an explicit force-reconnect — never during an in-progress retry.
+    const isFreshConnect = !existingIntegration;
+    const staleBridgeSnapshot = readWhatsAppBridgeSnapshot(hiddenAccount.mxid);
+    if (
+      staleBridgeSnapshot &&
+      staleBridgeSnapshot.loginId &&
+      (isFreshConnect || forceReconnect)
+    ) {
+      console.log(
+        "[WhatsApp connect] Existing bridge session found (loginId=%s), sending logout to bridge before fresh login",
+        staleBridgeSnapshot.loginId
+      );
+      try {
+        await sendBridgeTextCommand(
+          userId,
+          `logout ${staleBridgeSnapshot.loginId}`
+        );
+        // Bridge processes the logout message asynchronously. Give it ~3s
+        // to disconnect from WhatsApp and clear its own state. Subsequent
+        // `login qr` will then start a fresh authentication flow.
+        await new Promise((r) => setTimeout(r, 3000));
+      } catch (logoutErr) {
+        console.warn(
+          "[WhatsApp connect] Bridge logout command failed (continuing anyway):",
+          logoutErr.message
+        );
+      }
+    }
+
     const shouldSendLogin = forceReconnect || !currentStatus || !hasActiveQr;
 
     if (shouldSendLogin) {
-      await sendBridgeTextCommand(userId, "login qr");
+      // Drive the bridge's Provisioning API directly (Beeper parity): the
+      // background runner long-polls the bridge and always exposes the live,
+      // currently-scannable QR — no more stale Matrix-room QR copies that the
+      // phone rejects with a "scanning QR timed out" error. The runner
+      // self-restarts each QR cycle so the user always has a fresh code.
+      provisioningLogin.stopLogin("whatsapp", config.mxid);
+      provisioningLogin.startLogin("whatsapp", config.mxid, {
+        force: forceReconnect,
+      });
+      // Open the "active login window" so status polls keep treating this as
+      // an in-progress login.
+      WHATSAPP_LOGIN_REQUESTED_AT.set(userId, nowTs());
+      WHATSAPP_LOGIN_RESEND_AT.set(userId, nowTs());
     }
 
-    const status = await waitForLoginState(userId);
+    // Wait briefly (up to 8s) for the bridge to surface a QR image. If it
+    // hasn't appeared by then, return with `logging_in` so the UI can render
+    // a "generating QR…" state immediately. The frontend then polls /status
+    // every 1.5s and will pick up the QR within ~2s of the bridge producing it.
+    const status = await waitForLoginState(userId, {
+      timeoutMs: 20_000,
+      intervalMs: 1_200,
+    });
     const latestIntegration = await ensureWhatsAppIntegration(userId);
 
     return {
@@ -3080,9 +3833,53 @@ function disconnectedStatus(overrides = {}) {
   };
 }
 
+async function resolveWhatsAppSelfPhone(
+  userId,
+  config = {},
+  bridgeSnapshot = null,
+  { selfPhone = "", allowBridgeMessages = false } = {}
+) {
+  const explicitPhone = String(selfPhone || "").trim();
+  if (normalizeDigits(explicitPhone)) return explicitPhone;
+
+  const pgLogin = config?.mxid
+    ? await readWhatsAppBridgePostgresLogin(config.mxid).catch(() => null)
+    : null;
+  if (normalizeDigits(pgLogin?.phone || "")) return String(pgLogin.phone).trim();
+
+  for (const candidate of [bridgeSnapshot?.phone, config.phone]) {
+    const value = String(candidate || "").trim();
+    if (normalizeDigits(value)) return value;
+  }
+
+  if (!allowBridgeMessages) return "";
+  return findLoginIdFromBridgeBotMessages(userId, {
+    managementRoomId: config.managementRoomId || "",
+    bridgeBotMxid: config.bridgeBotMxid || "",
+  }).catch(() => "");
+}
+
+function buildWhatsAppSelfDescriptorContext(config = {}, selfPhone = "") {
+  const selfPhoneDigits = normalizeDigits(selfPhone || "");
+  return {
+    selfPhoneDigits,
+    selfGhostMxid: selfPhoneDigits
+      ? buildWhatsAppGhostMxid(selfPhoneDigits)
+      : "",
+  };
+}
+
 async function listMatrixWhatsAppRooms(
   userId,
-  { search = "", limit = 80, force = false, bridgeSnapshot = null } = {}
+  {
+    search = "",
+    limit = 80,
+    force = false,
+    bridgeSnapshot = null,
+    // Connected user's WhatsApp phone — used to compute the user's own
+    // ghost mxid so room titles/avatars exclude the user themselves.
+    selfPhone = "",
+  } = {}
 ) {
   let snapshot = await fetchSyncSnapshot(userId, {
     timelineLimit: 20,
@@ -3090,10 +3887,23 @@ async function listMatrixWhatsAppRooms(
   });
   let bridgeSnapshotData =
     bridgeSnapshot || readWhatsAppBridgeSnapshot(snapshot.config.mxid);
+  // Resolve the self ghost mxid (e.g. @whatsapp_919773767632:orion.local).
+  // Prefer the explicit selfPhone arg, then the bridge DB/cache. This is what
+  // lets us filter the user's own phone and avatar out of portal rooms.
+  const resolvedSelfPhone = await resolveWhatsAppSelfPhone(
+    userId,
+    snapshot.config,
+    bridgeSnapshotData,
+    { selfPhone }
+  );
+  const { selfPhoneDigits: ownPhoneDigits, selfGhostMxid } =
+    buildWhatsAppSelfDescriptorContext(snapshot.config, resolvedSelfPhone);
+
   const hydration = await ensureBridgePortalRoomsJoined(userId, {
     config: snapshot.config,
     joinedRoomIds: new Set(Object.keys(snapshot.data?.rooms?.join || {})),
     bridgeSnapshot: bridgeSnapshotData,
+    selfPhone: ownPhoneDigits,
   });
 
   bridgeSnapshotData = hydration.bridgeSnapshot || bridgeSnapshotData;
@@ -3117,6 +3927,8 @@ async function listMatrixWhatsAppRooms(
         bridgeBotMxid: snapshot.config.bridgeBotMxid,
         managementRoomId: snapshot.config.managementRoomId,
         directMap,
+        selfGhostMxid,
+        selfPhoneDigits: ownPhoneDigits,
       });
       const bridgePortal =
         bridgePortalMap.get(String(roomId || "").trim()) || null;
@@ -3171,22 +3983,35 @@ function buildStatusProfile({
   whoami = {},
   config = {},
   bridgeSnapshot = null,
+  // Fallback phone extracted from bridge bot's "Successfully logged in as +XXX"
+  // message in the management room. Used when the SQLite snapshot is empty
+  // (e.g. bridge is on Postgres) so the user's profile shows their phone
+  // number instead of the raw Matrix localpart.
+  fallbackPhone = "",
 }) {
+  const bridgePhone = String(bridgeSnapshot?.phone || "").trim();
+  const resolvedPhone =
+    bridgePhone || String(fallbackPhone || "").trim() || String(config.phone || "").trim();
   const bridgeDisplayName =
-    String(bridgeSnapshot?.profileName || "").trim() ||
-    String(bridgeSnapshot?.phone || "").trim();
+    String(bridgeSnapshot?.profileName || "").trim() || resolvedPhone;
   const avatarMxc = String(matrixProfile.avatar_url || "").trim();
+
+  // Format the phone for display: "+91 9XXXX XXXXX"
+  const displayPhone = resolvedPhone
+    ? resolvedPhone.startsWith("+")
+      ? resolvedPhone
+      : `+${resolvedPhone}`
+    : "";
 
   return {
     displayName:
       sanitizeWhatsAppDisplayLabel(bridgeDisplayName) ||
       sanitizeWhatsAppDisplayLabel(matrixProfile.displayname || "") ||
+      displayPhone ||
       localpartFromMxid(whoami.user_id || config.mxid),
     avatarUrl: buildWhatsAppMediaUrl(avatarMxc || ""),
     avatarMxc: avatarMxc || null,
-    phone:
-      String(bridgeSnapshot?.phone || "").trim() ||
-      String(config.phone || "").trim(),
+    phone: displayPhone || resolvedPhone,
     profileName: String(
       bridgeSnapshot?.profileName || config.profileName || ""
     ).trim(),
@@ -3194,12 +4019,80 @@ function buildStatusProfile({
 }
 
 async function getWhatsAppStatus(userId, { forceRefresh = false } = {}) {
+  // Fast-path: rapid polls (1.5s window) return the cached result so we don't
+  // pile up Matrix syncs + portal-room joins under heavy polling. Bypassed by
+  // `forceRefresh: true`.
+  if (!forceRefresh && userId) {
+    const cached = WHATSAPP_STATUS_CACHE.get(userId);
+    if (cached && cached.expiresAt > nowTs()) {
+      return cached.value;
+    }
+  }
+
   const integration = await getWhatsAppIntegration(userId);
   if (!integration) {
     return disconnectedStatus();
   }
 
-  const fallbackConfig = buildConfigFromIntegration(integration);
+  let fallbackConfig = buildConfigFromIntegration(integration);
+
+  // ---- Real-time Provisioning-API login short-circuit (Beeper parity) ----
+  // While a provisioning login runner is active we serve ITS live QR directly.
+  // whatsmeow rotates the pairing QR every ~20s; the runner long-polls the
+  // bridge so the QR we hand the user is always the current, scannable one
+  // (no more "Login failed: ... timed out" from a stale Matrix-room QR). When
+  // no runner is active we fall through to the existing status path untouched.
+  if (fallbackConfig.mxid) {
+    const runner = provisioningLogin.getLoginState(
+      "whatsapp",
+      fallbackConfig.mxid
+    );
+    if (runner) {
+      if (runner.phase === "qr" || runner.phase === "starting") {
+        const qrImageUrl =
+          runner.phase === "qr" && runner.qrData
+            ? await buildQrDataUrl(runner.qrData).catch(() => null)
+            : null;
+        return {
+          connected: false,
+          loginState: qrImageUrl ? "pending_qr" : "logging_in",
+          lastError: "",
+          error: "",
+          qrImageUrl,
+          roomCount: 0,
+          unreadCount: 0,
+          profile: null,
+          connectedAt: null,
+        };
+      }
+      if (runner.phase === "error" || runner.phase === "timeout") {
+        provisioningLogin.stopLogin("whatsapp", fallbackConfig.mxid);
+        const expiredMsg =
+          runner.error || "QR code expired. Please click Connect again.";
+        return {
+          connected: false,
+          loginState: "error",
+          lastError: expiredMsg,
+          error: expiredMsg,
+          qrImageUrl: null,
+          roomCount: 0,
+          unreadCount: 0,
+          profile: null,
+          connectedAt: null,
+        };
+      }
+      if (runner.phase === "connected") {
+        // Scan succeeded. Stop the runner and fall through to the normal path
+        // which reads the bridge's user_login row for phone/profile.
+        provisioningLogin.stopLogin("whatsapp", fallbackConfig.mxid);
+        WHATSAPP_LOGIN_REQUESTED_AT.delete(userId);
+        WHATSAPP_LOGIN_RESEND_AT.delete(userId);
+        fallbackConfig = buildConfigFromIntegration(
+          await getWhatsAppIntegration(userId)
+        );
+      }
+    }
+  }
 
   try {
     const { config } = await ensureWhatsAppAccess(userId, {
@@ -3219,13 +4112,58 @@ async function getWhatsAppStatus(userId, { forceRefresh = false } = {}) {
       force: forceRefresh,
       timelineLimit: 12,
     });
+    const loginRequestedAt = Number(
+      WHATSAPP_LOGIN_REQUESTED_AT.get(userId) || 0
+    );
+    const activeLoginWindow =
+      loginRequestedAt > 0 &&
+      nowTs() - loginRequestedAt < WHATSAPP_LOGIN_ACTIVE_WINDOW_MS;
+
     const connectionState = deriveWhatsAppConnectionState({
       fallbackConfig,
       bridgeState,
       bridgeSnapshot,
+      activeLoginWindow,
     });
 
     let { loginState, lastError, connectedAt, connected } = connectionState;
+
+    // Source of truth: the bridge's own Provisioning whoami. The Matrix
+    // management room keeps a stale "logged out from another device" notice
+    // around long after the account reconnects, so the live whoami wins. If
+    // the bridge says the account is connected, override any stale error.
+    const acctState = await provisioningLogin
+      .getBridgeAccountState("whatsapp", config.mxid)
+      .catch(() => null);
+    if (acctState && acctState.connected) {
+      connected = true;
+      loginState = "connected";
+      lastError = "";
+      if (!connectedAt) connectedAt = new Date();
+    }
+
+    // The bridge reported a QR-scan timeout while the user is still actively
+    // trying to connect. Silently re-issue `login qr` (throttled) so a fresh
+    // QR appears instead of showing the user a timeout error. This is the fix
+    // for "QR keeps timing out / first click shows a stale timeout error".
+    if (connectionState.retryableTimeout && activeLoginWindow) {
+      const lastResend = Number(WHATSAPP_LOGIN_RESEND_AT.get(userId) || 0);
+      if (nowTs() - lastResend > WHATSAPP_LOGIN_RESEND_THROTTLE_MS) {
+        WHATSAPP_LOGIN_RESEND_AT.set(userId, nowTs());
+        sendBridgeTextCommand(userId, "login qr").catch((err) => {
+          console.info(
+            "[WhatsApp] auto QR refresh deferred:",
+            String(err?.message || err || "")
+          );
+        });
+      }
+    }
+    // Once the user is connected (or has clearly left the connect flow) drop
+    // the active-login bookkeeping so we don't keep re-issuing QR commands.
+    if (connected) {
+      WHATSAPP_LOGIN_REQUESTED_AT.delete(userId);
+      WHATSAPP_LOGIN_RESEND_AT.delete(userId);
+    }
 
     const patch = {};
     if (
@@ -3268,7 +4206,7 @@ async function getWhatsAppStatus(userId, { forceRefresh = false } = {}) {
 
     // IMPORTANT: keep pending_qr / logging_in fast
     if (!connected) {
-      return {
+      const pendingResult = {
         connected: false,
         loginState,
         lastError,
@@ -3279,37 +4217,126 @@ async function getWhatsAppStatus(userId, { forceRefresh = false } = {}) {
         profile: null,
         connectedAt: null,
       };
+      if (userId) {
+        WHATSAPP_STATUS_CACHE.set(userId, {
+          expiresAt: nowTs() + WHATSAPP_STATUS_CACHE_TTL_MS,
+          value: pendingResult,
+        });
+      }
+      return pendingResult;
     }
 
-    const connectedSnapshot = await fetchSyncSnapshot(userId, {
-      timelineLimit: 20,
-      force: forceRefresh,
-    }).catch(() => null);
-    const joinedRoomIds = new Set(
-      Object.keys(connectedSnapshot?.data?.rooms?.join || {})
-    );
-    const hydration = await ensureBridgePortalRoomsJoined(userId, {
-      config,
-      joinedRoomIds,
+    // Resolve the user's own WhatsApp phone FIRST — needed by everything
+    // downstream. Try multiple sources in order of reliability:
+    //   1. Bridge's Postgres `user_login` table (most reliable, works
+    //      regardless of bridge bot message availability)
+    //   2. SQLite snapshot (works only if the bridge is on SQLite)
+    //   3. Bridge bot's "Successfully logged in as +XXX" message in the
+    //      management room (fallback if neither DB is reachable)
+    const selfPhone = await resolveWhatsAppSelfPhone(
+      userId,
+      { ...config, managementRoomId },
       bridgeSnapshot,
-      maxRooms: forceRefresh
-        ? WHATSAPP_BRIDGE_JOIN_BATCH_SIZE * 2
-        : WHATSAPP_BRIDGE_JOIN_BATCH_SIZE,
+      { allowBridgeMessages: true }
+    );
+
+    // Kick off portal-hydration in the background. Pass selfPhone so the
+    // hydration's auto-join guard works on Postgres too (where SQLite
+    // snapshot is empty).
+    kickoffBackgroundHydration(userId, {
+      config,
+      bridgeSnapshot,
+      selfPhone,
     });
 
-    // Only do the heavier work once actually connected
-    const whoami = await getWhoAmI(userId);
-    const profile = await getProfile(
-      userId,
-      whoami.user_id || config.mxid
-    ).catch(() => ({}));
+    // First time we see this user as connected? Ask the bridge to sync the
+    // address book so chats get their real contact names (FullName) instead
+    // of just phone numbers. Best-effort, fire-and-forget — the bridge will
+    // populate names over the next 5–30 seconds.
+    if (userId && !WHATSAPP_CONTACT_SYNC_SENT.has(userId)) {
+      WHATSAPP_CONTACT_SYNC_SENT.add(userId);
+      syncWhatsAppContacts(userId).catch((err) => {
+        const errorText = String(err?.message || err || "");
+        if (isRetriableMatrixError(err) || /\btimeout|ECONNRESET|ECONNABORTED\b/i.test(errorText)) {
+          console.info(
+            "[WhatsApp] auto sync contacts deferred:",
+            errorText
+          );
+          return;
+        }
+        console.warn(
+          "[WhatsApp] auto sync contacts failed:",
+          errorText
+        );
+      });
+    }
+
+    // Light read of currently-known chats. Pass `selfPhone` so the listing
+    // can filter out the user's own JID (Notes-to-Self chat).
     const rooms = await listWhatsAppChats(userId, {
       limit: 120,
-      force: forceRefresh || Boolean(hydration.joinedRoomIds.length),
-      bridgeSnapshot: hydration.bridgeSnapshot || bridgeSnapshot,
+      force: forceRefresh,
+      bridgeSnapshot,
+      selfPhone,
     }).catch(() => []);
 
-    return {
+    // Profile fetch — fast and useful to surface name/avatar immediately.
+    // Strategy: the connected user's WHATSAPP profile picture lives on
+    // their bridge ghost (@whatsapp_<phone>:domain), NOT on their Matrix
+    // login user. So we try the ghost first, fall back to the Matrix login.
+    const whoami = await getWhoAmI(userId).catch(() => ({}));
+    let profile = {};
+    if (selfPhone) {
+      const selfGhostMxid = buildWhatsAppGhostMxid(normalizeDigits(selfPhone));
+      if (selfGhostMxid) {
+        profile = await getProfile(userId, selfGhostMxid).catch(() => ({}));
+      }
+    }
+    if (!profile?.avatar_url) {
+      // Fall back to the Matrix login user's profile (likely empty for
+      // hidden users but won't hurt to try)
+      const loginProfile = await getProfile(
+        userId,
+        whoami.user_id || config.mxid
+      ).catch(() => ({}));
+      profile = {
+        ...loginProfile,
+        // Prefer ghost displayname if we found one; ghost name = WhatsApp
+        // profile name, which is what the user wants to see
+        displayname: profile.displayname || loginProfile.displayname,
+        avatar_url: profile.avatar_url || loginProfile.avatar_url,
+      };
+    }
+
+    const statusProfile = buildStatusProfile({
+      matrixProfile: profile,
+      whoami,
+      config,
+      bridgeSnapshot,
+      fallbackPhone: selfPhone,
+    });
+
+    if (
+      selfPhone &&
+      !phoneDigitsMatch(selfPhone, fallbackConfig.phone || config.phone || "")
+    ) {
+      saveWhatsAppIntegration(
+        userId,
+        {
+          loginState: "connected",
+          lastError: "",
+          connectedAt: connectedAt || config.connectedAt || null,
+        },
+        {
+          connected: true,
+          phone: formatWhatsAppPhone(selfPhone),
+          profileName: statusProfile.profileName || statusProfile.displayName || "",
+          avatarUrl: statusProfile.avatarUrl || "",
+        }
+      ).catch(() => null);
+    }
+
+    const connectedResult = {
       connected: true,
       loginState: "connected",
       lastError: "",
@@ -3320,14 +4347,17 @@ async function getWhatsAppStatus(userId, { forceRefresh = false } = {}) {
         (sum, room) => sum + Number(room.unreadCount || 0),
         0
       ),
-      profile: buildStatusProfile({
-        matrixProfile: profile,
-        whoami,
-        config,
-        bridgeSnapshot: hydration.bridgeSnapshot || bridgeSnapshot,
-      }),
+      profile: statusProfile,
       connectedAt: connectedAt ? new Date(connectedAt).toISOString() : null,
     };
+
+    if (userId) {
+      WHATSAPP_STATUS_CACHE.set(userId, {
+        expiresAt: nowTs() + WHATSAPP_STATUS_CACHE_TTL_MS,
+        value: connectedResult,
+      });
+    }
+    return connectedResult;
   } catch (error) {
     const errorText = String(
       error?.message ||
@@ -3623,17 +4653,35 @@ async function waitForWhatsAppContactRoom(
 
 async function listWhatsAppChats(
   userId,
-  { search = "", limit = 80, force = false, bridgeSnapshot = null } = {}
+  {
+    search = "",
+    limit = 80,
+    force = false,
+    bridgeSnapshot = null,
+    // Phone number of the connected WhatsApp account. Used to filter out the
+    // user's own contact (the WhatsApp "Notes to Self" chat) from the list,
+    // which would otherwise appear as a row showing the user's own phone +
+    // avatar mixed in with their real contacts.
+    selfPhone = "",
+  } = {}
 ) {
   const integration = await ensureWhatsAppIntegration(userId);
   const config = buildConfigFromIntegration(integration);
   const bridgeSnapshotData =
     bridgeSnapshot || readWhatsAppBridgeSnapshot(config.mxid);
+  const resolvedSelfPhone = await resolveWhatsAppSelfPhone(
+    userId,
+    config,
+    bridgeSnapshotData,
+    { selfPhone, allowBridgeMessages: true }
+  );
+  const ownPhoneDigits = normalizeDigits(resolvedSelfPhone || "");
   const rooms = await listMatrixWhatsAppRooms(userId, {
     search,
     limit: Math.max(120, Number(limit || 80)),
     force,
     bridgeSnapshot: bridgeSnapshotData,
+    selfPhone: resolvedSelfPhone || ownPhoneDigits,
   });
   const contacts = readWhatsAppBridgeContacts(config.mxid, bridgeSnapshotData);
 
@@ -3727,11 +4775,24 @@ async function listWhatsAppChats(
   // a LID JID (`14194...@lid`) and the lid_map is missing the link. Both
   // entries end up in the chatMap under different canonical keys but resolve
   // to the same person. Merge them by phone digits, keeping the better one.
+  // When phoneNumber is missing, fall back to extracting digits from the
+  // WhatsApp ghost MXID (e.g. `@whatsapp_919773767632:orion.local`).
   const phoneIndex = new Map();
   for (const [key, chat] of chatMap.entries()) {
     if (!chat || chat.isGroup) continue;
-    const digits = normalizeDigits(chat.phoneNumber || "");
-    if (!digits) continue;
+    const ghostMxid = String(
+      chat.contactGhostMxid || chat.contactMxid || ""
+    ).trim();
+    const ghostDigits = ghostMxid
+      ? normalizeDigits(
+          ghostMxid.replace(/^@whatsapp_/i, "").split(":")[0]
+        )
+      : "";
+    const digits =
+      normalizeDigits(chat.phoneNumber || "") ||
+      normalizeDigits(chat.contactGhostId || "") ||
+      (ghostDigits.length >= 6 ? ghostDigits : "");
+    if (!digits || digits.length < 6) continue;
     const existing = phoneIndex.get(digits);
     if (!existing) {
       phoneIndex.set(digits, { key, chat });
@@ -3741,6 +4802,65 @@ async function listWhatsAppChats(
     const loserKey = winner === existing.chat ? key : existing.key;
     chatMap.delete(loserKey);
     phoneIndex.set(digits, {
+      key: winner === existing.chat ? existing.key : key,
+      chat: winner,
+    });
+  }
+
+  // Drop the user's own "Notes to Self" portal. WhatsApp exposes a chat for
+  // your own phone number which shows up as your own avatar + number in the
+  // contact list. Filtering it here keeps the chat list clean.
+  if (ownPhoneDigits) {
+    for (const [key, chat] of chatMap.entries()) {
+      if (!chat) continue;
+      const chatDigits = normalizeDigits(
+        chat.phoneNumber ||
+          chat.canonicalContactJid ||
+          chat.contactJid ||
+          chat.contactMxid ||
+          chat.title ||
+          chat.name ||
+          ""
+      );
+      const canonicalJid = String(chat.canonicalContactJid || chat.contactJid || "").toLowerCase();
+      if (
+        (chatDigits && phoneDigitsMatch(chatDigits, ownPhoneDigits)) ||
+        canonicalJid.startsWith(`${ownPhoneDigits}@`)
+      ) {
+        chatMap.delete(key);
+      }
+    }
+  }
+
+  // Third-pass dedup by display title. The bridge sometimes creates two
+  // separate Matrix portal rooms for the same contact (phone JID + LID JID)
+  // and neither room carries phone/JID metadata — so the phone-digit dedup
+  // above can't catch them. For non-group direct chats that lack a contactJid
+  // AND phoneNumber, fall back to deduplicating by normalized title. This is
+  // safe because WhatsApp display names within a single account's contact list
+  // are unique per underlying contact; true collisions (two different people
+  // with the same saved name) would still carry distinct JIDs.
+  const titleIndex = new Map();
+  for (const [key, chat] of chatMap.entries()) {
+    if (!chat || chat.isGroup) continue;
+    const hasIdentifier =
+      normalizeDigits(chat.phoneNumber || "") ||
+      String(chat.contactJid || "").trim() ||
+      String(chat.canonicalContactJid || "").trim();
+    if (hasIdentifier) continue;
+    const title = normalizeSearchValue(
+      String(chat.title || chat.name || "").trim()
+    );
+    if (!title) continue;
+    const existing = titleIndex.get(title);
+    if (!existing) {
+      titleIndex.set(title, { key, chat });
+      continue;
+    }
+    const winner = pickBetterWhatsAppContact(existing.chat, chat);
+    const loserKey = winner === existing.chat ? key : existing.key;
+    chatMap.delete(loserKey);
+    titleIndex.set(title, {
       key: winner === existing.chat ? existing.key : key,
       chat: winner,
     });
@@ -3958,6 +5078,16 @@ async function getWhatsAppRoomTimeline(userId, roomId, { limit = 50 } = {}) {
     timelineLimit: Math.max(limit, 50),
     force: true,
   });
+  const bridgeSnapshot = readWhatsAppBridgeSnapshot(snapshot.config.mxid);
+  const selfPhone = await resolveWhatsAppSelfPhone(
+    userId,
+    snapshot.config,
+    bridgeSnapshot
+  );
+  const selfDescriptorContext = buildWhatsAppSelfDescriptorContext(
+    snapshot.config,
+    selfPhone
+  );
 
   const roomData = snapshot.data.rooms?.join?.[resolvedRoom.roomId];
 
@@ -3980,7 +5110,7 @@ async function getWhatsAppRoomTimeline(userId, roomId, { limit = 50 } = {}) {
     }
 
     const contactMap = buildWhatsAppBridgeContactMap(
-      readWhatsAppBridgeContacts(snapshot.config.mxid)
+      readWhatsAppBridgeContacts(snapshot.config.mxid, bridgeSnapshot)
     );
     const room = mergeResolvedWhatsAppRoomMetadata(
       descriptor.room,
@@ -4008,6 +5138,7 @@ async function getWhatsAppRoomTimeline(userId, roomId, { limit = 50 } = {}) {
     bridgeBotMxid: snapshot.config.bridgeBotMxid,
     managementRoomId: snapshot.config.managementRoomId,
     directMap,
+    ...selfDescriptorContext,
   });
 
   if (
@@ -4018,7 +5149,7 @@ async function getWhatsAppRoomTimeline(userId, roomId, { limit = 50 } = {}) {
   }
 
   const contactMap = buildWhatsAppBridgeContactMap(
-    readWhatsAppBridgeContacts(snapshot.config.mxid)
+    readWhatsAppBridgeContacts(snapshot.config.mxid, bridgeSnapshot)
   );
   const room = mergeResolvedWhatsAppRoomMetadata(
     descriptor.room,
@@ -4057,6 +5188,16 @@ async function getWhatsAppRoomHistory(
     timelineLimit: 1,
     force: false,
   });
+  const bridgeSnapshot = readWhatsAppBridgeSnapshot(snapshot.config.mxid);
+  const selfPhone = await resolveWhatsAppSelfPhone(
+    userId,
+    snapshot.config,
+    bridgeSnapshot
+  );
+  const selfDescriptorContext = buildWhatsAppSelfDescriptorContext(
+    snapshot.config,
+    selfPhone
+  );
   const roomData = snapshot.data.rooms?.join?.[resolvedRoom.roomId] || null;
 
   const response = await matrixRequestWithRefresh(
@@ -4109,6 +5250,7 @@ async function getWhatsAppRoomHistory(
     bridgeBotMxid: snapshot.config.bridgeBotMxid,
     managementRoomId: snapshot.config.managementRoomId,
     directMap,
+    ...selfDescriptorContext,
   });
 
   if (
@@ -4119,7 +5261,7 @@ async function getWhatsAppRoomHistory(
   }
 
   const contactMap = buildWhatsAppBridgeContactMap(
-    readWhatsAppBridgeContacts(snapshot.config.mxid)
+    readWhatsAppBridgeContacts(snapshot.config.mxid, bridgeSnapshot)
   );
   const room = mergeResolvedWhatsAppRoomMetadata(
     descriptor.room,
@@ -4458,7 +5600,8 @@ async function fetchWhatsAppMedia(userId, mxc, { thumbnail = false } = {}) {
 
   const response = await matrixRequestWithRefresh(userId, "GET", path, {
     responseType: "arraybuffer",
-    timeout: 60_000,
+    timeout: MATRIX_MEDIA_TIMEOUT_MS,
+    maxAttempts: 4,
   });
 
   return {
@@ -4538,8 +5681,12 @@ module.exports = {
   getWhatsAppUnreadSummary,
   getWhatsAppUnreadSignal: getWhatsAppUnreadSummary,
   sendBridgeCommand: sendBridgeTextCommand,
+  readWhatsAppBridgeSnapshot,
+  purgeWhatsAppBridgeLogin,
+  findLoginIdFromBridgeBotMessages,
   syncWhatsAppContacts,
   invalidateWhatsAppCache,
+  invalidateWhatsAppCacheForReconnect,
   __test: {
     stripReplyFallback,
     resolveMessageText,
@@ -4548,6 +5695,7 @@ module.exports = {
     buildWhatsAppBridgeSnapshot,
     buildWhatsAppBridgePortalMap,
     buildWhatsAppBridgeContactMap,
+    cleanRoomTitle,
     findWhatsAppPortalByRoomId,
     mergeRoomWithBridgePortalMetadata,
     mergeRoomWithBridgeContactMetadata,

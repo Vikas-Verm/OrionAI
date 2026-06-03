@@ -20,7 +20,7 @@ network:
     # {{.Phone}}         - phone number (international format)
     # {{.RedactedPhone}} - phone number with middle digits replaced by "∙"
     # {{.FullName}}      - Name you set in the contacts list
-    displayname_template: '{{or .BusinessName .PushName .Phone .RedactedPhone "Unknown user"}} (WA)'
+    displayname_template: '{{or .FullName .BusinessName .PushName .Phone .RedactedPhone "Unknown user"}}'
     
     # Should incoming calls send a message to the Matrix room?
     call_start_notices: true
@@ -60,7 +60,7 @@ network:
     #
     # By default, the bridge acts like WhatsApp web, which only sends active delivery
     # receipts when it's in the foreground.
-    force_active_delivery_receipts: false
+    force_active_delivery_receipts: true
     # When direct media is enabled and a piece of media isn't available on the WhatsApp servers,
     # should it be automatically requested from the phone?
     direct_media_auto_request: true
@@ -91,20 +91,20 @@ network:
         # How many conversations should the bridge create after login?
         # If -1, all conversations received from history sync will be bridged.
         # Other conversations will be backfilled on demand when receiving a message.
-        max_initial_conversations: -1
+        max_initial_conversations: 50
         # Should the bridge request a full sync from the phone when logging in?
         # This bumps the size of history syncs from 3 months to 1 year.
         request_full_sync: false
         # Time to wait for history sync payloads before starting backfill. Each new payload resets the timer.
         # If this is too low, the backfill may happen with incomplete history
         # and backfill less messages than what is configured in the backfill section.
-        dispatch_wait: 1m
+        dispatch_wait: 30s
         # Configuration parameters that are sent to the phone along with the request full sync flag.
         # By default, (when the values are null or 0), the config isn't sent at all.
         full_sync_config:
             # Number of days of history to request.
             # The limit seems to be around 3 years, but using higher values doesn't break.
-            days_limit: null
+            days_limit: 30
             # This is presumably the maximum size of the transferred history sync blob, which may affect what the phone includes in the blob.
             size_mb_limit: null
             # This is presumably the local storage quota, which may affect what the phone includes in the history sync blob.
@@ -156,7 +156,7 @@ bridge:
     bridge_status_notices: errors
     # How long after an unknown error should the bridge attempt a full reconnect?
     # Must be at least 1 minute. The bridge will add an extra ±20% jitter to this value.
-    unknown_error_auto_reconnect: null
+    unknown_error_auto_reconnect: 2m
     # Maximum number of times to do the auto-reconnect above.
     # The counter is per login, but is never reset except on logout and restart.
     unknown_error_max_auto_reconnects: 10
@@ -164,7 +164,7 @@ bridge:
     # Should leaving Matrix rooms be bridged as leaving groups on the remote network?
     bridge_matrix_leave: false
     # Should `m.notice` messages be bridged?
-    bridge_notices: false
+    bridge_notices: true
     # Should room tags only be synced when creating the portal? Tags mean things like favorite/pin and archive/low priority.
     # Tags currently can't be synced back to the remote network, so a continuous sync means tagging from Matrix will be undone.
     tag_only_on_create: true
@@ -288,16 +288,16 @@ bridge:
 # Config for the bridge's database.
 database:
     # The database type. "sqlite3-fk-wal" and "postgres" are supported.
-    type: sqlite3-fk-wal
+    type: postgres
     # The database URI.
     #   SQLite: A raw file path is supported, but `file:<path>?_txlock=immediate` is recommended.
     #           https://github.com/mattn/go-sqlite3#connection-string
     #   Postgres: Connection string. For example, postgres://user:password@host/database?sslmode=disable
     #             To connect via Unix socket, use something like postgres:///dbname?host=/var/run/postgresql
-    uri: file:/data/mautrix-whatsapp.db?_txlock=immediate
+    uri: postgres://mautrix:mautrix_bridge_secret@postgres/mautrix_whatsapp?sslmode=disable
     # Maximum number of connections.
-    max_open_conns: 5
-    max_idle_conns: 1
+    max_open_conns: 20
+    max_idle_conns: 2
     # Maximum connection idle time and lifetime before they're closed. Disabled if null.
     # Parsed with https://pkg.go.dev/time#ParseDuration
     max_conn_idle_time: null
@@ -385,7 +385,7 @@ matrix:
     # Whether the bridge should send the message status as a custom com.beeper.message_send_status event.
     message_status_events: false
     # Whether the bridge should send a read receipt after successfully bridging a message.
-    delivery_receipts: false
+    delivery_receipts: true
     # Whether the bridge should send error notices via m.notice events when a message fails to bridge.
     message_error_notices: true
     # Whether the bridge should update the m.direct account data event when double puppeting is enabled.
@@ -413,7 +413,7 @@ analytics:
 provisioning:
     # Shared secret for authentication. If set to "generate" or null, a random secret will be generated,
     # or if set to "disable", the provisioning API will be disabled. Must be at least 16 characters.
-    shared_secret: "disable"
+    shared_secret: wA7kQ2mZ9vX4pL8nR3tY6bH1cJ5dF0sGoEuItOaSeVmKqWzN
     # Whether to allow provisioning API requests to be authed using Matrix access tokens.
     # This follows the same rules as double puppeting to determine which server to contact to check the token,
     # which means that by default, it only works for users on the same server as the bridge.
@@ -477,16 +477,16 @@ backfill:
     enabled: true
     # Maximum number of messages to backfill in empty rooms.
     # If this is zero or negative, backfill will be disabled in new rooms.
-    max_initial_messages: 50
+    max_initial_messages: 20
     # Maximum number of missed messages to backfill after bridge restarts.
-    max_catchup_messages: 500
+    max_catchup_messages: 100
     # If a backfilled chat is older than this number of hours,
     # mark it as read even if it's unread on the remote network.
     unread_hours_threshold: 720
     # Settings for backfilling threads within other backfills.
     threads:
         # Maximum number of messages to backfill in a new thread.
-        max_initial_messages: 50
+        max_initial_messages: 10
     # Settings for the backwards backfill queue. This only applies when connecting to
     # Beeper as standard Matrix servers don't support inserting messages into history.
     queue:
@@ -623,3 +623,9 @@ logging:
     writers:
         - type: stdout
           format: pretty-colored
+        - type: file
+          format: json
+          filename: /data/logs/whatsapp-bridge.log
+          max_size: 100
+          max_backups: 10
+          compress: true

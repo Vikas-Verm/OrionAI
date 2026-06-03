@@ -189,13 +189,14 @@
 
       <div v-else-if="filteredChats.length === 0 && !isSidebarCollapsed" class="wa-list-empty">
         <div class="wa-empty-orb">
-          <span>0</span>
+          <span v-if="chatQuery">0</span>
+          <span v-else class="wa-empty-spinner" aria-hidden="true"></span>
         </div>
-        <strong>{{ chatQuery ? 'No chats match your search' : 'No chats synced yet' }}</strong>
+        <strong>{{ chatQuery ? 'No chats match your search' : 'Syncing your chats…' }}</strong>
         <p>
           {{ chatQuery
             ? 'Try a different name, message preview, or filter.'
-            : 'If you just linked WhatsApp, give OrionAI a moment to finish syncing your rooms.' }}
+            : 'WhatsApp is backfilling your conversations. New chats will appear here as they finish syncing — usually within a minute.' }}
         </p>
       </div>
 
@@ -1097,8 +1098,19 @@ function chatsMatch(left = null, right = null) {
 
   const leftRoomId = currentRoomId(left)
   const rightRoomId = currentRoomId(right)
-  if (leftRoomId && rightRoomId && leftRoomId === rightRoomId) return true
+  // STRICT: when BOTH sides have a Matrix room ID, require an exact match.
+  // The previous fuzzy fallback (matching by phone digits when room IDs
+  // differed) caused the selected chat to "auto-jump" to a different chat
+  // during the 8s polling refresh — two contacts with similar phone digits
+  // or one with an empty digit fallback would collide and selectedChat got
+  // swapped to whichever happened to match first.
+  if (leftRoomId && rightRoomId) {
+    return leftRoomId === rightRoomId
+  }
 
+  // Only fall through to the loose identity match when at least one side has
+  // no room ID yet (e.g. a freshly-discovered contact that hasn't been
+  // materialised as a portal yet).
   const leftKey = normalizeChatIdentityKey(left)
   const rightKey = normalizeChatIdentityKey(right)
   return Boolean(leftKey && rightKey && leftKey === rightKey)
@@ -1108,12 +1120,12 @@ function findMatchingChat(collection = [], target = null) {
   return (collection || []).find((chat) => chatsMatch(chat, target)) || null
 }
 
-function replaceChatInList(nextChat = null) {
+function replaceChatInList(nextChat = null, previousChat = null) {
   if (!nextChat?.roomId) return
 
   let matched = false
   chats.value = chats.value.map((chat) => {
-    if (!chatsMatch(chat, nextChat)) return chat
+    if (!chatsMatch(chat, nextChat) && !(previousChat && chatsMatch(chat, previousChat))) return chat
     matched = true
     return normalizeChatReadState({
       ...chat,
@@ -1523,6 +1535,7 @@ async function markCurrentRoomRead(roomId = selectedChat.value?.roomId || '', ev
 async function loadSelectedConversation({ from = '', append = false, silent = false } = {}) {
   if (!selectedChat.value) return
 
+  const requestedChat = { ...selectedChat.value }
   const roomId = currentRoomId(selectedChat.value)
   if (!roomId) return
 
@@ -1544,9 +1557,11 @@ async function loadSelectedConversation({ from = '', append = false, silent = fa
     })
 
     const incoming = Array.isArray(data?.messages) ? data.messages : []
+    if (!isChatSendTarget(selectedChat.value, requestedChat, roomId)) return
+
     prevBatch.value = data?.prevBatch || null
     selectedChat.value = normalizeChatReadState(data?.room || selectedChat.value)
-    replaceChatInList(selectedChat.value)
+    replaceChatInList(selectedChat.value, requestedChat)
     const resolvedRoomId = currentRoomId(selectedChat.value)
 
     if (append) {
@@ -2153,7 +2168,14 @@ function buildOptimisticMessage({
   }
 }
 
-function applyOptimisticChatState(message = {}) {
+function isChatSendTarget(chat = null, targetChat = null, roomId = '') {
+  if (!chat) return false
+  const targetRoomId = String(roomId || '').trim()
+  if (targetRoomId && currentRoomId(chat) === targetRoomId) return true
+  return Boolean(targetChat && chatsMatch(chat, targetChat))
+}
+
+function applyOptimisticChatState(message = {}, targetChat = null) {
   if (!message?.roomId) return
   const roomId = String(message.roomId)
   const timestamp = normalizeTimestamp(message.timestamp || Date.now())
@@ -2170,7 +2192,7 @@ function applyOptimisticChatState(message = {}) {
           : 'Attachment')
 
   chats.value = chats.value.map((chat) =>
-    chatsMatch(chat, selectedChat.value || { roomId })
+    isChatSendTarget(chat, targetChat, roomId)
       ? normalizeChatReadState({
           ...chat,
           roomId,
@@ -2186,7 +2208,7 @@ function applyOptimisticChatState(message = {}) {
       : chat
   )
 
-  if (selectedChat.value && chatsMatch(selectedChat.value, { roomId, ...selectedChat.value })) {
+  if (isChatSendTarget(selectedChat.value, targetChat, roomId)) {
     selectedChat.value = normalizeChatReadState({
       ...selectedChat.value,
       roomId,
@@ -2202,11 +2224,16 @@ function applyOptimisticChatState(message = {}) {
   }
 }
 
-function appendOptimisticMessages(nextMessages = []) {
+function appendOptimisticMessages(nextMessages = [], targetChat = null) {
   const validMessages = (nextMessages || []).filter(Boolean)
   if (!validMessages.length) return
-  messages.value = mergeMessages(messages.value, validMessages)
-  validMessages.forEach((message) => applyOptimisticChatState(message))
+  const visibleTargetMessages = validMessages.filter((message) =>
+    isChatSendTarget(selectedChat.value, targetChat, message.roomId)
+  )
+  if (visibleTargetMessages.length) {
+    messages.value = mergeMessages(messages.value, visibleTargetMessages)
+  }
+  validMessages.forEach((message) => applyOptimisticChatState(message, targetChat))
 }
 
 function buildAttachmentPayload(draft, contentUri = '') {
@@ -2226,7 +2253,8 @@ function buildAttachmentPayload(draft, contentUri = '') {
 async function sendMessage() {
   if (!selectedChat.value || sendDisabled.value) return
 
-  const roomId = currentRoomId(selectedChat.value)
+  const targetChat = { ...selectedChat.value }
+  const roomId = currentRoomId(targetChat)
   const text = composer.value.trim()
   const replyToEventId = replyTarget.value?.id || null
   const optimisticMessages = []
@@ -2250,14 +2278,17 @@ async function sendMessage() {
           { headers: { 'Content-Type': 'multipart/form-data' } }
         )
         const resolvedRoomId = String(data?.roomId || roomId)
-        if (selectedChat.value && resolvedRoomId !== currentRoomId(selectedChat.value)) {
-          selectedChat.value = normalizeChatReadState({
-            ...selectedChat.value,
+        if (resolvedRoomId !== currentRoomId(targetChat)) {
+          const nextChat = normalizeChatReadState({
+            ...targetChat,
             roomId: resolvedRoomId,
             id: resolvedRoomId,
             bridgeStatus: 'portal',
           })
-          replaceChatInList(selectedChat.value)
+          if (isChatSendTarget(selectedChat.value, targetChat, '')) {
+            selectedChat.value = nextChat
+          }
+          replaceChatInList(nextChat, targetChat)
         }
 
         optimisticMessages.push(
@@ -2286,14 +2317,17 @@ async function sendMessage() {
         replyToEventId: replyToEventId || undefined,
       })
       const resolvedRoomId = String(data?.roomId || roomId)
-      if (selectedChat.value && resolvedRoomId !== currentRoomId(selectedChat.value)) {
-        selectedChat.value = normalizeChatReadState({
-          ...selectedChat.value,
+      if (resolvedRoomId !== currentRoomId(targetChat)) {
+        const nextChat = normalizeChatReadState({
+          ...targetChat,
           roomId: resolvedRoomId,
           id: resolvedRoomId,
           bridgeStatus: 'portal',
         })
-        replaceChatInList(selectedChat.value)
+        if (isChatSendTarget(selectedChat.value, targetChat, '')) {
+          selectedChat.value = nextChat
+        }
+        replaceChatInList(nextChat, targetChat)
       }
 
       optimisticMessages.push(
@@ -2311,11 +2345,11 @@ async function sendMessage() {
     clearDraftAttachments()
     emojiPanelOpen.value = false
     gifPanelOpen.value = false
-    appendOptimisticMessages(optimisticMessages)
+    appendOptimisticMessages(optimisticMessages, targetChat)
 
     emitCommunicationPriorityRefresh('communication_replied', {
       sourceApp: 'whatsapp',
-      conversationId: currentRoomId(selectedChat.value) || roomId,
+      conversationId: optimisticMessages[0]?.roomId || roomId,
     })
 
     await nextTick()
@@ -2323,7 +2357,9 @@ async function sendMessage() {
 
     Promise.all([
       loadChats({ silent: true }),
-      loadSelectedConversation({ silent: true }),
+      isChatSendTarget(selectedChat.value, targetChat, optimisticMessages[0]?.roomId)
+        ? loadSelectedConversation({ silent: true })
+        : Promise.resolve(),
       refreshWhatsAppActions({ silent: true }),
     ]).catch(() => {})
 
@@ -2880,6 +2916,16 @@ onUnmounted(() => {
   color: #dfffea;
   font-size: 22px;
   font-weight: 700;
+}
+
+.wa-empty-spinner {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid rgba(95, 255, 170, 0.25);
+  border-top-color: #5fffaa;
+  animation: wa-spin 0.9s linear infinite;
+  display: inline-block;
 }
 
 .wa-chat-skeleton {
