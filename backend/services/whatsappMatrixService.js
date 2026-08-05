@@ -20,6 +20,7 @@ const {
   localpartFromMxid,
   ensureHiddenMatrixAccount,
   loginToMatrix,
+  buildHiddenPassword,
   createMatrixError,
   matrixErrorStatus,
   isMatrixAuthFailure,
@@ -87,6 +88,36 @@ let whatsappBridgeDbPath = "";
 
 function defaultBridgeBotMxid() {
   return process.env.MATRIX_WHATSAPP_BOT_MXID || "@whatsappbot:orion.local";
+}
+
+function readRegistrationAsToken(filePath = "") {
+  try {
+    const contents = fs.readFileSync(filePath, "utf8");
+    return String(contents.match(/^as_token:\s*"?([^"\s]+)"?\s*$/m)?.[1] || "")
+      .trim();
+  } catch {
+    return "";
+  }
+}
+
+function defaultWhatsAppAppserviceToken() {
+  return (
+    String(process.env.MATRIX_WHATSAPP_AS_TOKEN || "").trim() ||
+    readRegistrationAsToken(
+      path.resolve(__dirname, "../../infra/mautrix-whatsapp/registration.yaml")
+    ) ||
+    readRegistrationAsToken(
+      path.resolve(
+        __dirname,
+        "../../infra/synapse/appservices/mautrix-whatsapp-registration.yaml"
+      )
+    )
+  );
+}
+
+function isWhatsAppAppserviceToken(token = "") {
+  const normalized = String(token || "").trim();
+  return Boolean(normalized && normalized === defaultWhatsAppAppserviceToken());
 }
 
 function defaultWhatsAppDeviceName() {
@@ -2238,6 +2269,20 @@ function buildRoomDescriptor({
     containsSignalBot ||
     roomNameLower.includes("signal bridge bot");
 
+  // WhatsApp "Status Broadcast" is the special `status@broadcast` feed (the
+  // 24h stories). On real WhatsApp Web it is NOT a normal chat — it lives in a
+  // separate Status tab. The bridge exposes it as a portal room titled
+  // "WhatsApp Status Broadcast" (and/or whose portal JID is status@broadcast).
+  // We flag it here so the chat list can treat it specially / drop it instead
+  // of rendering it inline as a conversation.
+  const isStatusBroadcast =
+    roomNameLower === "whatsapp status broadcast" ||
+    roomNameLower === "status broadcast" ||
+    roomNameLower.includes("status broadcast") ||
+    /(^|[^a-z])status@broadcast([^a-z]|$)/i.test(
+      `${whatsAppGhostId || ""} ${whatsAppGhostMxid || ""}`
+    );
+
   const isManagement =
     !isForeignBridgeRoom &&
     containsWhatsAppBot &&
@@ -2306,11 +2351,13 @@ function buildRoomDescriptor({
     isWhatsAppRoom,
     isManagement,
     isBridgeRedirectOnly,
+    isStatusBroadcast,
     room: {
       roomId: String(roomId),
       id: String(roomId),
       title: roomName,
       name: roomName,
+      isStatusBroadcast,
       avatarMxc: roomAvatar || null,
       avatarUrl: buildWhatsAppMediaUrl(roomAvatar || ""),
       isDirect,
@@ -2370,6 +2417,41 @@ async function ensureWhatsAppIntegration(userId) {
     );
   }
   return integration;
+}
+
+// ── OrionAI-side mute (per-room) ───────────────────────────────────────────
+// WhatsApp phone-side mute state is invisible to us without Matrix double
+// puppeting, so OrionAI maintains its own mute list. Muted rooms are excluded
+// from the unread/notification summary so muted chats never raise a toast.
+function getMutedRoomSet(integration = null) {
+  const raw = integration?.whatsapp?.mutedRooms;
+  const list = Array.isArray(raw) ? raw : [];
+  return new Set(list.map((id) => String(id || "").trim()).filter(Boolean));
+}
+
+async function getMutedRoomIds(userId) {
+  const integration = await getWhatsAppIntegration(userId).catch(() => null);
+  return getMutedRoomSet(integration);
+}
+
+async function setWhatsAppRoomMuted(userId, roomId, muted = true) {
+  const targetRoomId = String(roomId || "").trim();
+  if (!targetRoomId) {
+    return { ok: false, error: "roomId is required" };
+  }
+  const integration = await ensureWhatsAppIntegration(userId);
+  const current = getMutedRoomSet(integration);
+  if (muted) {
+    current.add(targetRoomId);
+  } else {
+    current.delete(targetRoomId);
+  }
+  if (!integration.whatsapp) integration.whatsapp = {};
+  integration.whatsapp.mutedRooms = [...current];
+  integration.markModified("whatsapp.mutedRooms");
+  await integration.save();
+  invalidateWhatsAppCache(userId);
+  return { ok: true, roomId: targetRoomId, muted: Boolean(muted) };
 }
 
 function buildDefaultMatrixState(userId = "") {
@@ -2626,6 +2708,36 @@ async function loginHiddenMatrixAccount(userId) {
   }
 }
 
+async function loginExistingHiddenWhatsAppAccount(userId) {
+  const defaults = buildDefaultMatrixState(userId);
+  const login = await loginToMatrix({
+    homeserverUrl: defaults.homeserverUrl,
+    mxid: defaults.mxid,
+    password: buildHiddenPassword(
+      buildWhatsAppMatrixUserKey(userId),
+      "orion-hidden-matrix-whatsapp"
+    ),
+    deviceDisplayName: defaultWhatsAppDeviceName(),
+  }).catch((err) => {
+    const asToken = defaultWhatsAppAppserviceToken();
+    if (!asToken || !isMatrixAuthFailure(err)) throw err;
+    return {
+      user_id: defaults.mxid,
+      access_token: asToken,
+      device_id: "",
+    };
+  });
+
+  return {
+    hiddenAccount: {
+      homeserverUrl: defaults.homeserverUrl,
+      mxid: defaults.mxid,
+      bridgeBotMxid: defaults.bridgeBotMxid,
+    },
+    login,
+  };
+}
+
 // Transient network errors that we should retry. Synapse, the bridge bot,
 // and the Docker overlay network can all blip momentarily — without retry,
 // one ECONNRESET kills the whole connect flow and the user sees a generic
@@ -2655,6 +2767,10 @@ async function matrixRequest(config, method, path, options = {}) {
   if (config.accessToken) {
     headers.Authorization = `Bearer ${config.accessToken}`;
   }
+  const params = { ...(options.params || {}) };
+  if (isWhatsAppAppserviceToken(config.accessToken) && config.mxid) {
+    params.user_id = normalizeMxid(config.mxid);
+  }
   const maxAttempts = options.maxAttempts || 3;
   let lastError = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -2662,7 +2778,7 @@ async function matrixRequest(config, method, path, options = {}) {
       return await axios({
         method,
         url: `${config.homeserverUrl}${path}`,
-        params: options.params,
+        params,
         data: options.data,
         headers,
         responseType: options.responseType || "json",
@@ -2698,7 +2814,12 @@ async function ensureWhatsAppAccess(userId, { forceLogin = false } = {}) {
     return { integration, config };
   }
 
-  const { hiddenAccount, login } = await loginHiddenMatrixAccount(userId);
+  const { hiddenAccount, login } = await loginHiddenMatrixAccount(userId).catch(
+    (err) => {
+      if (!isMatrixAuthFailure(err)) throw err;
+      return loginExistingHiddenWhatsAppAccount(userId);
+    }
+  );
   const saved = await saveWhatsAppIntegration(
     userId,
     {
@@ -2849,6 +2970,82 @@ async function fetchSyncSnapshot(
     value: snapshot,
   });
   return snapshot;
+}
+
+/**
+ * Single Matrix `/sync` long-poll used by the real-time WhatsApp listener in
+ * websocketServer.js. Unlike fetchSyncSnapshot (which is a cached, timeout:0
+ * snapshot for building chat lists), this performs ONE long-poll request that
+ * blocks until either new activity arrives or `timeoutMs` elapses, then reports
+ * whether anything UI-relevant changed.
+ *
+ * It is intentionally lightweight (timeline limit 1, no state/account_data) so
+ * it only answers "did something new happen?" — the actual chat refresh is done
+ * by the existing poll path once this returns hasNewActivity=true.
+ *
+ * Returns: { nextBatch, hasNewActivity }
+ * - nextBatch: the `next_batch` token to pass as `since` on the next call.
+ * - hasNewActivity: true when an incoming message (from a non-self sender) or a
+ *   new room invite appeared in this sync window.
+ */
+async function waitForWhatsAppActivity(
+  userId,
+  { since = "", timeoutMs = 25000 } = {}
+) {
+  const { config } = await ensureWhatsAppAccess(userId);
+  const selfMxid = String(config?.mxid || "");
+  const filter = JSON.stringify({
+    presence: { types: [] },
+    account_data: { types: [] },
+    room: {
+      timeline: { limit: 1 },
+      state: { types: [], lazy_load_members: true },
+      ephemeral: { types: [] },
+      account_data: { types: [] },
+    },
+  });
+
+  const params = { timeout: Math.max(0, Number(timeoutMs) || 0), filter };
+  if (since) params.since = since;
+
+  const response = await matrixRequestWithRefresh(
+    userId,
+    "GET",
+    "/_matrix/client/v3/sync",
+    {
+      params,
+      // Give axios headroom over the Matrix long-poll timeout so the HTTP layer
+      // doesn't abort the request before the homeserver responds.
+      timeout: (Number(timeoutMs) || 0) + 20000,
+    }
+  );
+
+  const data = response.data || {};
+  const nextBatch = data.next_batch || since || "";
+
+  let hasNewActivity = false;
+  const joined = data.rooms?.join || {};
+  for (const room of Object.values(joined)) {
+    const events = room?.timeline?.events || [];
+    for (const ev of events) {
+      if (
+        ev?.type === "m.room.message" &&
+        ev?.sender &&
+        String(ev.sender) !== selfMxid
+      ) {
+        hasNewActivity = true;
+        break;
+      }
+    }
+    if (hasNewActivity) break;
+  }
+
+  // New portal-room invites (a brand new WhatsApp chat) also count as activity.
+  const inviteCount = data.rooms?.invite
+    ? Object.keys(data.rooms.invite).length
+    : 0;
+
+  return { nextBatch, hasNewActivity: hasNewActivity || inviteCount > 0 };
 }
 
 async function getWhoAmI(userId) {
@@ -3722,6 +3919,19 @@ async function connectWhatsAppIntegration(userId, payload = {}) {
     // SAFETY: only do this on a fresh connect (no Integration in MongoDB) or
     // an explicit force-reconnect — never during an in-progress retry.
     const isFreshConnect = !existingIntegration;
+    if (isFreshConnect || forceReconnect) {
+      const logoutResult = await provisioningLogin.logoutAllLogins(
+        "whatsapp",
+        config.mxid
+      );
+      if (logoutResult.loggedOut || logoutResult.failed) {
+        console.log(
+          "[WhatsApp connect] Provisioning logout before fresh QR: loggedOut=%d failed=%d",
+          logoutResult.loggedOut,
+          logoutResult.failed
+        );
+      }
+    }
     const staleBridgeSnapshot = readWhatsAppBridgeSnapshot(hiddenAccount.mxid);
     if (
       staleBridgeSnapshot &&
@@ -3759,7 +3969,7 @@ async function connectWhatsAppIntegration(userId, payload = {}) {
       // self-restarts each QR cycle so the user always has a fresh code.
       provisioningLogin.stopLogin("whatsapp", config.mxid);
       provisioningLogin.startLogin("whatsapp", config.mxid, {
-        force: forceReconnect,
+        force: forceReconnect || isFreshConnect,
       });
       // Open the "active login window" so status polls keep treating this as
       // an in-progress login.
@@ -3831,6 +4041,54 @@ function disconnectedStatus(overrides = {}) {
     connectedAt: null,
     ...overrides,
   };
+}
+
+async function adoptConnectedWhatsAppIntegration(userId) {
+  const normalizedUserId = String(userId || "").trim();
+  if (!normalizedUserId) return null;
+
+  const defaults = buildDefaultMatrixState(normalizedUserId);
+  const acctState = await provisioningLogin
+    .getBridgeAccountState("whatsapp", defaults.mxid)
+    .catch(() => null);
+  if (!acctState?.connected) return null;
+
+  const connectedAt = acctState.login?.state?.timestamp
+    ? new Date(Number(acctState.login.state.timestamp) * 1000)
+    : new Date();
+  const matrixSession = await loginHiddenMatrixAccount(normalizedUserId).catch(
+    (err) => {
+      console.warn(
+        "[WhatsApp] connected bridge adoption could not refresh Matrix token:",
+        err?.message || err
+      );
+      return null;
+    }
+  );
+  const matrixLogin = matrixSession?.login || null;
+  const hiddenAccount = matrixSession?.hiddenAccount || defaults;
+
+  return saveWhatsAppIntegration(
+    normalizedUserId,
+    {
+      homeserverUrl: hiddenAccount.homeserverUrl || defaults.homeserverUrl,
+      mxid: normalizeMxid(
+        matrixLogin?.user_id || hiddenAccount.mxid || defaults.mxid
+      ),
+      accessToken: matrixLogin?.access_token || "",
+      deviceId: matrixLogin?.device_id || "",
+      bridgeBotMxid: hiddenAccount.bridgeBotMxid || defaults.bridgeBotMxid,
+      loginState: "connected",
+      lastError: "",
+      connectedAt,
+    },
+    {
+      connected: true,
+      phone: acctState.phone || acctState.profile?.phone || "",
+      profileName: acctState.name || acctState.profile?.name || "",
+      avatarUrl: "",
+    }
+  );
 }
 
 async function resolveWhatsAppSelfPhone(
@@ -3947,7 +4205,10 @@ async function listMatrixWhatsAppRooms(
         (descriptor.isWhatsAppRoom || bridgePortal?.roomId) &&
         !descriptor.isManagement &&
         // Drop transient redirect rooms — see buildRoomDescriptor.
-        !descriptor.isBridgeRedirectOnly
+        !descriptor.isBridgeRedirectOnly &&
+        // WhatsApp Status Broadcast is not a real conversation — keep it out
+        // of the chat list (WhatsApp Web shows it in a separate Status tab).
+        !descriptor.isStatusBroadcast
     )
     .map(({ descriptor, bridgePortal }) =>
       mergeRoomWithBridgePortalMetadata(
@@ -4029,7 +4290,10 @@ async function getWhatsAppStatus(userId, { forceRefresh = false } = {}) {
     }
   }
 
-  const integration = await getWhatsAppIntegration(userId);
+  let integration = await getWhatsAppIntegration(userId);
+  if (!integration) {
+    integration = await adoptConnectedWhatsAppIntegration(userId);
+  }
   if (!integration) {
     return disconnectedStatus();
   }
@@ -4667,6 +4931,7 @@ async function listWhatsAppChats(
 ) {
   const integration = await ensureWhatsAppIntegration(userId);
   const config = buildConfigFromIntegration(integration);
+  const mutedRoomSet = getMutedRoomSet(integration);
   const bridgeSnapshotData =
     bridgeSnapshot || readWhatsAppBridgeSnapshot(config.mxid);
   const resolvedSelfPhone = await resolveWhatsAppSelfPhone(
@@ -4870,6 +5135,9 @@ async function listWhatsAppChats(
 
   return [...chatMap.values()]
     .filter((room) => {
+      // WhatsApp Status Broadcast is not a conversation — never list it.
+      if (room.isStatusBroadcast) return false;
+
       const label = String(room.title || room.name || "").trim();
       // Strict: never surface a chat whose label is a raw Matrix room id
       // ("!aliCGcdQakhIGwyyDz:orion.local"), even if we have phone/JID
@@ -4896,9 +5164,13 @@ async function listWhatsAppChats(
       return haystack.includes(query);
     })
     .sort((left, right) => {
-      const unreadDelta =
-        Number(right.unreadCount || 0) - Number(left.unreadCount || 0);
-      if (unreadDelta !== 0) return unreadDelta;
+      // WhatsApp Web ordering: pinned chats stay at the very top, and
+      // everything else is ordered strictly by most-recent activity (newest
+      // first). We deliberately do NOT sort by unread count — unread chats
+      // must keep their natural timeline position, exactly like WhatsApp Web.
+      const pinDelta =
+        Number(Boolean(right.isPinned)) - Number(Boolean(left.isPinned));
+      if (pinDelta !== 0) return pinDelta;
 
       const timestampDelta =
         Number(right.lastMessageTs || 0) - Number(left.lastMessageTs || 0);
@@ -4923,7 +5195,9 @@ async function listWhatsAppChats(
       source: "whatsapp",
       isGroup: Boolean(room.isGroup),
       isPinned: Boolean(room.isPinned),
-      isMuted: Boolean(room.isMuted),
+      isMuted:
+        mutedRoomSet.has(String(room.roomId || "").trim()) ||
+        Boolean(room.isMuted),
       lastSender: room.lastSender || "",
       memberCount: Number(room.memberCount || 0),
       phoneNumber: room.phoneNumber || "",
@@ -5549,6 +5823,7 @@ async function markWhatsAppRoomAsRead(userId, roomId, eventId = "") {
   }
   if (!targetEventId) return { ok: true };
 
+  // Send the m.read receipt (clears the unread notification_count in /sync).
   await matrixRequestWithRefresh(
     userId,
     "POST",
@@ -5557,6 +5832,31 @@ async function markWhatsAppRoomAsRead(userId, roomId, eventId = "") {
     )}/receipt/m.read/${encodeURIComponent(targetEventId)}`,
     { data: {} }
   );
+
+  // Also advance the m.fully_read marker. The receipt alone clears the badge,
+  // but persisting the fully-read marker makes the read state durable across
+  // sessions and is what WhatsApp Web-style clients rely on. Best-effort —
+  // a failure here must not fail the whole mark-read call.
+  try {
+    await matrixRequestWithRefresh(
+      userId,
+      "POST",
+      `/_matrix/client/v3/rooms/${encodeURIComponent(
+        resolvedRoom.roomId
+      )}/read_markers`,
+      {
+        data: {
+          "m.fully_read": targetEventId,
+          "m.read": targetEventId,
+        },
+      }
+    );
+  } catch (err) {
+    console.debug(
+      "[WhatsApp] read_markers update failed (non-fatal):",
+      err?.message || err
+    );
+  }
 
   invalidateWhatsAppCache(userId);
   return { ok: true };
@@ -5614,6 +5914,9 @@ async function fetchWhatsAppMedia(userId, mxc, { thumbnail = false } = {}) {
 async function getWhatsAppUnreadSummary(userId) {
   const chats = await listWhatsAppChats(userId, { limit: 120 });
   const unreadChats = chats
+    // Muted chats must never raise notifications (issue #5). isMuted is set
+    // from the OrionAI-side mute list inside listWhatsAppChats.
+    .filter((chat) => !chat.isMuted)
     .filter((chat) => Number(chat.unreadCount || 0) > 0)
     .sort((a, b) => {
       const unreadDelta =
@@ -5675,11 +5978,14 @@ module.exports = {
   sendWhatsAppMessage,
   uploadWhatsAppMedia,
   markWhatsAppRoomAsRead,
+  setWhatsAppRoomMuted,
+  getMutedRoomIds,
   redactWhatsAppMessage,
   deleteWhatsAppChat,
   fetchWhatsAppMedia,
   getWhatsAppUnreadSummary,
   getWhatsAppUnreadSignal: getWhatsAppUnreadSummary,
+  waitForWhatsAppActivity,
   sendBridgeCommand: sendBridgeTextCommand,
   readWhatsAppBridgeSnapshot,
   purgeWhatsAppBridgeLogin,

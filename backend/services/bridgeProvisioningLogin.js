@@ -392,6 +392,10 @@ function stopLogin(network, mxid) {
   }
 }
 
+function clearBridgeAccountState(network, mxid) {
+  accountStateCache.delete(runnerKey(network, mxid));
+}
+
 // ---- Authoritative bridge account state (the Beeper source of truth) ----
 // getSignalStatus / getWhatsAppStatus historically inferred "connected" from a
 // local bridge DB copy (stale SQLite for Signal once the bridge moved to
@@ -458,9 +462,65 @@ async function getBridgeAccountState(network, mxid) {
   return value;
 }
 
+async function logoutAllLogins(network, mxid) {
+  const m = String(mxid || "").trim();
+  if (!m) {
+    return { ok: false, reason: "no_mxid", loggedOut: 0, failed: 0 };
+  }
+
+  stopLogin(network, m);
+  clearBridgeAccountState(network, m);
+
+  const client = provisionClient(network, m);
+  let logins = [];
+  try {
+    const r = await client.get("/whoami", { timeout: WHOAMI_TIMEOUT_MS });
+    if (r.status !== 200 || !Array.isArray(r.data?.logins)) {
+      return {
+        ok: false,
+        reason: r.data?.error || r.data?.errcode || `whoami_${r.status}`,
+        loggedOut: 0,
+        failed: 0,
+      };
+    }
+    logins = r.data.logins;
+  } catch (err) {
+    return {
+      ok: false,
+      reason: err?.message || "whoami_failed",
+      loggedOut: 0,
+      failed: 0,
+    };
+  }
+
+  let loggedOut = 0;
+  let failed = 0;
+  for (const login of logins) {
+    const id = String(login?.id || "").trim();
+    if (!id) continue;
+    try {
+      const r = await client.post(`/logout/${encodeURIComponent(id)}`, "", {
+        timeout: WHOAMI_TIMEOUT_MS,
+      });
+      if (r.status >= 200 && r.status < 300) {
+        loggedOut += 1;
+      } else {
+        failed += 1;
+      }
+    } catch {
+      failed += 1;
+    }
+  }
+
+  clearBridgeAccountState(network, m);
+  return { ok: failed === 0, loggedOut, failed };
+}
+
 module.exports = {
   startLogin,
   getLoginState,
   stopLogin,
   getBridgeAccountState,
+  logoutAllLogins,
+  clearBridgeAccountState,
 };

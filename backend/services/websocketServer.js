@@ -25,6 +25,8 @@ const lastWhatsAppCount = new Map();
 const lastWhatsAppMsgIds = new Map();
 const lastCalendarEventIds = new Map();
 const telegramListeners = new Map();
+const whatsappListeners = new Map();
+const signalListeners = new Map();
 
 function toIsoTimestamp(value) {
   if (!value) return null;
@@ -74,6 +76,12 @@ function init(httpServer) {
     // Start Telegram real-time listener
     startTelegramListener(userId);
 
+    // Start WhatsApp real-time listener (Matrix /sync long-poll)
+    startWhatsAppListener(userId);
+
+    // Start Signal real-time listener (Matrix /sync long-poll)
+    startSignalListener(userId);
+
     // Poll every 15s
     if (!pollers.has(userId)) {
       const interval = setInterval(() => pollUser(userId, false), 15_000);
@@ -94,6 +102,10 @@ function init(httpServer) {
         connections.delete(userId);
         clearInterval(pollers.get(userId));
         pollers.delete(userId);
+        const waListener = whatsappListeners.get(userId);
+        if (waListener) waListener.stop = true;
+        const sigListener = signalListeners.get(userId);
+        if (sigListener) sigListener.stop = true;
         console.log(`🔌 WS disconnected: ${userId}`);
       }
     });
@@ -793,6 +805,194 @@ async function startTelegramListener(userId) {
     }
     console.warn(`[Telegram] Listener failed for ${userId}:`, err.message);
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WHATSAPP REAL-TIME LISTENER (Matrix /sync long-poll)
+//
+// WhatsApp is bridged through Matrix and has no push client like Telegram's
+// MTProto. To make new messages appear instantly (on the Workspace Briefing and
+// notification badges) instead of waiting up to 15s for the next poll, we hold
+// open a Matrix `/sync` long-poll. The moment the bridge delivers a new incoming
+// message (or a new portal-room invite), we trigger an immediate signal refresh
+// — which runs the normal poll path and broadcasts a notification_update. The
+// frontend already reacts to that by reloading the briefing feed.
+//
+// This is additive and self-healing: it backs off on errors, and stops cleanly
+// when the user's last tab disconnects (the ws close handler sets listener.stop).
+// ─────────────────────────────────────────────────────────────────────────────
+async function startWhatsAppListener(userId) {
+  if (whatsappListeners.has(userId)) return;
+
+  const listener = { status: "starting", stop: false };
+  whatsappListeners.set(userId, listener);
+
+  let waitForWhatsAppActivity;
+  let invalidateWhatsAppCache;
+  let getWhatsAppConnectionState;
+  try {
+    ({ waitForWhatsAppActivity, invalidateWhatsAppCache } = require("./whatsappMatrixService"));
+    ({ getWhatsAppConnectionState } = require("./integrationConnectionState"));
+  } catch (err) {
+    whatsappListeners.delete(userId);
+    return;
+  }
+
+  (async () => {
+    let since = "";
+    let backoffMs = 2000;
+    const MAX_BACKOFF_MS = 60000;
+    const LONG_POLL_MS = 25000;
+
+    try {
+      // Only run while the user is connected and WhatsApp is actually linked.
+      while (connections.has(userId) && !listener.stop) {
+        // Gate on connection state so we don't long-poll for users who never
+        // linked WhatsApp (avoids needless /sync churn + auth errors).
+        let connected = false;
+        try {
+          const integration = await Integration.findOne({
+            userId,
+            type: "whatsapp",
+            enabled: true,
+          });
+          connected = getWhatsAppConnectionState(integration).isConnected;
+        } catch {
+          connected = false;
+        }
+
+        if (!connected) {
+          // WhatsApp not linked yet — check again in a while without hammering.
+          await sleep(30000);
+          continue;
+        }
+
+        listener.status = "active";
+
+        try {
+          const { nextBatch, hasNewActivity } = await waitForWhatsAppActivity(
+            userId,
+            { since, timeoutMs: LONG_POLL_MS }
+          );
+          since = nextBatch || since;
+          backoffMs = 2000; // reset backoff on success
+
+          if (hasNewActivity && connections.has(userId) && !listener.stop) {
+            // Drop the short-lived /sync cache so the triggered poll reads the
+            // brand-new message immediately instead of stale cached rooms.
+            try {
+              if (typeof invalidateWhatsAppCache === "function") {
+                invalidateWhatsAppCache(userId);
+              }
+            } catch {}
+            // Mirror the Gmail-webhook pattern: trigger an immediate poll which
+            // diffs + broadcasts notification_update for whatsapp.
+            await refreshUserSignals(userId).catch(() => {});
+          }
+        } catch (err) {
+          // Network hiccup / homeserver restart / token refresh — back off and
+          // retry. Reset `since` only on auth errors so we re-prime the token.
+          await sleep(backoffMs);
+          backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
+        }
+      }
+    } finally {
+      if (whatsappListeners.get(userId) === listener) {
+        whatsappListeners.delete(userId);
+      }
+    }
+  })();
+
+  console.log(`✅ WhatsApp real-time listener started for ${userId}`);
+}
+
+async function startSignalListener(userId) {
+  if (signalListeners.has(userId)) return;
+
+  const listener = { status: "starting", stop: false };
+  signalListeners.set(userId, listener);
+
+  let waitForSignalActivity;
+  let invalidateSignalCache;
+  let getSignalConnectionState;
+  try {
+    ({ waitForSignalActivity, invalidateSignalCache } = require("./signalMatrixService"));
+    ({ getSignalConnectionState } = require("./integrationConnectionState"));
+  } catch (err) {
+    signalListeners.delete(userId);
+    return;
+  }
+
+  (async () => {
+    let since = "";
+    let backoffMs = 2000;
+    const MAX_BACKOFF_MS = 60000;
+    const LONG_POLL_MS = 25000;
+
+    try {
+      // Only run while the user is connected and Signal is actually linked.
+      while (connections.has(userId) && !listener.stop) {
+        // Gate on connection state so we don't long-poll for users who never
+        // linked Signal (avoids needless /sync churn + auth errors).
+        let connected = false;
+        try {
+          const integration = await Integration.findOne({
+            userId,
+            type: "signal",
+            enabled: true,
+          });
+          connected = getSignalConnectionState(integration).isConnected;
+        } catch {
+          connected = false;
+        }
+
+        if (!connected) {
+          // Signal not linked yet — check again in a while without hammering.
+          await sleep(30000);
+          continue;
+        }
+
+        listener.status = "active";
+
+        try {
+          const { nextBatch, hasNewActivity } = await waitForSignalActivity(
+            userId,
+            { since, timeoutMs: LONG_POLL_MS }
+          );
+          since = nextBatch || since;
+          backoffMs = 2000; // reset backoff on success
+
+          if (hasNewActivity && connections.has(userId) && !listener.stop) {
+            // Drop the short-lived /sync cache so the triggered poll reads the
+            // brand-new message immediately instead of stale cached rooms.
+            try {
+              if (typeof invalidateSignalCache === "function") {
+                invalidateSignalCache(userId);
+              }
+            } catch {}
+            // Mirror the WhatsApp listener: trigger an immediate poll which
+            // diffs + broadcasts notification_update for signal.
+            await refreshUserSignals(userId).catch(() => {});
+          }
+        } catch (err) {
+          // Network hiccup / homeserver restart / token refresh — back off and
+          // retry.
+          await sleep(backoffMs);
+          backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
+        }
+      }
+    } finally {
+      if (signalListeners.get(userId) === listener) {
+        signalListeners.delete(userId);
+      }
+    }
+  })();
+
+  console.log(`✅ Signal real-time listener started for ${userId}`);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

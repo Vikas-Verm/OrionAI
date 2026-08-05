@@ -119,6 +119,7 @@ const STATIC_TOOL_REGISTRY = {
   slack_get_unread: { icon: "🔔", label: "Slack unread" },
   slack_list_channels: { icon: "📋", label: "List Slack channels" },
   whatsapp_send_message: { icon: "💬", label: "Send WhatsApp" },
+  whatsapp_reply_message: { icon: "↩️", label: "Reply on WhatsApp" },
   whatsapp_get_messages: { icon: "💬", label: "Read WhatsApp" },
   whatsapp_get_unread: { icon: "🔔", label: "WhatsApp unread" },
   whatsapp_list_chats: { icon: "💬", label: "WhatsApp chats" },
@@ -196,7 +197,7 @@ async function preflightMessagingSend(tool, params = {}, ctx) {
     return resolveSlackConversation(params, ctx);
   }
 
-  if (tool === "whatsapp_send_message") {
+  if (tool === "whatsapp_send_message" || tool === "whatsapp_reply_message") {
     return resolveWhatsAppTarget(params, ctx);
   }
 
@@ -297,6 +298,18 @@ async function buildClassifierPrompt(userMessage) {
     ...slackLines,
     "NOTE: For slack_send_message, 'channel' can be a person name (DM), a channel name like 'general', or a channel ID.",
     "NOTE: When sending to a person by name (e.g. 'Adi', 'Rahul'), set channel to their first name in lowercase.",
+    "",
+
+    // ── TYPE W: WhatsApp ───────────────────────────────────────────────────
+    "TYPE W — WHATSAPP: user mentions whatsapp.",
+    "- show whatsapp messages from X / what did X say on whatsapp → whatsapp_get_messages {contact:'X', limit:20}",
+    "- list whatsapp chats → whatsapp_list_chats",
+    "- send whatsapp message to X → whatsapp_send_message {contact:'X', message:'...'}",
+    "- show unread whatsapp → whatsapp_get_unread {limit:10}",
+    "- reply to X on whatsapp → whatsapp_reply_message {contact:'X', message:'...'}",
+    "- reply to X on whatsapp for their recent message → ALWAYS: [{whatsapp_get_messages, contact:'X', limit:10}, {whatsapp_reply_message, contact:'X', message:'<contextual reply to {{lastSummary}}>'}]",
+    "IMPORTANT: The ONLY valid WhatsApp tools are whatsapp_get_messages, whatsapp_list_chats, whatsapp_send_message, whatsapp_get_unread, whatsapp_reply_message. NEVER invent other whatsapp_* tool names.",
+    'Format: {"isAgentTask":true,"confidence":0.93,"intent":"...","steps":[{"tool":"whatsapp_get_messages","params":{"contact":"Vikas","limit":20}}]}',
     "",
     // ── TYPE G: Google Docs ──────────────────────────────────────────
     "TYPE G — GOOGLE DOCS: user mentions google docs, documents, doc, create doc, share doc, edit doc.",
@@ -1060,6 +1073,106 @@ async function toolDraftMessage(params) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Contextual reply composer
+// ─────────────────────────────────────────────────────────────────────────────
+// Messaging/reply tools whose `message` can be a contextual reply to a previous
+// "get_messages" step. We ONLY rewrite the message when the planner produced an
+// empty / template / generic placeholder (e.g. "Replying to your recent
+// message"). Any concrete message the planner wrote is left untouched, so other
+// skills/flows are unaffected.
+const CONTEXTUAL_REPLY_TOOLS = new Set([
+  "whatsapp_reply_message",
+  "whatsapp_send_message",
+  "telegram_reply_message",
+  "telegram_send_message",
+  "slack_send_message",
+  "signal_send_message",
+  "signal_reply_message",
+]);
+
+// Detects meta/placeholder text that says "I'm replying" without real content.
+function isPlaceholderReplyText(value) {
+  const text = String(value || "").trim();
+  if (!text) return true;
+  if (/\{\{\w+\}\}/.test(text)) return true; // unresolved template
+  const lowered = text.toLowerCase();
+  // e.g. "replying to your recent message", "here is my reply", "responding to
+  // their message", "sending a reply to vikas's message"
+  if (
+    /^(re:?\s*)?(replying|reply|responding|respond|sending (?:a |my )?reply|here(?:'s| is)?(?: my| the| your)? reply)\b/.test(
+      lowered
+    ) &&
+    /\bmessage|reply\b/.test(lowered)
+  ) {
+    return true;
+  }
+  if (/^(replying|responding) to\b/.test(lowered)) return true;
+  return false;
+}
+
+// Pull the most recent inbound message text from a previous get_messages step.
+function extractRecentInboundContext(results = []) {
+  for (let i = results.length - 1; i >= 0; i--) {
+    const entry = results[i];
+    if (entry?.status !== "done") continue;
+    const msgs = entry.result?.messages;
+    if (!Array.isArray(msgs) || !msgs.length) continue;
+    const inbound = msgs.filter(
+      (m) => m && String(m.from || "").toLowerCase() !== "you" && (m.text || m.message)
+    );
+    const pool = inbound.length ? inbound : msgs;
+    const latest = pool[pool.length - 1];
+    const contactName =
+      latest?.senderName ||
+      entry.result?.chatName ||
+      latest?.from ||
+      "";
+    const recent = pool
+      .slice(-5)
+      .map((m) => {
+        const who = String(m.from || "").toLowerCase() === "you" ? "Me" : (m.senderName || m.from || "Them");
+        return `${who}: ${m.text || m.message || ""}`.trim();
+      })
+      .filter(Boolean)
+      .join("\n");
+    return {
+      contactName,
+      latestText: latest?.text || latest?.message || "",
+      transcript: recent,
+    };
+  }
+  return null;
+}
+
+// If the resolved messaging step has a placeholder reply, compose a real,
+// contextual reply from the prior conversation. Returns the new message text,
+// or null when no rewrite is needed/possible.
+async function composeContextualReply(tool, params, results) {
+  if (!CONTEXTUAL_REPLY_TOOLS.has(tool)) return null;
+  if (!isPlaceholderReplyText(params?.message)) return null;
+
+  const convo = extractRecentInboundContext(results);
+  if (!convo || !convo.latestText) return null;
+
+  const prompt =
+    `You are replying on a personal messaging app on behalf of the user.\n` +
+    `Recent conversation${convo.contactName ? ` with ${convo.contactName}` : ""}:\n` +
+    `${convo.transcript || convo.latestText}\n\n` +
+    `Write a short, natural, friendly reply to their most recent message ` +
+    `("${convo.latestText}"). Reply as the user (first person). ` +
+    `Return ONLY the reply text — no quotes, no preamble, no signature.`;
+
+  try {
+    const reply = await chatCompleteNoSystem(prompt, 200, 0.5);
+    const clean = String(reply || "").trim().replace(/^["']|["']$/g, "");
+    return clean || null;
+  } catch (err) {
+    console.error("composeContextualReply failed:", err.message);
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // RUN AGENT
 // ─────────────────────────────────────────────────────────────────────────────
 async function runAgent(steps, db, onProgress, userId, sessionId = "default") {
@@ -1071,6 +1184,19 @@ async function runAgent(steps, db, onProgress, userId, sessionId = "default") {
   for (const step of steps) {
     const runtimeStep = resolveRuntimeStep(step, results, ctx);
     const { tool, params } = runtimeStep;
+
+    // If this is a reply/messaging step whose text is still a placeholder
+    // (empty / unresolved {{template}} / generic "Replying to your message"),
+    // compose a real contextual reply from the previous get_messages step.
+    // Concrete planner-written messages are left untouched.
+    try {
+      const contextualReply = await composeContextualReply(tool, params, results);
+      if (contextualReply) {
+        params.message = contextualReply;
+      }
+    } catch (err) {
+      console.error("contextual reply step failed:", err.message);
+    }
     // Resolve stepUI once per step — used in progress events
     const stepUI = presentStep(tool, results.length, TOOL_REGISTRY);
 
@@ -1093,6 +1219,7 @@ async function runAgent(steps, db, onProgress, userId, sessionId = "default") {
           "telegram_send_message",
           "slack_send_message",
           "whatsapp_send_message",
+          "whatsapp_reply_message",
         ].includes(tool)
       ) {
         results.push({
@@ -1529,6 +1656,15 @@ async function runAgent(steps, db, onProgress, userId, sessionId = "default") {
           result = await withRetry(
             () => toolWhatsApp({ action: "send", ...params }, ctx),
             { label: "whatsapp_send_message" }
+          );
+          break;
+
+        // Replying to a WhatsApp contact is functionally "send to that contact".
+        // Mirrors telegram_reply_message so the planner can use a reply verb.
+        case "whatsapp_reply_message":
+          result = await withRetry(
+            () => toolWhatsApp({ action: "send", ...params }, ctx),
+            { label: "whatsapp_reply_message" }
           );
           break;
 

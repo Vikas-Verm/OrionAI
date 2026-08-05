@@ -134,8 +134,15 @@
 
       <div v-else-if="!sidebarCollapsed && !status.connected" class="sg-empty">
         <div class="sg-empty-icon">🛡️</div>
-        <strong>Signal is not connected</strong>
-        <p>{{ status.lastError || status.error || 'Connect Signal in Integrations to load conversations.' }}</p>
+        <strong>{{ status.loginState === 'pending_qr' ? 'Finish linking Signal' : 'Signal is not connected' }}</strong>
+        <div v-if="status.loginState === 'pending_qr' && status.qrImageUrl" class="sg-qr">
+          <img :src="status.qrImageUrl" alt="Signal QR code" />
+        </div>
+        <p>
+          {{ status.loginState === 'pending_qr'
+            ? 'Scan this QR from Signal on your phone to link OrionAI.'
+            : status.lastError || status.error || 'Connect Signal in Integrations to load conversations.' }}
+        </p>
         <button class="sg-empty-btn" @click="emit('open-integrations')">Open Integrations</button>
       </div>
 
@@ -186,10 +193,21 @@
     <main class="sg-main">
       <div v-if="!selectedRoom" class="sg-empty sg-empty--main">
         <div class="sg-empty-icon">💬</div>
-        <strong>{{ status.connected ? 'Select a conversation' : 'Signal is waiting for setup' }}</strong>
+        <strong>
+          {{ status.connected
+            ? 'Select a conversation'
+            : status.loginState === 'pending_qr'
+              ? 'Scan the Signal QR'
+              : 'Signal is waiting for setup' }}
+        </strong>
+        <div v-if="!status.connected && status.loginState === 'pending_qr' && status.qrImageUrl" class="sg-qr sg-qr--main">
+          <img :src="status.qrImageUrl" alt="Signal QR code" />
+        </div>
         <p>
           {{ status.connected
             ? 'Choose a chat from the left to open your Signal timeline, upload files, and manage replies.'
+            : status.loginState === 'pending_qr'
+              ? 'Open Signal on your phone, use Linked Devices, and scan this code.'
             : 'Once connected, notifications, urgent WorkspaceBriefing items, and the full Signal workspace will appear here.' }}
         </p>
       </div>
@@ -357,7 +375,7 @@
                             </span>
                           </a>
 
-                          <div v-if="message.text" class="sg-message-text">{{ message.text }}</div>
+                          <div v-if="message.text" class="sg-message-text" v-html="linkifyText(message.text)"></div>
                         </template>
 
                         <div class="sg-message-footer">
@@ -446,6 +464,7 @@
           </aside>
         </div>
 
+        <section class="sg-composer-shell">
         <div v-if="replyTarget || editingMessage || pendingUploads.length || isRecordingVoice" class="sg-compose-top">
           <div v-if="replyTarget" class="sg-compose-banner">
             <span class="sg-compose-banner-label">Replying to {{ replyTarget.senderName }}</span>
@@ -512,6 +531,7 @@
             </svg>
           </button>
         </footer>
+        </section>
       </template>
     </main>
 
@@ -535,6 +555,8 @@ const emit = defineEmits(['close', 'open-integrations'])
 
 const status = ref({
   connected: false,
+  loginState: 'disconnected',
+  qrImageUrl: null,
   roomCount: 0,
   unreadCount: 0,
   profile: null,
@@ -873,6 +895,24 @@ function buildOptimisticMessage({
   }
 }
 
+// Escape HTML, then turn URLs into clickable links. Safe: text is escaped
+// first, so only the anchors we build are ever rendered as HTML.
+function linkifyText(value = '') {
+  const raw = String(value || '')
+  if (!raw) return ''
+  const escaped = raw
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+  const urlRe = /((?:https?:\/\/|www\.)[^\s<]+[^\s<.,;:!?)\]}'"])/gi
+  return escaped.replace(urlRe, (match) => {
+    const href = match.startsWith('http') ? match : `https://${match}`
+    return `<a href="${href}" target="_blank" rel="noopener noreferrer" class="sg-link">${match}</a>`
+  })
+}
+
 function applyOptimisticRoomState(message) {
   if (!message?.roomId) return
   const roomId = String(message.roomId)
@@ -915,7 +955,11 @@ function appendOptimisticMessages(nextMessages = []) {
 
 async function loadStatus() {
   const { data } = await api.get('/api/signal/status')
-  status.value = data || { connected: false }
+  status.value = data || {
+    connected: false,
+    loginState: 'disconnected',
+    qrImageUrl: null,
+  }
   if (!status.value.connected) {
     stopPolling()
     showProfilePanel.value = false
@@ -2015,6 +2059,29 @@ onUnmounted(() => {
   display: inline-block;
 }
 
+.sg-qr {
+  width: 178px;
+  height: 178px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  background: #fff;
+  border-radius: var(--radius-md);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.28);
+}
+
+.sg-qr--main {
+  width: 220px;
+  height: 220px;
+}
+
+.sg-qr img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
 @keyframes sg-spin {
   to { transform: rotate(360deg); }
 }
@@ -2393,6 +2460,13 @@ onUnmounted(() => {
   line-height: 1.5;
 }
 
+.sg-message-text :deep(.sg-link),
+.sg-link {
+  color: #53bdeb;
+  text-decoration: underline;
+  word-break: break-all;
+}
+
 .sg-media-card {
   margin-bottom: 10px;
   overflow: hidden;
@@ -2555,8 +2629,18 @@ onUnmounted(() => {
   overflow-wrap: anywhere;
 }
 
+/* Composer shell — mirrors WhatsApp chat composer (.wa-composer-shell):
+   an elevated bar with a top border + backdrop so the input area reads as a
+   distinct surface instead of floating directly on the thread. */
+.sg-composer-shell {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(7, 12, 22, 0.78);
+  padding: 12px 18px 18px;
+  flex-shrink: 0;
+}
+
 .sg-compose-top {
-  margin: 0 18px 12px;
+  margin: 0 0 12px;
   padding: 12px;
   display: flex;
   flex-direction: column;
@@ -2622,15 +2706,21 @@ onUnmounted(() => {
   font-size: 11px;
 }
 
+/* Match WhatsApp's .wa-compose grid: icon buttons + flexible input + send,
+   all bottom-aligned with a consistent 10px gutter. */
 .sg-compose {
-  padding: 0 18px 18px;
+  padding: 0;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
 }
 
 .sg-compose-btn,
 .sg-compose-send,
 .sg-console-send {
-  width: 44px;
-  height: 44px;
+  width: 42px;
+  height: 42px;
   border-radius: var(--radius-md);
   display: inline-flex;
   align-items: center;
@@ -2656,6 +2746,8 @@ onUnmounted(() => {
   background: var(--accent);
   border-color: rgba(79, 140, 255, 0.22);
   color: white;
+  /* Circular send button, mirroring WhatsApp Web's round send affordance. */
+  border-radius: 50%;
 }
 
 .sg-compose-btn:disabled,

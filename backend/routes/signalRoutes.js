@@ -5,6 +5,7 @@ const router = express.Router();
 const multer = require("multer");
 const { authenticate } = require("../middleware/auth");
 const Integration = require("../models/Integration");
+const provisioningLogin = require("../services/bridgeProvisioningLogin");
 const {
   connectSignalIntegration,
   getSignalStatus,
@@ -73,6 +74,21 @@ router.post("/disconnect", async (req, res) => {
       // touch the bridge's DB directly.
       const integration = await Integration.findOne({ userId, type: "signal" });
       const mxid = integration?.matrix?.mxid || integration?.signal?.mxid || "";
+      if (mxid) {
+        const logoutResult = await provisioningLogin.logoutAllLogins(
+          "signal",
+          mxid
+        );
+        console.log(
+          "[Signal disconnect] Provisioning logout: loggedOut=%d failed=%d reason=%s",
+          logoutResult.loggedOut,
+          logoutResult.failed,
+          logoutResult.reason || ""
+        );
+        if (logoutResult.loggedOut) {
+          await new Promise((r) => setTimeout(r, 1500));
+        }
+      }
       const bridgeLogin = mxid ? getSignalBridgeLogin({ mxid }) : null;
       let loginId = bridgeLogin?.loginId || "";
       // SQLite snapshot empty? Recover loginId from bridge bot messages.

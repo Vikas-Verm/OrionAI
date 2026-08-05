@@ -207,6 +207,26 @@ test("buildSignalProfileFromBridgeLogin prefers the real Signal profile", () => 
   });
 });
 
+test("hasDeadSignalProvisioningLogin detects live logged-out bridge state", () => {
+  assert.equal(
+    __test.hasDeadSignalProvisioningLogin({
+      logins: [
+        {
+          state_event: "BAD_CREDENTIALS",
+          state: { message: "403 opening websocket, we are logged out" },
+        },
+      ],
+    }),
+    true
+  );
+  assert.equal(
+    __test.hasDeadSignalProvisioningLogin({
+      logins: [{ state: { state_event: "CONNECTED" } }],
+    }),
+    false
+  );
+});
+
 test("buildSignalContactRoom creates a stable placeholder room for synced contacts", () => {
   const room = __test.buildSignalContactRoom({
     identifier: "+917870470216",

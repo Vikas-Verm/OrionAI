@@ -5,6 +5,7 @@ const multer = require("multer");
 const router = express.Router();
 const { authenticate } = require("../middleware/auth");
 const Integration = require("../models/Integration");
+const provisioningLogin = require("../services/bridgeProvisioningLogin");
 const {
   connectWhatsAppIntegration,
   getWhatsAppStatus,
@@ -14,6 +15,7 @@ const {
   sendWhatsAppMessage,
   uploadWhatsAppMedia,
   markWhatsAppRoomAsRead,
+  setWhatsAppRoomMuted,
   redactWhatsAppMessage,
   deleteWhatsAppChat,
   fetchWhatsAppMedia,
@@ -82,6 +84,21 @@ router.post("/disconnect", async (req, res) => {
         type: "whatsapp",
       });
       const mxid = integration?.matrix?.mxid || "";
+      if (mxid) {
+        const logoutResult = await provisioningLogin.logoutAllLogins(
+          "whatsapp",
+          mxid
+        );
+        console.log(
+          "[WhatsApp disconnect] Provisioning logout: loggedOut=%d failed=%d reason=%s",
+          logoutResult.loggedOut,
+          logoutResult.failed,
+          logoutResult.reason || ""
+        );
+        if (logoutResult.loggedOut) {
+          await new Promise((r) => setTimeout(r, 1500));
+        }
+      }
       const bridgeSnapshot = mxid ? readWhatsAppBridgeSnapshot(mxid) : null;
       let loginId = bridgeSnapshot?.loginId || "";
       // SQLite snapshot is empty? Try to recover the loginId from the bridge
@@ -374,6 +391,22 @@ router.post("/rooms/:roomId/read", async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error("WhatsApp read marker error:", err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.post("/rooms/:roomId/mute", async (req, res) => {
+  try {
+    const muted =
+      req.body?.muted === undefined ? true : Boolean(req.body.muted);
+    const result = await setWhatsAppRoomMuted(
+      req.user?.username,
+      req.params.roomId,
+      muted
+    );
+    res.json(result);
+  } catch (err) {
+    console.error("WhatsApp mute error:", err.message);
     res.status(400).json({ error: err.message });
   }
 });

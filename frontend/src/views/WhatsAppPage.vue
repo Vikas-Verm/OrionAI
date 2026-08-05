@@ -478,7 +478,7 @@
                             </div>
                           </div>
 
-                          <p v-if="message.text" class="wa-message-text">{{ message.text }}</p>
+                          <p v-if="message.text" class="wa-message-text" v-html="linkifyText(message.text)"></p>
 
                           <div v-if="message.reactions?.length" class="wa-reaction-row">
                             <span v-for="reaction in message.reactions" :key="`${message.id}-${reaction.key}`" class="wa-reaction-pill">
@@ -569,6 +569,9 @@
 
             <div class="wa-info-actions">
               <button class="wa-chip-btn" @click="markCurrentRoomRead()">Mark read</button>
+              <button class="wa-chip-btn" @click="toggleMuteCurrentRoom">
+                {{ selectedChat.isMuted ? 'Unmute' : 'Mute' }}
+              </button>
               <button class="wa-chip-btn" @click="refreshSelectedConversation">Refresh chat</button>
             </div>
           </aside>
@@ -921,7 +924,33 @@ const showInfoPanel = ref(false)
 const showProfilePanel = ref(false)
 const sidebarCollapsed = ref(false)
 const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1280)
-const localReadCutoffs = ref({})
+// Per-room "read up to" timestamps. Persisted to localStorage so that a chat
+// the user has read in OrionAI stays read across page reloads (previously this
+// was in-memory only, so every reload re-surfaced phantom unread badges — the
+// core of bug #3). Keyed by Matrix room id.
+const READ_CUTOFF_STORAGE_KEY = 'orion.whatsapp.readCutoffs'
+function loadPersistedReadCutoffs() {
+  if (typeof window === 'undefined' || !window.localStorage) return {}
+  try {
+    const raw = window.localStorage.getItem(READ_CUTOFF_STORAGE_KEY)
+    const parsed = raw ? JSON.parse(raw) : {}
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+const localReadCutoffs = ref(loadPersistedReadCutoffs())
+function persistReadCutoffs() {
+  if (typeof window === 'undefined' || !window.localStorage) return
+  try {
+    window.localStorage.setItem(
+      READ_CUTOFF_STORAGE_KEY,
+      JSON.stringify(localReadCutoffs.value || {})
+    )
+  } catch {
+    /* storage full / disabled — non-fatal, falls back to in-memory */
+  }
+}
 
 const fileInputEl = ref(null)
 const messagesEl = ref(null)
@@ -1067,6 +1096,24 @@ const visibleMessages = computed(() => {
 
 function normalizeDigits(value = '') {
   return String(value || '').replace(/\D/g, '')
+}
+
+// Escape HTML, then turn URLs into clickable links. Safe: text is escaped
+// first, so only the anchors we build are ever rendered as HTML.
+function linkifyText(value = '') {
+  const raw = String(value || '')
+  if (!raw) return ''
+  const escaped = raw
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+  const urlRe = /((?:https?:\/\/|www\.)[^\s<]+[^\s<.,;:!?)\]}'"])/gi
+  return escaped.replace(urlRe, (match) => {
+    const href = match.startsWith('http') ? match : `https://${match}`
+    return `<a href="${href}" target="_blank" rel="noopener noreferrer" class="wa-link">${match}</a>`
+  })
 }
 
 function normalizeTimestamp(value) {
@@ -1271,6 +1318,7 @@ function setLocalReadCutoff(roomId = '', timestamp = 0) {
     ...localReadCutoffs.value,
     [key]: normalizeTimestamp(timestamp || Date.now()),
   }
+  persistReadCutoffs()
 }
 
 function clearLocalReadCutoff(roomId = '') {
@@ -1279,6 +1327,7 @@ function clearLocalReadCutoff(roomId = '') {
   const next = { ...localReadCutoffs.value }
   delete next[key]
   localReadCutoffs.value = next
+  persistReadCutoffs()
 }
 
 function getLocalReadCutoff(roomId = '') {
@@ -1529,6 +1578,36 @@ async function markCurrentRoomRead(roomId = selectedChat.value?.roomId || '', ev
     refreshWhatsAppActions({ silent: true }).catch(() => {})
   } catch (error) {
     console.debug('Failed to mark WhatsApp room as read:', error?.message || error)
+  }
+}
+
+async function toggleMuteCurrentRoom() {
+  const targetRoomId = currentRoomId(selectedChat.value)
+  if (!targetRoomId) return
+  const nextMuted = !selectedChat.value?.isMuted
+
+  // Optimistic update
+  if (selectedChat.value) {
+    selectedChat.value = { ...selectedChat.value, isMuted: nextMuted }
+  }
+  chats.value = chats.value.map((chat) =>
+    currentRoomId(chat) === targetRoomId ? { ...chat, isMuted: nextMuted } : chat
+  )
+
+  try {
+    await api.post(`/api/whatsapp/rooms/${encodeURIComponent(targetRoomId)}/mute`, {
+      muted: nextMuted,
+    })
+    refreshWhatsAppActions({ silent: true }).catch(() => {})
+  } catch (error) {
+    console.debug('Failed to toggle WhatsApp room mute:', error?.message || error)
+    // Revert on failure
+    if (selectedChat.value && currentRoomId(selectedChat.value) === targetRoomId) {
+      selectedChat.value = { ...selectedChat.value, isMuted: !nextMuted }
+    }
+    chats.value = chats.value.map((chat) =>
+      currentRoomId(chat) === targetRoomId ? { ...chat, isMuted: !nextMuted } : chat
+    )
   }
 }
 
@@ -3206,9 +3285,11 @@ onUnmounted(() => {
 }
 
 .wa-bubble {
-  padding: 10px 12px 8px;
-  border-radius: var(--radius-md);
-  border-bottom-left-radius: 10px;
+  padding: 7px 10px 7px;
+  /* Authentic WhatsApp bubble tail: incoming messages square the top-left
+     corner (the corner nearest the avatar) while the rest stay rounded. */
+  border-radius: 8px;
+  border-top-left-radius: 0;
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
   color: var(--text-primary);
@@ -3230,8 +3311,9 @@ onUnmounted(() => {
 .wa-message-row.from-me .wa-bubble {
   background: rgba(69, 211, 152, 0.2);
   border-color: rgba(95, 255, 170, 0.18);
-  border-bottom-right-radius: 10px;
-  border-bottom-left-radius: 24px;
+  /* Outgoing bubbles mirror the tail to the top-right corner. */
+  border-top-left-radius: 8px;
+  border-top-right-radius: 0;
 }
 
 .wa-bubble.deleted {
@@ -3361,6 +3443,13 @@ onUnmounted(() => {
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.wa-message-text :deep(.wa-link),
+.wa-link {
+  color: #53bdeb;
+  text-decoration: underline;
+  word-break: break-all;
 }
 
 .wa-reaction-row {
@@ -3843,6 +3932,8 @@ onUnmounted(() => {
   background: rgba(69, 211, 152, 0.9);
   color: #04210f;
   border-color: rgba(95, 255, 170, 0.3);
+  /* Circular send button, matching WhatsApp Web's round mic/send affordance. */
+  border-radius: 50%;
 }
 
 .wa-primary-btn {
