@@ -11,16 +11,34 @@ const StudyMaterial = require("../models/StudyMaterial");
 const PracticeQuestion = require("../models/PracticeQuestion");
 const Flashcard = require("../models/Flashcard");
 const TopicNote = require("../models/TopicNote");
+const StudyMemory = require("../models/StudyMemory");
+const StudyActivity = require("../models/StudyActivity");
+const PreTopicReview = require("../models/PreTopicReview");
 const {
   generateTodaysPlan,
   scheduleNextRevisionForTopic,
   getOverviewForUser,
   computeGoalProgress,
+  getSessionPlannedItems,
+  markSessionTopicStarted,
+  markSessionTopicCompleted,
+  syncLegacySessionFields,
   startOfDay,
   endOfDay,
   addDays,
 } = require("../services/studyPlanService");
 const studyAIService = require("../services/studyAIService");
+const {
+  recordStudyActivity,
+  getConsistency,
+  safeTimezone,
+} = require("../services/studyActivityService");
+const {
+  createUploadedMaterial,
+  retryMaterialProcessing,
+  materialPublic,
+} = require("../services/studyMaterialService");
+const preTopicReviewService = require("../services/preTopicReviewService");
 
 function getUserId(req) {
   return req.user?.username || req.user?.userId || "";
@@ -28,6 +46,20 @@ function getUserId(req) {
 
 function cleanString(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function cleanTags(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((tag) => cleanString(tag).slice(0, 40))
+    .filter(Boolean)
+    .slice(0, 20);
+}
+
+function getTimezone(req) {
+  return safeTimezone(
+    req.body?.timezone || req.query?.timezone || req.headers["x-timezone"]
+  );
 }
 
 function asObjectId(value) {
@@ -83,7 +115,7 @@ function buildGoalPayload(body = {}, { allowMissingTitle = false } = {}) {
     payload.preferredStudyTime = cleanString(body.preferredStudyTime);
   }
   if ("preferredLearningStyle" in body) {
-    const style = cleanString(body.preferredLearningStyle);
+    const style = cleanString(body.preferredLearningStyle).replace(/[\s-]+/g, "_");
     if (style && !StudyGoal.LEARNING_STYLE_VALUES.includes(style)) {
       return {
         error: `Invalid preferredLearningStyle. Allowed: ${StudyGoal.LEARNING_STYLE_VALUES.join(", ")}`,
@@ -110,6 +142,7 @@ function buildTopicPayload(body = {}, { allowMissingTitle = false } = {}) {
   }
   if ("subject" in body) payload.subject = cleanString(body.subject);
   if ("category" in body) payload.category = cleanString(body.category);
+  if ("description" in body) payload.description = cleanString(body.description).slice(0, 2000);
   if ("difficulty" in body) {
     const difficulty = cleanString(body.difficulty);
     if (difficulty && !StudyTopic.DIFFICULTY_VALUES.includes(difficulty)) {
@@ -143,6 +176,7 @@ function buildTopicPayload(body = {}, { allowMissingTitle = false } = {}) {
     const order = Number(body.order);
     if (Number.isFinite(order)) payload.order = order;
   }
+  if ("tags" in body) payload.tags = cleanTags(body.tags);
   return { payload };
 }
 
@@ -194,6 +228,8 @@ async function listGoals(req, res) {
     const filter = { userId };
     if (status && StudyGoal.STATUS_VALUES.includes(status)) {
       filter.status = status;
+    } else if (req.query?.includeArchived !== "true") {
+      filter.status = { $ne: "archived" };
     }
     const goals = await StudyGoal.find(filter).sort({ updatedAt: -1 });
     const goalIds = goals.map((g) => g._id);
@@ -222,6 +258,13 @@ async function listGoals(req, res) {
     const dueByGoal = new Map(
       dueRevisions.map((entry) => [String(entry._id), entry.count])
     );
+    const progressEntries = await Promise.all(
+      goals.map(async (goal) => [
+        String(goal._id),
+        await computeGoalProgress({ userId, goalId: goal._id }),
+      ])
+    );
+    const progressByGoal = new Map(progressEntries);
 
     res.json({
       goals: goals.map((goal) => {
@@ -229,9 +272,11 @@ async function listGoals(req, res) {
         const total = goalTopics.length;
         const completed = goalTopics.filter((t) => t.status === "completed")
           .length;
+        const progressStats = progressByGoal.get(String(goal._id)) || {};
         return {
           ...goal.toObject(),
           stats: {
+            ...progressStats,
             totalTopics: total,
             completedTopics: completed,
             completionPercent:
@@ -247,11 +292,27 @@ async function listGoals(req, res) {
   }
 }
 
+async function getGoal(req, res) {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const goalId = asObjectId(req.params.goalId || req.params.id);
+    if (!goalId) return res.status(400).json({ error: "Invalid goal id" });
+    const goal = await StudyGoal.findOne({ _id: goalId, userId });
+    if (!goal) return res.status(404).json({ error: "Goal not found" });
+    const progress = await computeGoalProgress({ userId, goalId });
+    res.json({ goal: { ...goal.toObject(), stats: progress } });
+  } catch (err) {
+    console.error("Get study goal error:", err.message);
+    res.status(500).json({ error: "Could not load study goal" });
+  }
+}
+
 async function updateGoal(req, res) {
   try {
     const userId = getUserId(req);
     if (!userId) return res.status(401).json({ error: "Unauthorized" });
-    const id = asObjectId(req.params.id);
+    const id = asObjectId(req.params.id || req.params.goalId);
     if (!id) return res.status(400).json({ error: "Invalid goal id" });
     const { error, payload } = buildGoalPayload(req.body || {}, {
       allowMissingTitle: true,
@@ -270,12 +331,35 @@ async function updateGoal(req, res) {
   }
 }
 
+async function deleteGoal(req, res) {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const goalId = asObjectId(req.params.goalId || req.params.id);
+    if (!goalId) return res.status(400).json({ error: "Invalid goal id" });
+    const goal = await StudyGoal.findOneAndUpdate(
+      { _id: goalId, userId },
+      { $set: { status: "archived" } },
+      { new: true }
+    );
+    if (!goal) return res.status(404).json({ error: "Goal not found" });
+    await StudyTopic.updateMany(
+      { userId, goalId, status: { $ne: "archived" } },
+      { $set: { status: "archived" } }
+    );
+    res.json({ ok: true, goal });
+  } catch (err) {
+    console.error("Delete study goal error:", err.message);
+    res.status(500).json({ error: "Could not archive study goal" });
+  }
+}
+
 // ── Topics ────────────────────────────────────────────────────────────────
 async function createTopic(req, res) {
   try {
     const userId = getUserId(req);
     if (!userId) return res.status(401).json({ error: "Unauthorized" });
-    const goalId = asObjectId(req.body?.goalId);
+    const goalId = asObjectId(req.body?.goalId || req.params.goalId);
     if (!goalId) return res.status(400).json({ error: "goalId is required" });
     const goal = await StudyGoal.findOne({ _id: goalId, userId });
     if (!goal) return res.status(404).json({ error: "Goal not found" });
@@ -283,6 +367,17 @@ async function createTopic(req, res) {
     const { error, payload } = buildTopicPayload(req.body || {});
     if (error) return res.status(400).json({ error });
     if (!payload.title) return res.status(400).json({ error: "title is required" });
+
+    const existingTopics = await StudyTopic.find({ userId, goalId }).select("title status");
+    const duplicate = existingTopics.find(
+      (topic) =>
+        topic.status !== "archived" &&
+        studyAIService.normalizeTitleKey(topic.title) ===
+          studyAIService.normalizeTitleKey(payload.title)
+    );
+    if (duplicate) {
+      return res.status(409).json({ error: "This topic already exists for this goal." });
+    }
 
     if (!Number.isFinite(payload.order)) {
       const count = await StudyTopic.countDocuments({ userId, goalId });
@@ -307,7 +402,33 @@ async function listTopics(req, res) {
       if (!goalId) return res.status(400).json({ error: "Invalid goalId" });
       filter.goalId = goalId;
     }
-    const topics = await StudyTopic.find(filter).sort({ order: 1, createdAt: 1 });
+    const status = cleanString(req.query?.status);
+    if (status && StudyTopic.STATUS_VALUES.includes(status)) filter.status = status;
+    else if (req.query?.includeArchived !== "true") filter.status = { $ne: "archived" };
+    const difficulty = cleanString(req.query?.difficulty);
+    if (difficulty && StudyTopic.DIFFICULTY_VALUES.includes(difficulty)) {
+      filter.difficulty = difficulty;
+    }
+    const search = cleanString(req.query?.search);
+    if (search) {
+      filter.$or = [
+        { title: { $regex: search, $options: "i" } },
+        { subject: { $regex: search, $options: "i" } },
+        { category: { $regex: search, $options: "i" } },
+        { description: { $regex: search, $options: "i" } },
+        { tags: { $regex: search, $options: "i" } },
+      ];
+    }
+    const sortKey = cleanString(req.query?.sort) || "order";
+    const sort =
+      sortKey === "updated"
+        ? { updatedAt: -1 }
+        : sortKey === "difficulty"
+          ? { difficulty: 1, order: 1 }
+          : sortKey === "status"
+            ? { status: 1, order: 1 }
+            : { order: 1, createdAt: 1 };
+    const topics = await StudyTopic.find(filter).sort(sort);
     res.json({ topics });
   } catch (err) {
     console.error("List study topics error:", err.message);
@@ -354,6 +475,57 @@ async function updateTopic(req, res) {
   }
 }
 
+async function deleteTopic(req, res) {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const topicId = asObjectId(req.params.topicId || req.params.id);
+    if (!topicId) return res.status(400).json({ error: "Invalid topic id" });
+    const topic = await StudyTopic.findOneAndUpdate(
+      { _id: topicId, userId },
+      { $set: { status: "archived" } },
+      { new: true }
+    );
+    if (!topic) return res.status(404).json({ error: "Topic not found" });
+    res.json({ ok: true, topic });
+  } catch (err) {
+    console.error("Delete study topic error:", err.message);
+    res.status(500).json({ error: "Could not archive study topic" });
+  }
+}
+
+async function startTopic(req, res) {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const id = asObjectId(req.params.id);
+    if (!id) return res.status(400).json({ error: "Invalid topic id" });
+    const topic = await StudyTopic.findOne({ _id: id, userId });
+    if (!topic) return res.status(404).json({ error: "Topic not found" });
+
+    if (topic.status === "not_started") {
+      topic.status = "in_progress";
+      await topic.save();
+    }
+
+    const session = await markSessionTopicStarted({
+      userId,
+      goalId: topic.goalId,
+      topicId: topic._id,
+    });
+
+    res.json({
+      topic,
+      session,
+      message:
+        "Topic started. Streak and completed minutes update after real learning work is completed.",
+    });
+  } catch (err) {
+    console.error("Start study topic error:", err.message);
+    res.status(500).json({ error: "Could not start study topic" });
+  }
+}
+
 async function completeTopic(req, res) {
   try {
     const userId = getUserId(req);
@@ -384,33 +556,91 @@ async function completeTopic(req, res) {
     topic.nextRevisionAt = revision?.dueAt || null;
     await topic.save();
 
-    // Mark topic completed in today's session if it was planned.
-    const today = startOfDay();
-    const todayEnd = endOfDay();
-    const session = await StudySession.findOne({
+    const session = await markSessionTopicCompleted({
       userId,
       goalId: topic.goalId,
-      date: { $gte: today, $lte: todayEnd },
+      topicId: topic._id,
+      fallbackMinutes: Number(topic.estimatedMinutes) || 30,
     });
-    if (session && session.plannedTopicIds.map(String).includes(String(topic._id))) {
-      const already = session.completedTopicIds.map(String);
-      if (!already.includes(String(topic._id))) {
-        session.completedTopicIds.push(topic._id);
-        const plannedMinutes = Number(session.minutesPlanned) || 0;
-        const completedSoFar = session.completedTopicIds.length;
-        const totalPlanned = session.plannedTopicIds.length || 1;
-        session.minutesCompleted = Math.round(
-          (plannedMinutes * completedSoFar) / totalPlanned
-        );
-        if (completedSoFar >= totalPlanned) session.status = "completed";
-        await session.save();
-      }
-    }
+    const item = session?.plannedItems?.find(
+      (entry) => String(entry.topicId) === String(topic._id)
+    );
+    await recordStudyActivity({
+      userId,
+      topicId: topic._id,
+      minutes: Number(item?.plannedMinutes) || Number(topic.estimatedMinutes) || 30,
+      completedPlanItemCount: 1,
+      timezone: getTimezone(req),
+      activityKey: `topic-complete:${topic._id}:${new Date().toISOString().slice(0, 10)}`,
+    });
 
-    res.json({ topic, revision });
+    res.json({ topic, revision, session });
   } catch (err) {
     console.error("Complete study topic error:", err.message);
     res.status(500).json({ error: "Could not complete study topic" });
+  }
+}
+
+async function completePlanItem(req, res) {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const itemId = cleanString(req.params.itemId);
+    if (!itemId) return res.status(400).json({ error: "Invalid plan item id" });
+    const session = await StudySession.findOne({
+      userId,
+      "plannedItems._id": itemId,
+    });
+    if (!session) return res.status(404).json({ error: "Plan item not found" });
+    const item = session.plannedItems.id(itemId);
+    if (!item) return res.status(404).json({ error: "Plan item not found" });
+    const topic = await StudyTopic.findOne({ _id: item.topicId, userId });
+    if (!topic) return res.status(404).json({ error: "Topic not found" });
+
+    if (item.status !== "completed") {
+      item.status = "completed";
+      item.startedAt = item.startedAt || new Date();
+      item.completedAt = new Date();
+    }
+    syncLegacySessionFields(session);
+    await session.save();
+
+    await recordStudyActivity({
+      userId,
+      topicId: topic._id,
+      minutes: Number(item.plannedMinutes) || Number(topic.estimatedMinutes) || 30,
+      completedPlanItemCount: 1,
+      timezone: getTimezone(req),
+      activityKey: `plan-item-complete:${session._id}:${item._id}`,
+    });
+
+    res.json({ session, item, topic });
+  } catch (err) {
+    console.error("Complete study plan item error:", err.message);
+    res.status(500).json({ error: "Could not complete study plan item" });
+  }
+}
+
+async function skipPlanItem(req, res) {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const itemId = cleanString(req.params.itemId);
+    if (!itemId) return res.status(400).json({ error: "Invalid plan item id" });
+    const session = await StudySession.findOne({
+      userId,
+      "plannedItems._id": itemId,
+    });
+    if (!session) return res.status(404).json({ error: "Plan item not found" });
+    const item = session.plannedItems.id(itemId);
+    if (!item) return res.status(404).json({ error: "Plan item not found" });
+    if (item.status !== "completed") item.status = "skipped";
+    syncLegacySessionFields(session);
+    await session.save();
+    res.json({ session, item });
+  } catch (err) {
+    console.error("Skip study plan item error:", err.message);
+    res.status(500).json({ error: "Could not skip study plan item" });
   }
 }
 
@@ -419,7 +649,7 @@ async function generatePlan(req, res) {
   try {
     const userId = getUserId(req);
     if (!userId) return res.status(401).json({ error: "Unauthorized" });
-    const goalId = asObjectId(req.body?.goalId);
+    const goalId = asObjectId(req.body?.goalId || req.params.goalId);
     const plan = await generateTodaysPlan({ userId, goalId });
     if (!plan.goal) {
       return res.status(400).json({
@@ -507,17 +737,44 @@ async function completeRevision(req, res) {
     const revision = await RevisionItem.findOne({ _id: id, userId });
     if (!revision) return res.status(404).json({ error: "Revision not found" });
     revision.status = "completed";
+    revision.completedAt = new Date();
+    const result = cleanString(req.body?.result);
+    if (["known", "weak", "partial"].includes(result)) revision.result = result;
     await revision.save();
+    const topic = await StudyTopic.findOne({ _id: revision.topicId, userId });
     const next = await scheduleNextRevisionForTopic({
       userId,
       goalId: revision.goalId,
       topicId: revision.topicId,
     });
+    if (revision.result === "weak" && next) {
+      next.dueAt = addDays(startOfDay(), 1);
+      await next.save();
+    }
     await StudyTopic.findOneAndUpdate(
       { _id: revision.topicId, userId },
       { $set: { lastStudiedAt: new Date(), nextRevisionAt: next?.dueAt || null } }
     );
-    res.json({ revision, next });
+    const session = await markSessionTopicCompleted({
+      userId,
+      goalId: revision.goalId,
+      topicId: revision.topicId,
+      fallbackMinutes: Number(topic?.estimatedMinutes) || 15,
+      type: "revise",
+    });
+    const item = session?.plannedItems?.find(
+      (entry) => String(entry.topicId) === String(revision.topicId)
+    );
+    await recordStudyActivity({
+      userId,
+      topicId: revision.topicId,
+      minutes: Number(item?.plannedMinutes) || Number(topic?.estimatedMinutes) || 15,
+      revisionCount: 1,
+      completedPlanItemCount: 1,
+      timezone: getTimezone(req),
+      activityKey: `revision-complete:${revision._id}`,
+    });
+    res.json({ revision, next, session });
   } catch (err) {
     console.error("Complete revision error:", err.message);
     res.status(500).json({ error: "Could not complete revision" });
@@ -557,7 +814,7 @@ async function createTopicsBulk(req, res) {
   try {
     const userId = getUserId(req);
     if (!userId) return res.status(401).json({ error: "Unauthorized" });
-    const goalId = asObjectId(req.body?.goalId);
+    const goalId = asObjectId(req.body?.goalId || req.params.goalId);
     if (!goalId) return res.status(400).json({ error: "goalId is required" });
     const goal = await StudyGoal.findOne({ _id: goalId, userId });
     if (!goal) return res.status(404).json({ error: "Goal not found" });
@@ -623,7 +880,7 @@ async function movePlannedTopicToTomorrow(req, res) {
   try {
     const userId = getUserId(req);
     if (!userId) return res.status(401).json({ error: "Unauthorized" });
-    const topicId = asObjectId(req.params.id);
+    const topicId = asObjectId(req.params.id || req.body?.topicId);
     if (!topicId) return res.status(400).json({ error: "Invalid topic id" });
     const topic = await StudyTopic.findOne({ _id: topicId, userId });
     if (!topic) return res.status(404).json({ error: "Topic not found" });
@@ -640,23 +897,23 @@ async function movePlannedTopicToTomorrow(req, res) {
       date: { $gte: today, $lte: todayEnd },
     });
     if (todaySession) {
-      const wasPlanned = todaySession.plannedTopicIds.some(
-        (id) => String(id) === String(topic._id)
+      const todayItems = getSessionPlannedItems(todaySession).map((item) =>
+        typeof item.toObject === "function" ? item.toObject() : { ...item }
       );
+      const existingItem = todayItems.find(
+        (item) => String(item.topicId) === String(topic._id)
+      );
+      const wasPlanned =
+        existingItem &&
+        !["completed", "moved", "skipped"].includes(existingItem.status);
       if (wasPlanned) {
-        // Estimate per-topic minutes proportionally if available.
-        const totalPlanned = todaySession.plannedTopicIds.length || 1;
-        const perTopic = Math.round(
-          (Number(todaySession.minutesPlanned) || 0) / totalPlanned
+        plannedMinutes = Number(existingItem.plannedMinutes) || 0;
+        todaySession.plannedItems = todayItems.map((item) =>
+          String(item.topicId) === String(topic._id)
+            ? { ...item, status: "moved" }
+            : item
         );
-        plannedMinutes = perTopic > 0 ? perTopic : 0;
-
-        todaySession.plannedTopicIds = todaySession.plannedTopicIds.filter(
-          (id) => String(id) !== String(topic._id)
-        );
-        // Recompute minutesPlanned to reflect remaining items.
-        const remaining = todaySession.plannedTopicIds.length;
-        todaySession.minutesPlanned = perTopic > 0 ? perTopic * remaining : 0;
+        syncLegacySessionFields(todaySession);
         await todaySession.save();
       }
     }
@@ -674,13 +931,26 @@ async function movePlannedTopicToTomorrow(req, res) {
     });
     let alreadyOnTomorrow = false;
     if (tomorrowSession) {
-      alreadyOnTomorrow = tomorrowSession.plannedTopicIds.some(
-        (id) => String(id) === String(topic._id)
+      const tomorrowItems = getSessionPlannedItems(tomorrowSession).map((item) =>
+        typeof item.toObject === "function" ? item.toObject() : { ...item }
+      );
+      alreadyOnTomorrow = tomorrowItems.some(
+        (item) =>
+          String(item.topicId) === String(topic._id) &&
+          !["moved", "skipped"].includes(item.status)
       );
       if (!alreadyOnTomorrow) {
-        tomorrowSession.plannedTopicIds.push(topic._id);
-        tomorrowSession.minutesPlanned =
-          (Number(tomorrowSession.minutesPlanned) || 0) + plannedMinutes;
+        tomorrowItems.push({
+          topicId: topic._id,
+          plannedMinutes,
+          order: tomorrowItems.length,
+          type: "learn",
+          status: "planned",
+          startedAt: null,
+          completedAt: null,
+        });
+        tomorrowSession.plannedItems = tomorrowItems;
+        syncLegacySessionFields(tomorrowSession);
         if (tomorrowSession.status === "missed") {
           tomorrowSession.status = "planned";
         }
@@ -692,6 +962,15 @@ async function movePlannedTopicToTomorrow(req, res) {
         goalId: topic.goalId,
         date: tomorrow,
         plannedTopicIds: [topic._id],
+        plannedItems: [
+          {
+            topicId: topic._id,
+            plannedMinutes,
+            order: 0,
+            type: "learn",
+            status: "planned",
+          },
+        ],
         completedTopicIds: [],
         minutesPlanned: plannedMinutes,
         minutesCompleted: 0,
@@ -776,6 +1055,55 @@ async function suggestTopics(req, res) {
   }
 }
 
+async function resolveMaterialContext({
+  userId,
+  goalId,
+  topicId,
+  materialIds = [],
+  contextMode = "topic",
+  question = "",
+} = {}) {
+  const filter = {
+    userId,
+    status: { $nin: ["archived"] },
+    processingStatus: { $in: ["ready", "uploaded", null] },
+  };
+  if (Array.isArray(materialIds) && materialIds.length) {
+    const ids = materialIds.map(asObjectId).filter(Boolean);
+    filter._id = { $in: ids };
+  } else if (contextMode === "goal") {
+    filter.goalId = goalId;
+  } else if (contextMode === "general") {
+    return [];
+  } else {
+    filter.topicId = topicId;
+  }
+  const materials = await StudyMaterial.find(filter).limit(12);
+  const terms = String(question || "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((term) => term.length > 2)
+    .slice(0, 12);
+  return materials
+    .map((material) => {
+      const text = String(material.extractedText || material.contentText || "").trim();
+      const haystack = text.toLowerCase();
+      const score = terms.reduce(
+        (sum, term) => sum + (haystack.includes(term) ? 1 : 0),
+        0
+      );
+      return {
+        material,
+        score,
+        title: material.title,
+        text: text.slice(0, 1800),
+      };
+    })
+    .filter((entry) => entry.text)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 6);
+}
+
 // ── Topic learning state (consolidated load for the topic page) ──────────
 async function getTopicLearning(req, res) {
   try {
@@ -831,12 +1159,38 @@ async function generateLesson(req, res) {
     const topic = await StudyTopic.findOne({ _id: topicId, userId });
     if (!topic) return res.status(404).json({ error: "Topic not found" });
     const goal = await StudyGoal.findOne({ _id: topic.goalId, userId });
+    const [notes, weakMemories, recentReview] = await Promise.all([
+      TopicNote.find({ userId, topicId }).sort({ pinned: -1, createdAt: -1 }).limit(5),
+      StudyMemory.find({
+        userId,
+        topicId,
+        memoryType: "weak_area",
+        dismissed: false,
+      }).sort({ updatedAt: -1 }).limit(5),
+      PreTopicReview.findOne({
+        userId,
+        newTopicId: topicId,
+        status: "completed",
+      }).sort({ completedAt: -1 }),
+    ]);
+    const materialContext = await resolveMaterialContext({
+      userId,
+      goalId: topic.goalId,
+      topicId,
+      materialIds: req.body?.materialIds || [],
+      contextMode: req.body?.useMaterials ? "topic" : "general",
+    });
 
     let lessonPayload;
     try {
       lessonPayload = await studyAIService.generateLessonForTopic({
         goal,
         topic,
+        notes,
+        materials: materialContext,
+        weakMemories,
+        preTopicReview: recentReview,
+        mode: cleanString(req.body?.mode),
       });
     } catch (err) {
       console.error("Generate lesson LLM error:", err.message);
@@ -849,7 +1203,7 @@ async function generateLesson(req, res) {
     let lesson;
     if (existing) {
       Object.assign(existing, lessonPayload, {
-        sourceBasis: "ai_generated",
+        sourceBasis: materialContext.length ? "mixed" : "ai_generated",
         generatedBy: "orionai",
         goalId: topic.goalId,
       });
@@ -861,7 +1215,7 @@ async function generateLesson(req, res) {
         userId,
         goalId: topic.goalId,
         topicId,
-        sourceBasis: "ai_generated",
+        sourceBasis: materialContext.length ? "mixed" : "ai_generated",
         generatedBy: "orionai",
       });
     }
@@ -870,6 +1224,11 @@ async function generateLesson(req, res) {
       topic.status = "in_progress";
       await topic.save();
     }
+    await markSessionTopicStarted({
+      userId,
+      goalId: topic.goalId,
+      topicId: topic._id,
+    });
 
     res.json({ lesson });
   } catch (err) {
@@ -901,7 +1260,9 @@ function buildMaterialPayload(body = {}) {
   }
   if ("sourceRef" in body) payload.sourceRef = cleanString(body.sourceRef);
   if ("contentText" in body) payload.contentText = String(body.contentText || "");
+  if ("extractedText" in body) payload.extractedText = String(body.extractedText || "");
   if ("summary" in body) payload.summary = String(body.summary || "");
+  if ("tags" in body) payload.tags = cleanTags(body.tags);
   if ("status" in body) {
     const status = cleanString(body.status);
     if (status && !StudyMaterial.STATUS_VALUES.includes(status)) {
@@ -920,6 +1281,17 @@ async function createMaterial(req, res) {
     if (!userId) return res.status(401).json({ error: "Unauthorized" });
     const goalId = asObjectId(req.body?.goalId);
     const topicId = asObjectId(req.body?.topicId);
+    if (goalId) {
+      const goal = await StudyGoal.findOne({ _id: goalId, userId });
+      if (!goal) return res.status(404).json({ error: "Goal not found" });
+    }
+    if (topicId) {
+      const topic = await StudyTopic.findOne({ _id: topicId, userId });
+      if (!topic) return res.status(404).json({ error: "Topic not found" });
+      if (goalId && String(topic.goalId) !== String(goalId)) {
+        return res.status(400).json({ error: "Topic does not belong to this goal" });
+      }
+    }
     const { error, payload } = buildMaterialPayload(req.body || {});
     if (error) return res.status(400).json({ error });
     if (!payload.title && !payload.url && !payload.contentText) {
@@ -933,11 +1305,48 @@ async function createMaterial(req, res) {
       userId,
       goalId: goalId || null,
       topicId: topicId || null,
+      sourceApp: payload.sourceApp || "manual",
+      status: payload.status || "ready",
+      processingStatus: payload.processingStatus || "ready",
+      extractionStatus: payload.contentText || payload.extractedText ? "ready" : "not_applicable",
     });
-    res.status(201).json({ material });
+    res.status(201).json({ material: materialPublic(material) });
   } catch (err) {
     console.error("Create material error:", err.message);
     res.status(500).json({ error: "Could not save material" });
+  }
+}
+
+async function uploadMaterial(req, res) {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const goalId = asObjectId(req.body?.goalId);
+    const topicId = asObjectId(req.body?.topicId);
+    if (goalId) {
+      const goal = await StudyGoal.findOne({ _id: goalId, userId });
+      if (!goal) return res.status(404).json({ error: "Goal not found" });
+    }
+    if (topicId) {
+      const topic = await StudyTopic.findOne({ _id: topicId, userId });
+      if (!topic) return res.status(404).json({ error: "Topic not found" });
+      if (goalId && String(topic.goalId) !== String(goalId)) {
+        return res.status(400).json({ error: "Topic does not belong to this goal" });
+      }
+    }
+    const material = await createUploadedMaterial({
+      userId,
+      goalId: goalId || null,
+      topicId: topicId || null,
+      file: req.file,
+      title: req.body?.title,
+    });
+    res.status(201).json({ material: materialPublic(material) });
+  } catch (err) {
+    console.error("Upload study material error:", err.message);
+    res.status(err.status || 500).json({
+      error: err.status ? err.message : "Could not upload study material",
+    });
   }
 }
 
@@ -971,10 +1380,25 @@ async function listMaterials(req, res) {
     const includeArchived = req.query?.includeArchived === "true";
     if (!includeArchived) filter.status = { $ne: "archived" };
     const materials = await StudyMaterial.find(filter).sort({ createdAt: -1 });
-    res.json({ materials });
+    res.json({ materials: materials.map(materialPublic) });
   } catch (err) {
     console.error("List materials error:", err.message);
     res.status(500).json({ error: "Could not load materials" });
+  }
+}
+
+async function getMaterial(req, res) {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const id = asObjectId(req.params.materialId || req.params.id);
+    if (!id) return res.status(400).json({ error: "Invalid material id" });
+    const material = await StudyMaterial.findOne({ _id: id, userId });
+    if (!material) return res.status(404).json({ error: "Material not found" });
+    res.json({ material: materialPublic(material) });
+  } catch (err) {
+    console.error("Get material error:", err.message);
+    res.status(500).json({ error: "Could not load material" });
   }
 }
 
@@ -992,7 +1416,7 @@ async function updateMaterial(req, res) {
       { new: true }
     );
     if (!material) return res.status(404).json({ error: "Material not found" });
-    res.json({ material });
+    res.json({ material: materialPublic(material) });
   } catch (err) {
     console.error("Update material error:", err.message);
     res.status(500).json({ error: "Could not update material" });
@@ -1005,12 +1429,38 @@ async function deleteMaterial(req, res) {
     if (!userId) return res.status(401).json({ error: "Unauthorized" });
     const id = asObjectId(req.params.id);
     if (!id) return res.status(400).json({ error: "Invalid material id" });
-    const result = await StudyMaterial.findOneAndDelete({ _id: id, userId });
-    if (!result) return res.status(404).json({ error: "Material not found" });
-    res.json({ ok: true });
+    const material = await StudyMaterial.findOneAndUpdate(
+      { _id: id, userId },
+      {
+        $set: {
+          status: "archived",
+          processingStatus: "archived",
+          extractedText: "",
+          contentText: "",
+        },
+      },
+      { new: true }
+    );
+    if (!material) return res.status(404).json({ error: "Material not found" });
+    res.json({ ok: true, material: materialPublic(material) });
   } catch (err) {
     console.error("Delete material error:", err.message);
     res.status(500).json({ error: "Could not delete material" });
+  }
+}
+
+async function retryMaterial(req, res) {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const id = asObjectId(req.params.materialId || req.params.id);
+    if (!id) return res.status(400).json({ error: "Invalid material id" });
+    const material = await retryMaterialProcessing({ userId, materialId: id });
+    if (!material) return res.status(404).json({ error: "Material not found" });
+    res.json({ material: materialPublic(material) });
+  } catch (err) {
+    console.error("Retry material error:", err.message);
+    res.status(500).json({ error: "Could not retry material processing" });
   }
 }
 
@@ -1105,6 +1555,67 @@ async function updatePracticeQuestion(req, res) {
   }
 }
 
+async function checkPracticeQuestion(req, res) {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const id = asObjectId(req.params.questionId || req.params.id);
+    if (!id) return res.status(400).json({ error: "Invalid question id" });
+    const userAnswer = String(req.body?.answer ?? req.body?.userAnswer ?? "").trim();
+    if (!userAnswer) return res.status(400).json({ error: "answer is required" });
+    const question = await PracticeQuestion.findOne({ _id: id, userId });
+    if (!question) return res.status(404).json({ error: "Question not found" });
+
+    const expected = String(question.correctAnswer || "").trim().toLowerCase();
+    const actual = userAnswer.toLowerCase();
+    const answeredCorrectly = expected ? actual === expected : null;
+    question.userAnswer = userAnswer.slice(0, 1000);
+    question.answeredCorrectly = answeredCorrectly;
+    await question.save();
+
+    await recordStudyActivity({
+      userId,
+      topicId: question.topicId,
+      practiceQuestionCount: 1,
+      timezone: getTimezone(req),
+      activityKey: `question-check:${question._id}:${userAnswer.toLowerCase().slice(0, 120)}`,
+    });
+
+    if (answeredCorrectly === false) {
+      await StudyMemory.create({
+        userId,
+        goalId: question.goalId,
+        topicId: question.topicId,
+        memoryType: "weak_area",
+        content: `Missed practice question: ${question.question.slice(0, 180)}`,
+        sourceType: "practice",
+        sourceRef: String(question._id),
+        importance: 2,
+        confidence: 0.5,
+        userApproved: false,
+      });
+    }
+
+    res.json({
+      question,
+      feedback: {
+        answeredCorrectly,
+        explanation: question.explanation || "",
+        correctAnswer: question.correctAnswer || "",
+        message:
+          answeredCorrectly === null
+            ? "Saved your answer. This answer type needs human or AI review."
+            : answeredCorrectly
+              ? "Correct."
+              : "Not quite. Review the explanation and try again.",
+      },
+    });
+  } catch (err) {
+    console.error("Check question error:", err.message);
+    res.status(500).json({ error: "Could not check answer" });
+  }
+}
+
 // ── Flashcards ────────────────────────────────────────────────────────────
 async function generateFlashcardsForTopic(req, res) {
   try {
@@ -1183,6 +1694,29 @@ async function updateFlashcard(req, res) {
       { new: true }
     );
     if (!flashcard) return res.status(404).json({ error: "Flashcard not found" });
+    if (update.status) {
+      await recordStudyActivity({
+        userId,
+        topicId: flashcard.topicId,
+        flashcardReviewCount: 1,
+        timezone: getTimezone(req),
+        activityKey: `flashcard-review:${flashcard._id}:${flashcard.reviewCount}`,
+      });
+      if (update.status === "weak") {
+        await StudyMemory.create({
+          userId,
+          goalId: flashcard.goalId,
+          topicId: flashcard.topicId,
+          memoryType: "weak_area",
+          content: `Weak flashcard: ${flashcard.front.slice(0, 180)}`,
+          sourceType: "flashcard",
+          sourceRef: String(flashcard._id),
+          importance: 2,
+          confidence: 0.45,
+          userApproved: false,
+        });
+      }
+    }
     res.json({ flashcard });
   } catch (err) {
     console.error("Update flashcard error:", err.message);
@@ -1206,6 +1740,25 @@ async function deleteFlashcard(req, res) {
 }
 
 // ── Topic notes ───────────────────────────────────────────────────────────
+async function listTopicNotes(req, res) {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const topicId = asObjectId(req.params.topicId);
+    if (!topicId) return res.status(400).json({ error: "Invalid topic id" });
+    const topic = await StudyTopic.findOne({ _id: topicId, userId });
+    if (!topic) return res.status(404).json({ error: "Topic not found" });
+    const filter = { userId, topicId };
+    const search = cleanString(req.query?.search);
+    if (search) filter.content = { $regex: search, $options: "i" };
+    const notes = await TopicNote.find(filter).sort({ pinned: -1, createdAt: -1 });
+    res.json({ notes });
+  } catch (err) {
+    console.error("List notes error:", err.message);
+    res.status(500).json({ error: "Could not load notes" });
+  }
+}
+
 async function createTopicNote(req, res) {
   try {
     const userId = getUserId(req);
@@ -1220,12 +1773,26 @@ async function createTopicNote(req, res) {
     const source = TopicNote.SOURCE_VALUES.includes(sourceRaw)
       ? sourceRaw
       : "manual";
+    const sourceMaterialId = asObjectId(req.body?.sourceMaterialId);
+    if (sourceMaterialId) {
+      const material = await StudyMaterial.findOne({ _id: sourceMaterialId, userId });
+      if (!material) return res.status(404).json({ error: "Source material not found" });
+    }
     const note = await TopicNote.create({
       userId,
       goalId: topic.goalId,
       topicId,
       content: content.slice(0, 4000),
       source,
+      sourceMaterialId: sourceMaterialId || null,
+      pinned: req.body?.pinned === true,
+    });
+    await recordStudyActivity({
+      userId,
+      topicId,
+      noteCount: 1,
+      timezone: getTimezone(req),
+      activityKey: `note-create:${note._id}`,
     });
     res.status(201).json({ note });
   } catch (err) {
@@ -1254,6 +1821,10 @@ async function updateTopicNote(req, res) {
         });
       }
       if (source) update.source = source;
+    }
+    if ("pinned" in req.body) update.pinned = req.body.pinned === true;
+    if ("sourceMaterialId" in req.body) {
+      update.sourceMaterialId = asObjectId(req.body.sourceMaterialId) || null;
     }
     const note = await TopicNote.findOneAndUpdate(
       { _id: id, userId },
@@ -1300,7 +1871,10 @@ async function updateTopicProgress(req, res) {
       }
       if (status) update.status = status;
     }
-    if (req.body?.touchLastStudied === true) {
+    if (
+      req.body?.touchLastStudied === true &&
+      (req.body?.completedWork === true || update.status === "completed")
+    ) {
       update.lastStudiedAt = new Date();
     }
     if (!Object.keys(update).length) {
@@ -1312,6 +1886,20 @@ async function updateTopicProgress(req, res) {
       { new: true }
     );
     if (!topic) return res.status(404).json({ error: "Topic not found" });
+    if (req.body?.completedWork === true || update.status === "completed") {
+      await markSessionTopicCompleted({
+        userId,
+        goalId: topic.goalId,
+        topicId: topic._id,
+        fallbackMinutes: Number(topic.estimatedMinutes) || 30,
+      });
+    } else if (update.status === "in_progress") {
+      await markSessionTopicStarted({
+        userId,
+        goalId: topic.goalId,
+        topicId: topic._id,
+      });
+    }
     res.json({ topic });
   } catch (err) {
     console.error("Update topic progress error:", err.message);
@@ -1333,6 +1921,15 @@ async function topicDoubtChat(req, res) {
     if (!topic) return res.status(404).json({ error: "Topic not found" });
     const goal = await StudyGoal.findOne({ _id: topic.goalId, userId });
     const lesson = await TopicLesson.findOne({ topicId, userId });
+    const contextMode = cleanString(req.body?.contextMode) || "topic";
+    const materialContext = await resolveMaterialContext({
+      userId,
+      goalId: topic.goalId,
+      topicId,
+      materialIds: req.body?.materialIds || req.body?.selectedMaterialIds || [],
+      contextMode,
+      question,
+    });
 
     let structured;
     try {
@@ -1342,6 +1939,8 @@ async function topicDoubtChat(req, res) {
         lesson,
         history,
         question,
+        materialContext,
+        allowGeneralKnowledge: contextMode !== "materials_only",
       });
     } catch (err) {
       console.error("Doubt chat LLM error:", err.message);
@@ -1355,6 +1954,11 @@ async function topicDoubtChat(req, res) {
     res.json({
       reply: structured.explanation,
       answer: structured,
+      sources: materialContext.map((entry) => ({
+        materialId: entry.material._id,
+        title: entry.material.title,
+        sourceApp: entry.material.sourceApp,
+      })),
       label: structured.usedAttachedMaterial
         ? "Based on attached material"
         : structured.answerType || "OrionAI explanation",
@@ -1365,17 +1969,202 @@ async function topicDoubtChat(req, res) {
   }
 }
 
+async function getConsistencyGraph(req, res) {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const range = cleanString(req.query?.range) || "12_weeks";
+    const data = await getConsistency({
+      userId,
+      range,
+      timezone: getTimezone(req),
+    });
+    res.json(data);
+  } catch (err) {
+    console.error("Study consistency error:", err.message);
+    res.status(500).json({ error: "Could not load consistency" });
+  }
+}
+
+async function getConsistencySummary(req, res) {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const data = await getConsistency({
+      userId,
+      range: "12_weeks",
+      timezone: getTimezone(req),
+    });
+    const { days, ...summary } = data;
+    res.json(summary);
+  } catch (err) {
+    console.error("Study consistency summary error:", err.message);
+    res.status(500).json({ error: "Could not load consistency summary" });
+  }
+}
+
+async function listTopicMemory(req, res) {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const topicId = asObjectId(req.params.topicId);
+    if (!topicId) return res.status(400).json({ error: "Invalid topic id" });
+    const topic = await StudyTopic.findOne({ _id: topicId, userId });
+    if (!topic) return res.status(404).json({ error: "Topic not found" });
+    const memories = await StudyMemory.find({
+      userId,
+      topicId,
+      dismissed: false,
+    }).sort({ importance: -1, updatedAt: -1 });
+    res.json({ memories });
+  } catch (err) {
+    console.error("List study memory error:", err.message);
+    res.status(500).json({ error: "Could not load study memory" });
+  }
+}
+
+async function deleteTopicMemory(req, res) {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const topicId = asObjectId(req.params.topicId);
+    if (!topicId) return res.status(400).json({ error: "Invalid topic id" });
+    const topic = await StudyTopic.findOne({ _id: topicId, userId });
+    if (!topic) return res.status(404).json({ error: "Topic not found" });
+    const memoryId = asObjectId(req.params.memoryId);
+    if (memoryId) {
+      const memory = await StudyMemory.findOneAndUpdate(
+        { _id: memoryId, userId, topicId },
+        { $set: { dismissed: true } },
+        { new: true }
+      );
+      if (!memory) return res.status(404).json({ error: "Memory not found" });
+      return res.json({ ok: true, memory });
+    }
+    await StudyMemory.updateMany(
+      { userId, topicId },
+      { $set: { dismissed: true } }
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Delete study memory error:", err.message);
+    res.status(500).json({ error: "Could not update study memory" });
+  }
+}
+
+async function getPreTopicReview(req, res) {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const topicId = asObjectId(req.params.topicId);
+    if (!topicId) return res.status(400).json({ error: "Invalid topic id" });
+    const result = await preTopicReviewService.getReviewRecommendation({
+      userId,
+      topicId,
+    });
+    if (!result) return res.status(404).json({ error: "Topic not found" });
+    res.json(result);
+  } catch (err) {
+    console.error("Pre-topic review get error:", err.message);
+    res.status(500).json({ error: "Could not load quick review" });
+  }
+}
+
+async function generatePreTopicReview(req, res) {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const topicId = asObjectId(req.params.topicId);
+    if (!topicId) return res.status(400).json({ error: "Invalid topic id" });
+    const result = await preTopicReviewService.generateReview({
+      userId,
+      topicId,
+      maxQuestions: Number(req.body?.maxQuestions) || 5,
+    });
+    if (!result) return res.status(404).json({ error: "Topic not found" });
+    res.json(result);
+  } catch (err) {
+    console.error("Pre-topic review generate error:", err.message);
+    res.status(500).json({ error: "Could not generate quick review" });
+  }
+}
+
+async function answerPreTopicReview(req, res) {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const reviewId = asObjectId(req.params.reviewId);
+    if (!reviewId) return res.status(400).json({ error: "Invalid review id" });
+    const review = await preTopicReviewService.answerReviewQuestion({
+      userId,
+      reviewId,
+      questionId: cleanString(req.body?.questionId),
+      userAnswer: req.body?.userAnswer || req.body?.answer || "",
+    });
+    if (!review) return res.status(404).json({ error: "Review not found" });
+    res.json({ review });
+  } catch (err) {
+    console.error("Pre-topic review answer error:", err.message);
+    res.status(500).json({ error: "Could not save quick review answer" });
+  }
+}
+
+async function completePreTopicReview(req, res) {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const reviewId = asObjectId(req.params.reviewId);
+    if (!reviewId) return res.status(400).json({ error: "Invalid review id" });
+    const review = await preTopicReviewService.completeReview({ userId, reviewId });
+    if (!review) return res.status(404).json({ error: "Review not found" });
+    await recordStudyActivity({
+      userId,
+      topicId: review.newTopicId,
+      practiceQuestionCount: review.questions.filter((q) => q.answeredAt).length,
+      timezone: getTimezone(req),
+      activityKey: `pre-topic-review-complete:${review._id}`,
+    });
+    res.json({ review });
+  } catch (err) {
+    console.error("Pre-topic review complete error:", err.message);
+    res.status(500).json({ error: "Could not complete quick review" });
+  }
+}
+
+async function skipPreTopicReview(req, res) {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const reviewId = asObjectId(req.params.reviewId);
+    if (!reviewId) return res.status(400).json({ error: "Invalid review id" });
+    const review = await preTopicReviewService.skipReview({ userId, reviewId });
+    if (!review) return res.status(404).json({ error: "Review not found" });
+    res.json({ review });
+  } catch (err) {
+    console.error("Pre-topic review skip error:", err.message);
+    res.status(500).json({ error: "Could not skip quick review" });
+  }
+}
+
 module.exports = {
   getOverview,
+  getConsistencyGraph,
+  getConsistencySummary,
   createGoal,
   listGoals,
+  getGoal,
   updateGoal,
+  deleteGoal,
   createTopic,
   createTopicsBulk,
   listTopics,
   getTopic,
   updateTopic,
+  deleteTopic,
+  startTopic,
   completeTopic,
+  completePlanItem,
+  skipPlanItem,
   generatePlan,
   movePlannedTopicToTomorrow,
   listRevisions,
@@ -1385,20 +2174,32 @@ module.exports = {
   getTopicLearning,
   generateLesson,
   createMaterial,
+  uploadMaterial,
   createMaterialForTopic,
   listMaterials,
+  getMaterial,
   updateMaterial,
   deleteMaterial,
+  retryMaterial,
   generatePracticeQuestionsForTopic,
   listPracticeQuestions,
   updatePracticeQuestion,
+  checkPracticeQuestion,
   generateFlashcardsForTopic,
   updateFlashcard,
   deleteFlashcard,
+  listTopicNotes,
   createTopicNote,
   updateTopicNote,
   deleteTopicNote,
   updateTopicProgress,
   topicDoubtChat,
+  listTopicMemory,
+  deleteTopicMemory,
+  getPreTopicReview,
+  generatePreTopicReview,
+  answerPreTopicReview,
+  completePreTopicReview,
+  skipPreTopicReview,
   computeGoalProgress,
 };

@@ -94,8 +94,15 @@
             <p class="tl-label">OrionAI-generated lesson</p>
             <h4 v-if="lesson.title">{{ lesson.title }}</h4>
 
+            <article v-if="lesson.introduction" class="tl-lesson-block">
+              <h5>Before you begin</h5>
+              <p v-for="(para, i) in splitParagraphs(lesson.introduction)" :key="i">
+                {{ para }}
+              </p>
+            </article>
+
             <article v-if="lesson.explanation" class="tl-lesson-block">
-              <h5>Explanation</h5>
+              <h5>Deep explanation</h5>
               <p v-for="(para, i) in splitParagraphs(lesson.explanation)" :key="i">
                 {{ para }}
               </p>
@@ -151,6 +158,20 @@
               </ul>
             </article>
 
+            <article v-if="lesson.practicalExercise" class="tl-lesson-block">
+              <h5>Practice task</h5>
+              <p v-for="(para, i) in splitParagraphs(lesson.practicalExercise)" :key="i">
+                {{ para }}
+              </p>
+            </article>
+
+            <article v-if="lesson.quickRecap" class="tl-lesson-block">
+              <h5>Quick recap</h5>
+              <p v-for="(para, i) in splitParagraphs(lesson.quickRecap)" :key="i">
+                {{ para }}
+              </p>
+            </article>
+
             <article v-if="lesson.revisionNotes?.length" class="tl-lesson-block">
               <h5>Quick revision notes</h5>
               <ul>
@@ -182,6 +203,7 @@
               <label class="tl-field">
                 <span>Type</span>
                 <select v-model="materialForm.type">
+                  <option value="upload">Upload file</option>
                   <option value="note">Note</option>
                   <option value="link">Link</option>
                   <option value="video">Video link</option>
@@ -197,12 +219,19 @@
               <span>URL</span>
               <input v-model="materialForm.url" type="url" placeholder="https://…" />
             </label>
+            <label v-else-if="materialForm.type === 'upload'" class="tl-field">
+              <span>File</span>
+              <input type="file" accept=".pdf,.doc,.docx,.txt,.md,.markdown,.csv,.xlsx,.png,.jpg,.jpeg" @change="onMaterialFileChange" />
+            </label>
             <label v-else class="tl-field">
               <span>Content</span>
               <textarea v-model="materialForm.contentText" rows="4"
                 placeholder="Paste notes, summaries, or anything useful for this topic."></textarea>
             </label>
             <p v-if="materialForm.error" class="tl-form-error">{{ materialForm.error }}</p>
+            <p v-if="materialForm.uploadProgress > 0 && materialForm.uploadProgress < 100" class="tl-muted">
+              Uploading {{ materialForm.uploadProgress }}%
+            </p>
             <div class="tl-form-actions">
               <button class="tl-btn tl-btn--ghost tl-btn--sm" type="button" @click="closeMaterialForm">
                 Cancel
@@ -232,10 +261,15 @@
                   {{ truncate(m.contentText, 160) }}
                 </p>
                 <p class="tl-list-row-time">Added {{ formatDate(m.createdAt) }}</p>
+                <p v-if="m.processingStatus" class="tl-list-row-time">
+                  Status: {{ m.processingStatus }}<span v-if="m.processingError"> · {{ m.processingError }}</span>
+                </p>
               </div>
               <div class="tl-list-row-actions">
                 <a v-if="m.url" class="tl-link tl-link--sm" :href="m.url"
                   target="_blank" rel="noopener noreferrer">Open</a>
+                <button v-if="m.processingStatus === 'failed'" class="tl-link tl-link--sm" type="button"
+                  @click="retryMaterial(m)">Retry</button>
                 <button class="tl-link tl-link--sm tl-link--muted" type="button"
                   @click="archiveMaterial(m)">Archive</button>
                 <button class="tl-link tl-link--sm tl-link--danger" type="button"
@@ -404,7 +438,7 @@
           <header class="tl-section-head">
             <div>
               <h3>Doubt chat</h3>
-              <p>Ask anything about this topic. OrionAI uses your goal, level, and lesson context.</p>
+              <p>Ask anything about this topic using general knowledge or selected material context.</p>
             </div>
             <button v-if="doubtMessages.length" class="tl-link tl-link--sm tl-link--muted"
               type="button" @click="doubtMessages = []">
@@ -416,8 +450,26 @@
             <strong>Ask any doubt about this topic.</strong>
             <p>Examples: “Explain this simply.” · “Give one more example.” · “Why is my answer wrong?”</p>
           </div>
+          <div v-if="materials.length" class="tl-card tl-context-card">
+            <label class="tl-field">
+              <span>Answer context</span>
+              <select v-model="doubtContextMode">
+                <option value="topic">This topic</option>
+                <option value="selected">Selected materials</option>
+                <option value="goal">All materials in this goal</option>
+                <option value="general">General OrionAI knowledge</option>
+                <option value="materials_only">Selected materials only</option>
+              </select>
+            </label>
+            <div v-if="doubtContextMode === 'selected' || doubtContextMode === 'materials_only'" class="tl-material-checks">
+              <label v-for="m in materials" :key="m._id">
+                <input v-model="selectedMaterialIds" type="checkbox" :value="m._id" />
+                <span>{{ m.title }}</span>
+              </label>
+            </div>
+          </div>
 
-          <ul v-else class="tl-chat">
+          <ul v-if="doubtMessages.length" class="tl-chat">
             <li v-for="(msg, i) in doubtMessages" :key="i"
               class="tl-chat-msg" :class="`tl-chat-msg--${msg.role}`">
               <div class="tl-chat-bubble">
@@ -552,6 +604,30 @@
               <strong>{{ topic.nextRevisionAt ? formatDate(topic.nextRevisionAt) : '—' }}</strong>
             </article>
           </div>
+          <div class="tl-card tl-memory-card">
+            <header class="tl-section-head tl-section-head--compact">
+              <div>
+                <h3>Learning Memory</h3>
+                <p>Scoped notes OrionAI remembers for this topic.</p>
+              </div>
+              <button v-if="memories.length" class="tl-link tl-link--sm tl-link--muted" type="button"
+                @click="clearMemory">Clear</button>
+            </header>
+            <div v-if="!memories.length" class="tl-empty-block">
+              <strong>No saved learning memory yet.</strong>
+            </div>
+            <ul v-else class="tl-list">
+              <li v-for="memory in memories" :key="memory._id" class="tl-list-row">
+                <div class="tl-list-row-main">
+                  <span class="tl-type-tag">{{ memory.memoryType }}</span>
+                  <p class="tl-note-content">{{ memory.content }}</p>
+                  <p class="tl-list-row-time">{{ memory.sourceType }}</p>
+                </div>
+                <button class="tl-link tl-link--sm tl-link--danger" type="button"
+                  @click="deleteMemory(memory)">Remove</button>
+              </li>
+            </ul>
+          </div>
         </section>
       </template>
     </div>
@@ -598,7 +674,15 @@ const tabs = computed(() => [
   { id: 'progress', label: 'Progress' },
 ])
 
-const activeTab = ref('learn')
+const TAB_IDS = ['learn', 'materials', 'practice', 'flashcards', 'doubt', 'notes', 'progress']
+
+function tabFromUrl() {
+  if (typeof window === 'undefined') return 'learn'
+  const tab = new URLSearchParams(window.location.search).get('tab')
+  return TAB_IDS.includes(tab) ? tab : 'learn'
+}
+
+const activeTab = ref(tabFromUrl())
 const topic = ref(null)
 const goal = ref(null)
 const lesson = ref(null)
@@ -606,6 +690,7 @@ const materials = ref([])
 const questions = ref([])
 const flashcards = ref([])
 const notes = ref([])
+const memories = ref([])
 
 const loading = ref(true)
 const pendingAction = ref(false)
@@ -623,6 +708,8 @@ const materialForm = reactive({
   title: '',
   url: '',
   contentText: '',
+  file: null,
+  uploadProgress: 0,
   error: '',
 })
 
@@ -632,6 +719,8 @@ const noteSaving = ref(false)
 const doubtMessages = ref([])
 const doubtInput = ref('')
 const doubtLoading = ref(false)
+const doubtContextMode = ref('topic')
+const selectedMaterialIds = ref([])
 
 const flashFeedback = ref({ cardId: '', text: '' })
 let flashFeedbackTimer = null
@@ -680,6 +769,9 @@ async function loadTopicLearning() {
     const { data } = await studyAPI.getTopicLearning(props.topicId)
     topic.value = data?.topic || null
     goal.value = data?.goal || null
+    if (goal.value?._id && typeof window !== 'undefined') {
+      window.localStorage.setItem('orion.study.activeGoalId', goal.value._id)
+    }
     lesson.value = data?.lesson || null
     materials.value = Array.isArray(data?.materials) ? data.materials : []
     questions.value = Array.isArray(data?.questions)
@@ -689,11 +781,39 @@ async function loadTopicLearning() {
       ? data.flashcards.map(decorateFlashcard)
       : []
     notes.value = Array.isArray(data?.notes) ? data.notes : []
+    await loadMemory()
+    if (shouldOpenMaterialFormFromUrl()) {
+      activeTab.value = 'materials'
+      openMaterialForm('upload')
+      clearOpenMaterialParam()
+    }
   } catch (err) {
     console.error('Load topic learning failed', err)
     topic.value = null
   } finally {
     loading.value = false
+  }
+}
+
+function shouldOpenMaterialFormFromUrl() {
+  if (typeof window === 'undefined') return false
+  return new URLSearchParams(window.location.search).get('openMaterial') === '1'
+}
+
+function clearOpenMaterialParam() {
+  if (typeof window === 'undefined') return
+  const url = new URL(window.location.href)
+  url.searchParams.delete('openMaterial')
+  window.history.replaceState({}, '', `${url.pathname}${url.search}`)
+}
+
+async function loadMemory() {
+  if (!props.topicId) return
+  try {
+    const { data } = await studyAPI.getTopicMemory(props.topicId)
+    memories.value = Array.isArray(data?.memories) ? data.memories : []
+  } catch {
+    memories.value = []
   }
 }
 
@@ -728,7 +848,9 @@ async function generateLesson() {
   if (!topic.value || lessonLoading.value) return
   lessonLoading.value = true
   try {
-    const { data } = await studyAPI.generateLesson(topic.value._id)
+    const { data } = await studyAPI.generateLesson(topic.value._id, {
+      useMaterials: materials.value.length > 0,
+    })
     if (data?.lesson) {
       lesson.value = data.lesson
       // Server may bump topic to in_progress
@@ -762,22 +884,33 @@ async function saveLessonRevisionToNotes() {
 }
 
 // ── Materials ─────────────────────────────────────────────────────────────
-function openMaterialForm() {
+function openMaterialForm(requestedType = 'note') {
+  const type = typeof requestedType === 'string' ? requestedType : 'note'
   materialForm.open = true
-  materialForm.type = 'note'
+  materialForm.type = type
   materialForm.title = ''
   materialForm.url = ''
   materialForm.contentText = ''
+  materialForm.file = null
+  materialForm.uploadProgress = 0
   materialForm.error = ''
 }
 function closeMaterialForm() {
   materialForm.open = false
   materialForm.error = ''
 }
+function onMaterialFileChange(event) {
+  materialForm.file = event.target.files?.[0] || null
+}
 async function saveMaterial() {
   if (!topic.value) return
   materialForm.error = ''
-  if (
+  if (materialForm.type === 'upload') {
+    if (!materialForm.file) {
+      materialForm.error = 'Choose a file to upload.'
+      return
+    }
+  } else if (
     materialForm.type === 'link' ||
     materialForm.type === 'video'
   ) {
@@ -791,6 +924,20 @@ async function saveMaterial() {
   }
   materialForm.saving = true
   try {
+    if (materialForm.type === 'upload') {
+      const formData = new FormData()
+      formData.append('file', materialForm.file)
+      formData.append('topicId', topic.value._id)
+      formData.append('goalId', goal.value?._id || topic.value.goalId || '')
+      if (materialForm.title.trim()) formData.append('title', materialForm.title.trim())
+      const { data } = await studyAPI.uploadMaterial(formData, (event) => {
+        if (!event.total) return
+        materialForm.uploadProgress = Math.round((event.loaded / event.total) * 100)
+      })
+      if (data?.material) materials.value.unshift(data.material)
+      closeMaterialForm()
+      return
+    }
     const sourceApp =
       materialForm.type === 'link' || materialForm.type === 'video'
         ? 'web'
@@ -823,6 +970,17 @@ async function archiveMaterial(material) {
     }
   } catch (err) {
     console.error('Archive material failed', err)
+  }
+}
+async function retryMaterial(material) {
+  try {
+    const { data } = await studyAPI.retryMaterial(material._id)
+    if (data?.material) {
+      const idx = materials.value.findIndex((m) => m._id === material._id)
+      if (idx >= 0) materials.value[idx] = data.material
+    }
+  } catch (err) {
+    console.error('Retry material failed', err)
   }
 }
 async function deleteMaterial(material) {
@@ -864,12 +1022,18 @@ async function revealAnswer(q) {
         q.correctAnswer.trim().toLowerCase()
       : null
   try {
-    await studyAPI.updateQuestion(q._id, {
-      userAnswer: q._uiAnswer || '',
-      answeredCorrectly: isCorrect,
-    })
-    q.userAnswer = q._uiAnswer
-    q.answeredCorrectly = isCorrect
+    const { data } = q._uiAnswer
+      ? await studyAPI.checkQuestion(q._id, { answer: q._uiAnswer })
+      : await studyAPI.updateQuestion(q._id, {
+          userAnswer: q._uiAnswer || '',
+          answeredCorrectly: isCorrect,
+        })
+    if (data?.question) {
+      Object.assign(q, decorateQuestion(data.question), { _uiRevealed: true })
+    } else {
+      q.userAnswer = q._uiAnswer
+      q.answeredCorrectly = isCorrect
+    }
   } catch (err) {
     console.error('Update question failed', err)
   }
@@ -1051,6 +1215,8 @@ async function sendDoubt(rawQuestion) {
     const { data } = await studyAPI.topicDoubtChat(topic.value._id, {
       question,
       history,
+      contextMode: doubtContextMode.value,
+      materialIds: selectedMaterialIds.value,
     })
     // Prefer structured `answer` object; fall back to raw `reply` string.
     const normalized = normalizeDoubtAnswer(
@@ -1063,7 +1229,9 @@ async function sendDoubt(rawQuestion) {
       role: 'assistant',
       content: normalized.content,
       answerType: normalized.answerType,
-      materialNote: normalized.materialNote,
+      materialNote: data?.sources?.length
+        ? `Sources: ${data.sources.map((s) => s.title).join(', ')}`
+        : normalized.materialNote,
       followup: normalized.followup,
     })
   } catch (err) {
@@ -1087,10 +1255,37 @@ function sendFollowup(text) {
   sendDoubt(text)
 }
 
+async function deleteMemory(memory) {
+  if (!topic.value || !memory?._id) return
+  try {
+    await studyAPI.deleteTopicMemory(topic.value._id, memory._id)
+    memories.value = memories.value.filter((m) => m._id !== memory._id)
+  } catch (err) {
+    console.error('Delete memory failed', err)
+  }
+}
+
+async function clearMemory() {
+  if (!topic.value) return
+  try {
+    await studyAPI.clearTopicMemory(topic.value._id)
+    memories.value = []
+  } catch (err) {
+    console.error('Clear memory failed', err)
+  }
+}
+
 watch(() => props.topicId, () => {
-  activeTab.value = 'learn'
+  activeTab.value = tabFromUrl()
   doubtMessages.value = []
   loadTopicLearning()
+})
+
+watch(activeTab, (tab) => {
+  if (typeof window === 'undefined' || !TAB_IDS.includes(tab)) return
+  const url = new URL(window.location.href)
+  url.searchParams.set('tab', tab)
+  window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`)
 })
 
 onMounted(loadTopicLearning)
@@ -1695,6 +1890,26 @@ onMounted(loadTopicLearning)
 .tl-chat-bubble--loading { color: var(--text-muted); font-style: italic; }
 .tl-chat-form { display: flex; gap: 8px; margin-top: 12px; }
 .tl-chat-form .tl-input { flex: 1; }
+.tl-context-card,
+.tl-memory-card {
+  margin-bottom: 12px;
+}
+.tl-material-checks {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+.tl-material-checks label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+.tl-section-head--compact {
+  margin-bottom: 10px;
+}
 
 /* Notes */
 .tl-note-row .tl-note-content {

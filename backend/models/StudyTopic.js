@@ -9,6 +9,7 @@ const STATUS_VALUES = [
   "completed",
   "weak",
   "revision_due",
+  "archived",
 ];
 
 const studyTopicSchema = new mongoose.Schema(
@@ -23,6 +24,7 @@ const studyTopicSchema = new mongoose.Schema(
     title: { type: String, required: true, trim: true },
     subject: { type: String, default: "", trim: true },
     category: { type: String, default: "", trim: true },
+    description: { type: String, default: "", trim: true },
     difficulty: {
       type: String,
       enum: DIFFICULTY_VALUES,
@@ -38,6 +40,7 @@ const studyTopicSchema = new mongoose.Schema(
     lastStudiedAt: { type: Date, default: null },
     nextRevisionAt: { type: Date, default: null },
     order: { type: Number, default: 0 },
+    tags: [{ type: String, trim: true }],
   },
   { timestamps: true }
 );

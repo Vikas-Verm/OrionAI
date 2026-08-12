@@ -76,6 +76,10 @@ const WHATSAPP_LOGIN_STATE_VALUES = new Set([
   "connected",
   "error",
 ]);
+const WHATSAPP_RESUMABLE_LOGIN_STATES = new Set([
+  "logging_in",
+  "pending_qr",
+]);
 const BRIDGE_SUCCESS_RE =
   /\b(successfully logged in|logged in as|login successful|connected to whatsapp|linked successfully|already logged in|session restored)\b/i;
 const BRIDGE_QR_RE =
@@ -126,6 +130,30 @@ function defaultWhatsAppDeviceName() {
 
 function nowTs() {
   return Date.now();
+}
+
+function shouldResumeWhatsAppProvisioningLogin(config = {}) {
+  const mxid = String(config.mxid || "").trim();
+  return Boolean(
+    mxid &&
+      WHATSAPP_RESUMABLE_LOGIN_STATES.has(String(config.loginState || ""))
+  );
+}
+
+function resumeWhatsAppProvisioningLogin(config = {}) {
+  const mxid = String(config.mxid || "").trim();
+  if (!mxid) return null;
+
+  const runner = provisioningLogin.getLoginState("whatsapp", mxid);
+  if (runner) return runner;
+  if (!shouldResumeWhatsAppProvisioningLogin(config)) {
+    return null;
+  }
+
+  // QR runners are process-local. Resume an unfinished persisted login after
+  // a backend restart so the Integrations page never remains stuck in
+  // "logging in" without a scannable QR.
+  return provisioningLogin.startLogin("whatsapp", mxid);
 }
 
 const SIGNAL_GHOST_RE = /^@signal_[^:]+:/i;
@@ -3924,11 +3952,9 @@ async function connectWhatsAppIntegration(userId, payload = {}) {
         "whatsapp",
         config.mxid
       );
-      if (logoutResult.loggedOut || logoutResult.failed) {
-        console.log(
-          "[WhatsApp connect] Provisioning logout before fresh QR: loggedOut=%d failed=%d",
-          logoutResult.loggedOut,
-          logoutResult.failed
+      if (!logoutResult.ok) {
+        throw new Error(
+          "WhatsApp is still linked to the previous account. Disconnect it completely before connecting another account."
         );
       }
     }
@@ -4307,10 +4333,7 @@ async function getWhatsAppStatus(userId, { forceRefresh = false } = {}) {
   // (no more "Login failed: ... timed out" from a stale Matrix-room QR). When
   // no runner is active we fall through to the existing status path untouched.
   if (fallbackConfig.mxid) {
-    const runner = provisioningLogin.getLoginState(
-      "whatsapp",
-      fallbackConfig.mxid
-    );
+    const runner = resumeWhatsAppProvisioningLogin(fallbackConfig);
     if (runner) {
       if (runner.phase === "qr" || runner.phase === "starting") {
         const qrImageUrl =
@@ -6011,6 +6034,8 @@ module.exports = {
     isUsableTitle,
     buildWhatsAppPortalRoom,
     deriveWhatsAppConnectionState,
+    shouldResumeWhatsAppProvisioningLogin,
+    resumeWhatsAppProvisioningLogin,
     collectMemberMap,
     parseRoomEvents,
     buildRoomDescriptor,

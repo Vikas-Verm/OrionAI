@@ -27,6 +27,12 @@ const revisionItemSchema = new mongoose.Schema(
       default: "due",
       index: true,
     },
+    completedAt: { type: Date, default: null },
+    result: {
+      type: String,
+      enum: ["", "known", "weak", "partial"],
+      default: "",
+    },
   },
   { timestamps: true }
 );

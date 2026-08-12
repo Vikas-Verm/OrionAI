@@ -5,6 +5,30 @@ const assert = require("node:assert/strict");
 
 const { __test } = require("../services/signalMatrixService");
 
+test("unfinished Signal QR states can resume after a backend restart", () => {
+  assert.equal(
+    __test.shouldResumeSignalProvisioningLogin({
+      mxid: "@orion_u_test_signal:orion.local",
+      loginState: "logging_in",
+    }),
+    true
+  );
+  assert.equal(
+    __test.shouldResumeSignalProvisioningLogin({
+      mxid: "@orion_u_test_signal:orion.local",
+      loginState: "pending_qr",
+    }),
+    true
+  );
+  assert.equal(
+    __test.shouldResumeSignalProvisioningLogin({
+      mxid: "@orion_u_test_signal:orion.local",
+      loginState: "error",
+    }),
+    false
+  );
+});
+
 test("parseRoomEvents keeps QR image edits from the Signal bridge", () => {
   const roomId = "!signal-bridge:orion.local";
   const currentUserId = "@orion_u_test:orion.local";

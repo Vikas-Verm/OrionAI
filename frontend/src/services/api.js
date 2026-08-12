@@ -133,16 +133,22 @@ export const studyAPI = {
   overview: () => api.get("/api/study/overview"),
 
   listGoals: (params) => api.get("/api/study/goals", { params }),
+  getGoal: (goalId) => api.get(`/api/study/goals/${goalId}`),
   createGoal: (payload) => api.post("/api/study/goals", payload),
   updateGoal: (id, payload) => api.patch(`/api/study/goals/${id}`, payload),
+  deleteGoal: (id) => api.delete(`/api/study/goals/${id}`),
   suggestTopics: (goalId, payload = {}) =>
     api.post(`/api/study/goals/${goalId}/suggest-topics`, payload),
+  saveSuggestedTopics: (goalId, topics) =>
+    api.post(`/api/study/goals/${goalId}/save-suggested-topics`, { topics }),
 
   listTopics: (params) => api.get("/api/study/topics", { params }),
   getTopic: (id) => api.get(`/api/study/topics/${id}`),
   createTopic: (payload) => api.post("/api/study/topics", payload),
   createTopicsBulk: (payload) => api.post("/api/study/topics/bulk", payload),
   updateTopic: (id, payload) => api.patch(`/api/study/topics/${id}`, payload),
+  deleteTopic: (id) => api.delete(`/api/study/topics/${id}`),
+  startTopic: (id) => api.post(`/api/study/topics/${id}/start`),
   completeTopic: (id) => api.post(`/api/study/topics/${id}/complete`),
   moveTopicToTomorrow: (id) =>
     api.post(`/api/study/topics/${id}/move-to-tomorrow`),
@@ -150,12 +156,14 @@ export const studyAPI = {
   // Topic learning (Phase 2)
   getTopicLearning: (topicId) =>
     api.get(`/api/study/topics/${topicId}/learning`),
-  generateLesson: (topicId) =>
-    api.post(`/api/study/topics/${topicId}/generate-lesson`),
+  generateLesson: (topicId, payload = {}) =>
+    api.post(`/api/study/topics/${topicId}/generate-lesson`, payload),
   generateQuestions: (topicId, payload = {}) =>
     api.post(`/api/study/topics/${topicId}/generate-questions`, payload),
   updateQuestion: (id, payload) =>
     api.patch(`/api/study/questions/${id}`, payload),
+  checkQuestion: (id, payload) =>
+    api.post(`/api/study/questions/${id}/check`, payload),
   generateFlashcards: (topicId, payload = {}) =>
     api.post(`/api/study/topics/${topicId}/generate-flashcards`, payload),
   updateFlashcard: (id, payload) =>
@@ -163,11 +171,20 @@ export const studyAPI = {
   deleteFlashcard: (id) => api.delete(`/api/study/flashcards/${id}`),
   createTopicMaterial: (topicId, payload) =>
     api.post(`/api/study/topics/${topicId}/materials`, payload),
+  uploadMaterial: (formData, onUploadProgress) =>
+    api.post("/api/study/materials/upload", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+      onUploadProgress,
+    }),
   listMaterials: (params) =>
     api.get("/api/study/materials", { params }),
+  getMaterial: (id) => api.get(`/api/study/materials/${id}`),
   updateMaterial: (id, payload) =>
     api.patch(`/api/study/materials/${id}`, payload),
   deleteMaterial: (id) => api.delete(`/api/study/materials/${id}`),
+  retryMaterial: (id) => api.post(`/api/study/materials/${id}/retry-processing`),
+  listNotes: (topicId, params) =>
+    api.get(`/api/study/topics/${topicId}/notes`, { params }),
   createNote: (topicId, payload) =>
     api.post(`/api/study/topics/${topicId}/notes`, payload),
   updateNote: (id, payload) => api.patch(`/api/study/notes/${id}`, payload),
@@ -175,15 +192,36 @@ export const studyAPI = {
   updateTopicProgress: (topicId, payload) =>
     api.patch(`/api/study/topics/${topicId}/progress`, payload),
   topicDoubtChat: (topicId, payload) =>
-    api.post(`/api/study/topics/${topicId}/doubt-chat`, payload),
+    api.post(`/api/study/topics/${topicId}/doubt`, payload),
 
   generateTodaysPlan: (payload = {}) =>
     api.post("/api/study/plan/today", payload),
+  completePlanItem: (itemId, payload = {}) =>
+    api.post(`/api/study/plan/items/${itemId}/complete`, payload),
+  skipPlanItem: (itemId) => api.post(`/api/study/plan/items/${itemId}/skip`),
+  consistency: (params) => api.get("/api/study/consistency", { params }),
+  consistencySummary: () => api.get("/api/study/consistency/summary"),
 
   listRevisions: (params) => api.get("/api/study/revision", { params }),
   completeRevision: (id) => api.post(`/api/study/revision/${id}/complete`),
+  reviewLaterRevision: (id, days = 1) =>
+    api.post(`/api/study/revision/${id}/review-later`, { days }),
   snoozeRevision: (id, days = 1) =>
     api.post(`/api/study/revision/${id}/snooze`, { days }),
+  getTopicMemory: (topicId) => api.get(`/api/study/topics/${topicId}/memory`),
+  deleteTopicMemory: (topicId, memoryId) =>
+    api.delete(`/api/study/topics/${topicId}/memory/${memoryId}`),
+  clearTopicMemory: (topicId) => api.delete(`/api/study/topics/${topicId}/memory`),
+  getPreTopicReview: (topicId) =>
+    api.get(`/api/study/topics/${topicId}/pre-topic-review`),
+  generatePreTopicReview: (topicId, payload = {}) =>
+    api.post(`/api/study/topics/${topicId}/pre-topic-review/generate`, payload),
+  answerPreTopicReview: (reviewId, payload) =>
+    api.post(`/api/study/pre-topic-review/${reviewId}/answer`, payload),
+  completePreTopicReview: (reviewId) =>
+    api.post(`/api/study/pre-topic-review/${reviewId}/complete`),
+  skipPreTopicReview: (reviewId) =>
+    api.post(`/api/study/pre-topic-review/${reviewId}/skip`),
 };
 
 export function streamAgentRun(steps, sessionId, userMessage, signal) {

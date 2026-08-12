@@ -56,6 +56,10 @@ const SIGNAL_LOGIN_STATE_VALUES = new Set([
   "connected",
   "error",
 ]);
+const SIGNAL_RESUMABLE_LOGIN_STATES = new Set([
+  "logging_in",
+  "pending_qr",
+]);
 const BRIDGE_SUCCESS_RE =
   /\b(successfully logged in|logged in as|already logged in|login successful|connected to signal|linked successfully)\b/i;
 const BRIDGE_QR_RE = /\b(qr code|scan .*qr|linked devices|link a device)\b/i;
@@ -173,6 +177,28 @@ function buildHiddenSignalPassword(userId = "") {
 
 function nowTs() {
   return Date.now();
+}
+
+function shouldResumeSignalProvisioningLogin(config = {}) {
+  const mxid = String(config.mxid || "").trim();
+  return Boolean(
+    mxid && SIGNAL_RESUMABLE_LOGIN_STATES.has(String(config.loginState || ""))
+  );
+}
+
+function resumeSignalProvisioningLogin(config = {}) {
+  const mxid = String(config.mxid || "").trim();
+  if (!mxid) return null;
+
+  const runner = provisioningLogin.getLoginState("signal", mxid);
+  if (runner) return runner;
+  if (!shouldResumeSignalProvisioningLogin(config)) {
+    return null;
+  }
+
+  // Runners live only in this Node process. Recover a persisted in-flight
+  // login after a backend restart instead of returning a stale status forever.
+  return provisioningLogin.startLogin("signal", mxid);
 }
 
 function normalizeTimestampMs(value = 0) {
@@ -2920,11 +2946,9 @@ async function connectSignalIntegration(userId, payload = {}) {
         "signal",
         config.mxid
       );
-      if (logoutResult.loggedOut || logoutResult.failed) {
-        console.log(
-          "[Signal connect] Provisioning logout before fresh QR: loggedOut=%d failed=%d",
-          logoutResult.loggedOut,
-          logoutResult.failed
+      if (!logoutResult.ok) {
+        throw new Error(
+          "Signal is still linked to the previous account. Disconnect it completely before connecting another account."
         );
       }
     }
@@ -3165,7 +3189,7 @@ async function getSignalStatus(userId, { forceRefresh = false } = {}) {
   // Matrix-room copy. When there is no active runner we fall through to the
   // existing Matrix status path untouched.
   if (fallbackConfig.mxid) {
-    const runner = provisioningLogin.getLoginState("signal", fallbackConfig.mxid);
+    const runner = resumeSignalProvisioningLogin(fallbackConfig);
     if (runner) {
       if (runner.phase === "qr" || runner.phase === "starting") {
         const qrImageUrl =
@@ -4424,5 +4448,7 @@ module.exports = {
     extractBridgeRoomState,
     buildSignalQrDataUrl,
     hasDeadSignalProvisioningLogin,
+    shouldResumeSignalProvisioningLogin,
+    resumeSignalProvisioningLogin,
   },
 };

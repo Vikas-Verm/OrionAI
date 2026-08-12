@@ -5,6 +5,30 @@ const assert = require("node:assert/strict");
 
 const { __test } = require("../services/whatsappMatrixService");
 
+test("unfinished WhatsApp QR states can resume after a backend restart", () => {
+  assert.equal(
+    __test.shouldResumeWhatsAppProvisioningLogin({
+      mxid: "@orion_u_test_whatsapp:orion.local",
+      loginState: "logging_in",
+    }),
+    true
+  );
+  assert.equal(
+    __test.shouldResumeWhatsAppProvisioningLogin({
+      mxid: "@orion_u_test_whatsapp:orion.local",
+      loginState: "pending_qr",
+    }),
+    true
+  );
+  assert.equal(
+    __test.shouldResumeWhatsAppProvisioningLogin({
+      mxid: "@orion_u_test_whatsapp:orion.local",
+      loginState: "error",
+    }),
+    false
+  );
+});
+
 test("parseRoomEvents keeps QR image edits from the WhatsApp bridge", () => {
   const roomId = "!whatsapp-bridge:orion.local";
   const currentUserId = "@orion_u_test:orion.local";

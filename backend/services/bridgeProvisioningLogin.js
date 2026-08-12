@@ -40,6 +40,12 @@ const OVERALL_BUDGET_MS = 5 * 60 * 1000;
 // QR rotation (~20-46s) or immediately on scan, so this is just a safety net.
 const WAIT_TIMEOUT_MS = 130 * 1000;
 const START_TIMEOUT_MS = 25 * 1000;
+const LOGIN_CANCEL_TIMEOUT_MS = 30 * 1000;
+// A remote logout first closes an upstream websocket and only then removes
+// its login row. Short client timeouts interrupt that cleanup mid-flight.
+const LOGOUT_TIMEOUT_MS = 60 * 1000;
+const LOGOUT_VERIFY_TIMEOUT_MS = 30 * 1000;
+const LOGOUT_VERIFY_INTERVAL_MS = 500;
 // Small delay before starting a fresh QR cycle so we never hot-loop the bridge.
 const CYCLE_COOLDOWN_MS = 400;
 const WHOAMI_TIMEOUT_MS = 10 * 1000;
@@ -109,6 +115,9 @@ class ProvisioningLoginRunner {
     this.startedAt = 0;
     this.updatedAt = Date.now();
     this.stopped = false;
+    this.cancelRequested = false;
+    this._cancelPromise = null;
+    this._waitAbortController = null;
     this._loop = null;
   }
 
@@ -151,6 +160,9 @@ class ProvisioningLoginRunner {
     }
     this.force = Boolean(force);
     this.stopped = false;
+    this.cancelRequested = false;
+    this._cancelPromise = null;
+    this._waitAbortController = null;
     this.startedAt = Date.now();
     this._set({
       phase: "starting",
@@ -167,8 +179,57 @@ class ProvisioningLoginRunner {
     });
   }
 
-  stop() {
+  stop({ cancel = false } = {}) {
     this.stopped = true;
+    this.cancelRequested = this.cancelRequested || Boolean(cancel);
+    // display_and_wait is a long-poll. Abort it so a disconnect or retry does
+    // not leave this process tied up until the bridge's next QR rotation.
+    this._waitAbortController?.abort();
+  }
+
+  async _cancelRemoteLogin(loginId = this.loginId) {
+    const id = String(loginId || "").trim();
+    if (!id) return { ok: true, cancelled: false };
+    if (this._cancelPromise) return this._cancelPromise;
+
+    this._cancelPromise = (async () => {
+      try {
+        const r = await this._client().post(
+          `/login/cancel/${encodeURIComponent(id)}`,
+          "",
+          { timeout: LOGIN_CANCEL_TIMEOUT_MS }
+        );
+        const alreadyFinished = r.status === 404;
+        return {
+          ok: (r.status >= 200 && r.status < 300) || alreadyFinished,
+          cancelled: !alreadyFinished,
+          reason: alreadyFinished
+            ? "already_finished"
+            : r.data?.error || r.data?.errcode || `cancel_${r.status}`,
+        };
+      } catch (err) {
+        return {
+          ok: false,
+          cancelled: false,
+          reason: err?.message || "cancel_failed",
+        };
+      }
+    })();
+    return this._cancelPromise;
+  }
+
+  async cancel() {
+    this.stop({ cancel: true });
+    if (this.loginId) return this._cancelRemoteLogin();
+
+    // If cancel races with login/start, `_run` will cancel the process as
+    // soon as the bridge returns its ID.
+    if (this._loop) {
+      await Promise.race([this._loop, sleep(START_TIMEOUT_MS + 1000)]);
+    }
+    return this.loginId
+      ? this._cancelRemoteLogin()
+      : { ok: true, cancelled: false };
   }
 
   /** Fetch the bridge's authoritative list of logins for this Matrix user. */
@@ -266,6 +327,13 @@ class ProvisioningLoginRunner {
           continue;
         }
         resp = r.data;
+        this._set({
+          loginId: String(resp.login_id || this.loginId || ""),
+        });
+        if (this.stopped) {
+          if (this.cancelRequested) await this._cancelRemoteLogin(resp.login_id);
+          return;
+        }
       } catch (err) {
         // Bridge unreachable / transient — keep the UI in "starting" and retry.
         this._set({ phase: "starting", error: "" });
@@ -284,13 +352,18 @@ class ProvisioningLoginRunner {
             error: "",
           });
         }
+        const waitAbortController = new AbortController();
+        this._waitAbortController = waitAbortController;
         try {
           const r = await client.post(
             `/login/step/${encodeURIComponent(
               resp.login_id
             )}/${encodeURIComponent(resp.step_id)}/display_and_wait`,
             "",
-            { timeout: WAIT_TIMEOUT_MS }
+            {
+              timeout: WAIT_TIMEOUT_MS,
+              signal: waitAbortController.signal,
+            }
           );
           if (r.status !== 200 || !r.data) {
             // Terminal for this cycle (e.g. "too many QR code refreshes").
@@ -302,6 +375,10 @@ class ProvisioningLoginRunner {
           // Long-poll hiccup — drop out and start a clean cycle.
           resp = null;
           break;
+        } finally {
+          if (this._waitAbortController === waitAbortController) {
+            this._waitAbortController = null;
+          }
         }
       }
 
@@ -392,6 +469,18 @@ function stopLogin(network, mxid) {
   }
 }
 
+/** Cancel an unscanned QR process, if this backend owns one for the user. */
+async function cancelPendingLogin(network, mxid) {
+  const key = runnerKey(network, mxid);
+  const runner = runners.get(key);
+  if (!runner) return { ok: true, cancelled: false };
+  try {
+    return await runner.cancel();
+  } finally {
+    runners.delete(key);
+  }
+}
+
 function clearBridgeAccountState(network, mxid) {
   accountStateCache.delete(runnerKey(network, mxid));
 }
@@ -462,25 +551,50 @@ async function getBridgeAccountState(network, mxid) {
   return value;
 }
 
-async function logoutAllLogins(network, mxid) {
+async function logoutAllLogins(network, mxid, options = {}) {
   const m = String(mxid || "").trim();
   if (!m) {
-    return { ok: false, reason: "no_mxid", loggedOut: 0, failed: 0 };
+    return {
+      ok: false,
+      reason: "no_mxid",
+      loggedOut: 0,
+      failed: 0,
+      remaining: 0,
+    };
   }
 
-  stopLogin(network, m);
+  const cancellation = await cancelPendingLogin(network, m);
+  if (!cancellation.ok) {
+    return {
+      ok: false,
+      reason: cancellation.reason || "cancel_failed",
+      loggedOut: 0,
+      failed: 0,
+      remaining: 0,
+    };
+  }
   clearBridgeAccountState(network, m);
 
-  const client = provisionClient(network, m);
+  const client = options.client || provisionClient(network, m);
+  const requestTimeoutMs = Number(
+    options.requestTimeoutMs || LOGOUT_TIMEOUT_MS
+  );
+  const verifyTimeoutMs = Number(
+    options.verifyTimeoutMs ?? LOGOUT_VERIFY_TIMEOUT_MS
+  );
+  const verifyIntervalMs = Number(
+    options.verifyIntervalMs ?? LOGOUT_VERIFY_INTERVAL_MS
+  );
   let logins = [];
   try {
-    const r = await client.get("/whoami", { timeout: WHOAMI_TIMEOUT_MS });
+    const r = await client.get("/whoami", { timeout: requestTimeoutMs });
     if (r.status !== 200 || !Array.isArray(r.data?.logins)) {
       return {
         ok: false,
         reason: r.data?.error || r.data?.errcode || `whoami_${r.status}`,
         loggedOut: 0,
         failed: 0,
+        remaining: 0,
       };
     }
     logins = r.data.logins;
@@ -490,6 +604,7 @@ async function logoutAllLogins(network, mxid) {
       reason: err?.message || "whoami_failed",
       loggedOut: 0,
       failed: 0,
+      remaining: 0,
     };
   }
 
@@ -500,7 +615,7 @@ async function logoutAllLogins(network, mxid) {
     if (!id) continue;
     try {
       const r = await client.post(`/logout/${encodeURIComponent(id)}`, "", {
-        timeout: WHOAMI_TIMEOUT_MS,
+        timeout: requestTimeoutMs,
       });
       if (r.status >= 200 && r.status < 300) {
         loggedOut += 1;
@@ -512,14 +627,47 @@ async function logoutAllLogins(network, mxid) {
     }
   }
 
+  const deadline = Date.now() + Math.max(0, verifyTimeoutMs);
+  let remaining = logins.length;
+  let verificationReason = "";
+  do {
+    try {
+      const r = await client.get("/whoami", { timeout: requestTimeoutMs });
+      if (r.status !== 200 || !Array.isArray(r.data?.logins)) {
+        verificationReason =
+          r.data?.error || r.data?.errcode || `whoami_${r.status}`;
+        break;
+      }
+      remaining = r.data.logins.filter((login) => String(login?.id || "").trim())
+        .length;
+      if (remaining === 0) {
+        clearBridgeAccountState(network, m);
+        return { ok: true, loggedOut, failed, remaining: 0 };
+      }
+    } catch (err) {
+      verificationReason = err?.message || "whoami_failed";
+      break;
+    }
+
+    if (Date.now() >= deadline) break;
+    await sleep(Math.max(0, verifyIntervalMs));
+  } while (Date.now() <= deadline);
+
   clearBridgeAccountState(network, m);
-  return { ok: failed === 0, loggedOut, failed };
+  return {
+    ok: false,
+    reason: verificationReason || "logout_incomplete",
+    loggedOut,
+    failed,
+    remaining,
+  };
 }
 
 module.exports = {
   startLogin,
   getLoginState,
   stopLogin,
+  cancelPendingLogin,
   getBridgeAccountState,
   logoutAllLogins,
   clearBridgeAccountState,
