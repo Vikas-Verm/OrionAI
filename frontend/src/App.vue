@@ -1,6 +1,7 @@
 <template>
   <div>
-    <LoginScreen v-if="!isLoggedIn" @success="onLoginSuccess" />
+    <LandingPage v-if="showPublicLanding" @navigate="onPublicNavigate" />
+    <LoginScreen v-else-if="!isLoggedIn" :initial-tab="publicAuthMode" @success="onLoginSuccess" />
     <ConnectAppsOnboarding
       v-else-if="activeOnboardingRoute === 'connect-apps'"
       @complete="onOnboardingStepComplete"
@@ -178,6 +179,7 @@ import html2pdf from 'html2pdf.js'
 
 // Layout
 import LoginScreen from './components/auth/LoginScreen.vue'
+import LandingPage from './components/landing/LandingPage.vue'
 import ConnectAppsOnboarding from './components/onboarding/ConnectAppsOnboarding.vue'
 import SyncingOnboarding from './components/onboarding/SyncingOnboarding.vue'
 import Sidebar from './components/layout/MainSidebar.vue'
@@ -212,6 +214,18 @@ import AgentConfirmModal from './components/agent/AgentConfirmModal.vue'
 
 const isLoggedIn = computed(() => !!store.token && !!store.user)
 const authBooting = ref(Boolean(store.token))
+const PUBLIC_AUTH_PATHS = Object.freeze({
+  '/login': 'signin',
+  '/signup': 'signup',
+})
+
+function readPublicRoute(pathname = typeof window === 'undefined' ? '/' : window.location?.pathname) {
+  return PUBLIC_AUTH_PATHS[normalizePathname(pathname || '/')] || 'landing'
+}
+
+const publicRoute = ref(readPublicRoute())
+const publicAuthMode = computed(() => publicRoute.value === 'signup' ? 'signup' : 'signin')
+const showPublicLanding = computed(() => !isLoggedIn.value && !authBooting.value && publicRoute.value === 'landing')
 
 // Composables
 const { loadSessions, startNewChat, switchSession: _switchSession, deleteSession } = useSession()
@@ -468,6 +482,10 @@ watch(
 
 // Browser back/forward — sync state to the new URL so the UI updates.
 async function handlePopState() {
+  if (!isLoggedIn.value) {
+    publicRoute.value = readPublicRoute()
+    return
+  }
   const next = readInitialRouteFromLocation()
   if (next.onboardingRoute) {
     activeOnboardingRoute.value = next.onboardingRoute
@@ -745,6 +763,7 @@ onMounted(async () => {
     }
   } else {
     authBooting.value = false
+    publicRoute.value = readPublicRoute()
   }
 })
 
@@ -788,11 +807,18 @@ async function onLoginSuccess(payload = {}) {
   }
 }
 
+function onPublicNavigate(destination) {
+  const isSignUp = destination === 'signup'
+  publicRoute.value = isSignUp ? 'signup' : 'signin'
+  pushRouteIfChanged(isSignUp ? '/signup' : '/login')
+}
+
 function logout() {
   stop()
   clearAuth()
   delete api.defaults.headers.common['Authorization']
   authBooting.value = false
+  publicRoute.value = 'landing'
   resetSurfaceState()
   pushRouteIfChanged('/')
 }
