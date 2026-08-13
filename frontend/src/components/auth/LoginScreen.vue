@@ -335,9 +335,16 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import api from '../../services/api'
 import { setAuth } from '../../stores/app'
 
+const props = defineProps({
+  initialTab: {
+    type: String,
+    default: 'signin',
+    validator: (value) => ['signin', 'signup'].includes(value),
+  },
+})
 const emit = defineEmits(['success'])
 
-const activeTab = ref('signin')
+const activeTab = ref(props.initialTab)
 const signInLoading = ref(false)
 const signUpLoading = ref(false)
 const googleLoading = ref(false)
@@ -392,6 +399,10 @@ const googleFallbackHint = computed(() => {
 watch(activeTab, () => {
   fieldErrors.value = {}
   feedback.value = { tone: 'error', message: '' }
+})
+
+watch(() => props.initialTab, (nextTab) => {
+  if (nextTab && nextTab !== activeTab.value) activeTab.value = nextTab
 })
 
 onMounted(async () => {
