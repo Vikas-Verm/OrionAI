@@ -7,6 +7,18 @@ const { authenticate } = require("../middleware/auth");
 const Integration = require("../models/Integration");
 const provisioningLogin = require("../services/bridgeProvisioningLogin");
 const {
+  isWhatsAppV2ReadEnabled,
+  isWhatsAppV2HistoryEnabled,
+} = require("../services/messaging/messagingFeatureFlags");
+const {
+  assertVerifiedProviderRoom,
+  MessagingAuthorizationError,
+} = require("../services/messaging/messagingProviderAuthorization");
+const {
+  getWhatsAppRuntimeSyncStatus,
+  scheduleWhatsAppRuntimeSync,
+} = require("../services/messaging/whatsappRuntimeSyncService");
+const {
   connectWhatsAppIntegration,
   getWhatsAppStatus,
   listWhatsAppChats,
@@ -65,6 +77,32 @@ router.get("/status", async (req, res) => {
   }
 });
 
+router.get("/sync-status", async (req, res) => {
+  try {
+    const status = await getWhatsAppRuntimeSyncStatus(req.user?.username, {
+      trigger: true,
+    });
+    res.json(status);
+  } catch (err) {
+    console.error("WhatsApp sync status error:", err.message);
+    res.status(500).json({
+      state: "SYNC_FAILED",
+      remoteState: "UNKNOWN",
+      portalCount: 0,
+      discoveredPortalCount: 0,
+      eligibleConversationCount: 0,
+      verifiedCount: 0,
+      verifiedConversationCount: 0,
+      pendingConversationCount: 0,
+      ignoredCount: 0,
+      duplicateCount: 0,
+      failedCount: 0,
+      lastReconcileAt: null,
+      errorCode: "SYNC_STATUS_FAILED",
+    });
+  }
+});
+
 router.post("/disconnect", async (req, res) => {
   try {
     const userId = req.user?.username;
@@ -76,11 +114,17 @@ router.post("/disconnect", async (req, res) => {
         mxid
       );
       if (!logoutResult.ok) {
-        return res.status(409).json({
-          ok: false,
-          error:
-            "WhatsApp could not be fully disconnected. Please retry; OrionAI kept this integration so another account cannot be linked by mistake.",
-        });
+        const accountState = await provisioningLogin.getBridgeAccountState(
+          "whatsapp",
+          mxid
+        );
+        if (!accountState.ok || accountState.connected) {
+          return res.status(409).json({
+            ok: false,
+            error:
+              "WhatsApp could not be fully disconnected. Please retry; OrionAI kept this integration so another account cannot be linked by mistake.",
+          });
+        }
       }
     }
     await Integration.findOneAndDelete({
@@ -97,9 +141,10 @@ router.post("/disconnect", async (req, res) => {
 
 router.get("/chats", async (req, res) => {
   try {
+    scheduleWhatsAppRuntimeSync(req.user?.username);
     const chats = await listWhatsAppChats(req.user?.username, {
       search: req.query.search || "",
-      limit: Number(req.query.limit || 100),
+      limit: Math.max(1, Math.min(500, Number(req.query.limit || 500))),
     });
     res.json({ chats });
   } catch (err) {
@@ -151,15 +196,31 @@ router.get("/rooms/:roomId/messages", async (req, res) => {
     const result = from
       ? await getWhatsAppRoomHistory(req.user?.username, req.params.roomId, {
           from,
-          limit: Number(req.query.limit || 60),
+          limit: Number(req.query.limit || 25),
         })
       : await getWhatsAppRoomTimeline(req.user?.username, req.params.roomId, {
-          limit: Number(req.query.limit || 60),
+          limit: Number(req.query.limit || 25),
         });
+    const timing = result?._historyTiming;
+    if (timing) {
+      res.set(
+        "Server-Timing",
+        [
+          `auth;dur=${timing.authMs}`,
+          `session;dur=${timing.sessionMs}`,
+          `matrix;dur=${timing.matrixHistoryMs}`,
+          `metadata;dur=${timing.metadataMs}`,
+          `transform;dur=${timing.transformMs}`,
+          `total;dur=${timing.totalMs}`,
+        ].join(", ")
+      );
+    }
     res.json(result);
   } catch (err) {
     console.error("WhatsApp room messages error:", err.message);
-    res.status(400).json({ error: err.message });
+    res
+      .status(err instanceof MessagingAuthorizationError ? err.statusCode : 400)
+      .json({ error: err.message });
   }
 });
 
@@ -167,6 +228,13 @@ router.post("/messages", async (req, res) => {
   try {
     const roomRef =
       req.body?.chatId || req.body?.roomId || req.body?.contact || "";
+    if (isWhatsAppV2HistoryEnabled() && String(roomRef || "").startsWith("!")) {
+      await assertVerifiedProviderRoom({
+        userId: req.user?.username,
+        provider: "whatsapp",
+        roomId: roomRef,
+      });
+    }
     const result = await getWhatsAppRoomTimeline(req.user?.username, roomRef, {
       limit: Number(req.body?.limit || 30),
     });
@@ -180,7 +248,9 @@ router.post("/messages", async (req, res) => {
     });
   } catch (err) {
     console.error("WhatsApp messages error:", err.message);
-    res.status(400).json({ error: err.message });
+    res
+      .status(err instanceof MessagingAuthorizationError ? err.statusCode : 400)
+      .json({ error: err.message });
   }
 });
 
@@ -197,17 +267,22 @@ router.post("/send", async (req, res) => {
       }
     );
     res.json({
-      ok: true,
+      ok: result.remoteSent !== undefined ? Boolean(result.remoteSent) : true,
       chatId: result.roomId,
       roomId: result.roomId,
       msgId: result.eventId,
       eventId: result.eventId,
       to: roomRef,
       message: text,
+      status: result.status || null,
+      matrixAccepted: result.matrixAccepted,
+      remoteSent: result.remoteSent,
     });
   } catch (err) {
     console.error("WhatsApp send error:", err.message);
-    res.status(400).json({ error: err.message });
+    res
+      .status(err instanceof MessagingAuthorizationError ? err.statusCode : 400)
+      .json({ error: err.message });
   }
 });
 
@@ -224,7 +299,9 @@ router.post("/rooms/:roomId/send", async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error("WhatsApp room send error:", err.message);
-    res.status(400).json({ error: err.message });
+    res
+      .status(err instanceof MessagingAuthorizationError ? err.statusCode : 400)
+      .json({ error: err.message });
   }
 });
 
@@ -267,7 +344,9 @@ router.post(
       res.json(result);
     } catch (err) {
       console.error("WhatsApp upload error:", err.message);
-      res.status(400).json({ error: err.message });
+      res
+        .status(err instanceof MessagingAuthorizationError ? err.statusCode : 400)
+        .json({ error: err.message });
     }
   }
 );

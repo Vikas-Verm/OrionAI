@@ -829,9 +829,14 @@ async function startWhatsAppListener(userId) {
 
   let waitForWhatsAppActivity;
   let invalidateWhatsAppCache;
+  let getWhatsAppRoomTimeline;
   let getWhatsAppConnectionState;
   try {
-    ({ waitForWhatsAppActivity, invalidateWhatsAppCache } = require("./whatsappMatrixService"));
+    ({
+      waitForWhatsAppActivity,
+      invalidateWhatsAppCache,
+      getWhatsAppRoomTimeline,
+    } = require("./whatsappMatrixService"));
     ({ getWhatsAppConnectionState } = require("./integrationConnectionState"));
   } catch (err) {
     whatsappListeners.delete(userId);
@@ -870,7 +875,12 @@ async function startWhatsAppListener(userId) {
         listener.status = "active";
 
         try {
-          const { nextBatch, hasNewActivity } = await waitForWhatsAppActivity(
+          const {
+            nextBatch,
+            hasNewActivity,
+            activities = [],
+            hasNewPortal = false,
+          } = await waitForWhatsAppActivity(
             userId,
             { since, timeoutMs: LONG_POLL_MS }
           );
@@ -885,6 +895,19 @@ async function startWhatsAppListener(userId) {
                 invalidateWhatsAppCache(userId);
               }
             } catch {}
+            for (const activity of activities) {
+              await routeVerifiedWhatsAppActivity({
+                userId,
+                activity,
+                getTimeline: getWhatsAppRoomTimeline,
+              }).catch(() => false);
+            }
+            if (hasNewPortal) {
+              try {
+                require("./messaging/whatsappRuntimeSyncService")
+                  .scheduleWhatsAppRuntimeSync(userId, { force: true });
+              } catch {}
+            }
             // Mirror the Gmail-webhook pattern: trigger an immediate poll which
             // diffs + broadcasts notification_update for whatsapp.
             await refreshUserSignals(userId).catch(() => {});
@@ -904,6 +927,53 @@ async function startWhatsAppListener(userId) {
   })();
 
   console.log(`✅ WhatsApp real-time listener started for ${userId}`);
+}
+
+async function routeVerifiedWhatsAppActivity({
+  userId,
+  activity,
+  getTimeline,
+  authorize = null,
+  conversationRepo = null,
+  push = pushToUser,
+} = {}) {
+  const authorization = authorize || require("./messaging/messagingProviderAuthorization").assertVerifiedProviderRoom;
+  const repository = conversationRepo || require("./messaging/messagingConversationRepository");
+  if (!activity?.roomId || !activity?.eventId || typeof getTimeline !== "function") {
+    return false;
+  }
+  await authorization({
+    userId,
+    provider: "whatsapp",
+    roomId: activity.roomId,
+  });
+  const timeline = await getTimeline(userId, activity.roomId, { limit: 50 });
+  const message = (timeline.messages || []).find(
+    (entry) => String(entry.id || entry.eventId) === String(activity.eventId)
+  );
+  if (!message || message.direction === "outbound") return false;
+  await repository.updateConversationMetadata({
+    userId,
+    provider: "whatsapp",
+    matrixRoomId: activity.roomId,
+    lastActivityAt: message.timestamp || new Date(),
+    lastEventId: activity.eventId,
+    avatarMxc: timeline.room?.avatarMxc || "",
+  });
+  push(userId, {
+    type: "whatsapp_message",
+    provider: "whatsapp",
+    roomId: activity.roomId,
+    eventId: activity.eventId,
+    message,
+    conversation: {
+      roomId: activity.roomId,
+      title: timeline.room?.title || timeline.room?.name || "",
+      avatarUrl: timeline.room?.avatarUrl || "",
+      lastActivityAt: message.timestamp || null,
+    },
+  });
+  return true;
 }
 
 async function startSignalListener(userId) {
@@ -1323,4 +1393,7 @@ module.exports = {
   handleGmailWebhook,
   handleSlackWebhook,
   clearAppPollState,
+  __test: {
+    routeVerifiedWhatsAppActivity,
+  },
 };

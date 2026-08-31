@@ -91,7 +91,7 @@ network:
         # How many conversations should the bridge create after login?
         # If -1, all conversations received from history sync will be bridged.
         # Other conversations will be backfilled on demand when receiving a message.
-        max_initial_conversations: 50
+        max_initial_conversations: -1
         # Should the bridge request a full sync from the phone when logging in?
         # This bumps the size of history syncs from 3 months to 1 year.
         request_full_sync: false
@@ -308,7 +308,7 @@ homeserver:
     # The address that this appservice can use to connect to the homeserver.
     # Local addresses without HTTPS are generally recommended when the bridge is running on the same machine,
     # but https also works if they run on different machines.
-    address: http://synapse:8008
+    address: http://synapse-postgres-test:8008
     # The domain of the homeserver (also known as server_name, used for MXIDs, etc).
     domain: orion.local
     
@@ -324,7 +324,7 @@ homeserver:
     # It will make one request when receiving the message (step BRIDGE), one after decrypting if applicable
     # (step DECRYPTED) and one after sending to the remote network (step REMOTE). Errors will also be reported.
     # The bridge will use the appservice as_token to authorize requests.
-    message_send_checkpoint_endpoint:
+    message_send_checkpoint_endpoint: http://host.docker.internal:3000/internal/messaging/matrix-send-checkpoint
     # Does the homeserver support https://github.com/matrix-org/matrix-spec-proposals/pull/2246?
     async_media: false
     

@@ -8,6 +8,24 @@ const Database = require("better-sqlite3");
 const { Pool: PgPool } = require("pg");
 const Integration = require("../models/Integration");
 const provisioningLogin = require("./bridgeProvisioningLogin");
+const messagingConnectionRepository = require("./messaging/messagingConnectionRepository");
+const messagingConversationRepository = require("./messaging/messagingConversationRepository");
+const {
+  DISPLAY_NAME_SOURCES,
+  mergeConversationMetadata,
+} = require("./messaging/messagingConversationMetadata");
+const {
+  isWhatsAppV2ReadEnabled,
+  isWhatsAppV2HistoryEnabled,
+  isWhatsAppV2SendEnabled,
+} = require("./messaging/messagingFeatureFlags");
+const {
+  assertVerifiedProviderRoom,
+} = require("./messaging/messagingProviderAuthorization");
+const {
+  CHECKPOINT_SEND_STATUSES,
+  createPendingSend,
+} = require("./messaging/matrixSendCheckpointStore");
 const {
   findBestCommunicationMatch,
   normalizeDigits,
@@ -30,6 +48,8 @@ const {
 
 const WHATSAPP_SYNC_CACHE = new Map();
 const WHATSAPP_SYNC_CACHE_TTL_MS = 10 * 1000;
+const WHATSAPP_HISTORY_CONTEXT_CACHE = new Map();
+const WHATSAPP_HISTORY_CONTEXT_CACHE_TTL_MS = 15 * 1000;
 const WHATSAPP_QR_CACHE = new Map();
 const WHATSAPP_QR_CACHE_TTL_MS = 60 * 1000;
 const WHATSAPP_BRIDGE_JOIN_BATCH_SIZE = 80;
@@ -68,6 +88,26 @@ const MATRIX_DEFAULT_TIMEOUT_MS = 30_000;
 const MATRIX_SYNC_TIMEOUT_MS = 45_000;
 const MATRIX_BRIDGE_COMMAND_TIMEOUT_MS = 45_000;
 const MATRIX_MEDIA_TIMEOUT_MS = 90_000;
+const WHATSAPP_INITIAL_HISTORY_LIMIT = 25;
+const WHATSAPP_MAX_HISTORY_PAGE_LIMIT = 50;
+const WHATSAPP_HISTORY_EVENT_FILTER = JSON.stringify({
+  types: [
+    "m.room.message",
+    "m.sticker",
+    "m.reaction",
+    "m.room.redaction",
+    "m.room.encrypted",
+    "com.beeper.message_send_status",
+  ],
+});
+const WHATSAPP_REMOTE_CONFIRM_TIMEOUT_MS = Math.max(
+  1_000,
+  Number(process.env.MESSAGING_V2_WHATSAPP_REMOTE_CONFIRM_TIMEOUT_MS || 30_000)
+);
+const WHATSAPP_SEND_RESPONSE_TIMEOUT_MS = Math.max(
+  1_000,
+  Number(process.env.MESSAGING_V2_WHATSAPP_SEND_RESPONSE_TIMEOUT_MS || 2_500)
+);
 const WHATSAPP_LOGIN_STATE_VALUES = new Set([
   "disconnected",
   "creating_account",
@@ -82,6 +122,31 @@ const WHATSAPP_RESUMABLE_LOGIN_STATES = new Set([
 ]);
 const BRIDGE_SUCCESS_RE =
   /\b(successfully logged in|logged in as|login successful|connected to whatsapp|linked successfully|already logged in|session restored)\b/i;
+
+let cachedWhatsAppCommandPrefix = "";
+
+function getWhatsAppCommandPrefix() {
+  if (cachedWhatsAppCommandPrefix) return cachedWhatsAppCommandPrefix;
+  const configPath = path.resolve(__dirname, "../../infra/mautrix-whatsapp/config.yaml");
+  try {
+    const contents = fs.readFileSync(configPath, "utf8");
+    cachedWhatsAppCommandPrefix =
+      String(contents.match(/^\s*command_prefix:\s*["']?([^\s"']+)["']?\s*$/m)?.[1] || "").trim() ||
+      "!whatsapp";
+  } catch {
+    cachedWhatsAppCommandPrefix = "!whatsapp";
+  }
+  return cachedWhatsAppCommandPrefix;
+}
+
+function formatWhatsAppBridgeCommand(command = "") {
+  const body = String(command || "").trim();
+  if (!body) return "";
+  const prefix = getWhatsAppCommandPrefix();
+  return body === prefix || body.startsWith(`${prefix} `)
+    ? body
+    : `${prefix} ${body}`;
+}
 const BRIDGE_QR_RE =
   /\b(qr code|scan .*qr|linked devices|link a device|scan this code)\b/i;
 const BRIDGE_ERROR_RE =
@@ -329,21 +394,28 @@ async function assertWhatsAppRoom(userId, roomId) {
     timelineLimit: 20,
   });
 
-  if (!descriptor || descriptor.isManagement) {
+  const integration = await ensureWhatsAppIntegration(userId).catch(
+    () => null
+  );
+  const config = integration ? buildConfigFromIntegration(integration) : null;
+  const bridgeSnapshot = config
+    ? (await readWhatsAppBridgePostgresSnapshot(config.mxid)) ||
+      readWhatsAppBridgeSnapshot(config.mxid)
+    : null;
+  const bridgePortal = findWhatsAppPortalByRoomId(bridgeSnapshot, roomId);
+
+  if (!descriptor) {
+    const portalRoom = buildWhatsAppPortalRoom(bridgePortal);
+    if (portalRoom) return portalRoom;
     throw new Error("Invalid WhatsApp room.");
   }
 
-  if (!descriptor.isWhatsAppRoom) {
-    const integration = await ensureWhatsAppIntegration(userId).catch(
-      () => null
-    );
-    const config = integration ? buildConfigFromIntegration(integration) : null;
-    const bridgeSnapshot = config
-      ? readWhatsAppBridgeSnapshot(config.mxid)
-      : null;
-    if (!findWhatsAppPortalByRoomId(bridgeSnapshot, roomId)) {
-      throw new Error("Invalid WhatsApp room.");
-    }
+  if (descriptor.isManagement) {
+    throw new Error("Invalid WhatsApp room.");
+  }
+
+  if (!descriptor.isWhatsAppRoom && !bridgePortal) {
+    throw new Error("Invalid WhatsApp room.");
   }
 
   return descriptor.room;
@@ -419,6 +491,8 @@ function getWhatsAppPgPool() {
  */
 const WHATSAPP_PG_LOGIN_CACHE = new Map();
 const WHATSAPP_PG_LOGIN_CACHE_TTL_MS = 10_000;
+const WHATSAPP_PG_SNAPSHOT_CACHE = new Map();
+const WHATSAPP_PG_SNAPSHOT_CACHE_TTL_MS = 5_000;
 
 async function readWhatsAppBridgePostgresLogin(matrixMxid = "") {
   const normalizedMxid = normalizeMxid(matrixMxid);
@@ -471,6 +545,75 @@ async function readWhatsAppBridgePostgresLogin(matrixMxid = "") {
     // Cache the null so we don't hammer a broken pool
     WHATSAPP_PG_LOGIN_CACHE.set(normalizedMxid, {
       expiresAt: nowTs() + WHATSAPP_PG_LOGIN_CACHE_TTL_MS,
+      value: null,
+    });
+    return null;
+  }
+}
+
+async function readWhatsAppBridgePostgresSnapshot(matrixMxid = "") {
+  const normalizedMxid = normalizeMxid(matrixMxid);
+  if (!normalizedMxid) return null;
+
+  const cached = WHATSAPP_PG_SNAPSHOT_CACHE.get(normalizedMxid);
+  if (cached && cached.expiresAt > nowTs()) return cached.value;
+
+  const pool = getWhatsAppPgPool();
+  if (!pool) return null;
+
+  try {
+    const loginResult = await pool.query(
+      `SELECT user_mxid, id, remote_name, remote_profile, space_room, metadata
+       FROM user_login
+       WHERE user_mxid = $1
+       ORDER BY remote_name DESC
+       LIMIT 1`,
+      [normalizedMxid]
+    );
+    const loginRow = loginResult.rows?.[0] || null;
+    if (!loginRow) {
+      WHATSAPP_PG_SNAPSHOT_CACHE.set(normalizedMxid, {
+        expiresAt: nowTs() + WHATSAPP_PG_SNAPSHOT_CACHE_TTL_MS,
+        value: null,
+      });
+      return null;
+    }
+
+    const portalResult = await pool.query(
+      `SELECT
+         up.portal_id,
+         up.portal_receiver,
+         up.in_space,
+         up.preferred,
+         p.mxid AS room_id,
+         p.name,
+         p.avatar_mxc,
+         p.room_type
+       FROM user_portal up
+       JOIN portal p
+         ON p.bridge_id = up.bridge_id
+        AND p.id = up.portal_id
+        AND p.receiver = up.portal_receiver
+       WHERE up.user_mxid = $1
+         AND up.login_id = $2
+       ORDER BY up.preferred DESC, NULLIF(p.name, ''), p.id`,
+      [normalizedMxid, String(loginRow.id || "").trim()]
+    );
+
+    const value = buildWhatsAppBridgeSnapshot(loginRow, portalResult.rows || []);
+    WHATSAPP_PG_SNAPSHOT_CACHE.set(normalizedMxid, {
+      expiresAt: nowTs() + WHATSAPP_PG_SNAPSHOT_CACHE_TTL_MS,
+      value,
+    });
+    return value;
+  } catch (err) {
+    console.warn(
+      "[WhatsApp PG] snapshot lookup failed for %s:",
+      normalizedMxid,
+      err.message
+    );
+    WHATSAPP_PG_SNAPSHOT_CACHE.set(normalizedMxid, {
+      expiresAt: nowTs() + WHATSAPP_PG_SNAPSHOT_CACHE_TTL_MS,
       value: null,
     });
     return null;
@@ -1577,10 +1720,19 @@ function isInternalWhatsAppBridgeCommandMessage(message = {}) {
   return false;
 }
 
-function buildMediaDescriptor(content = {}) {
+function addTimingMetric(metrics, key, startedAt) {
+  if (!metrics) return;
+  metrics[key] = Number(metrics[key] || 0) + (performance.now() - startedAt);
+}
+
+function buildMediaDescriptor(content = {}, metrics = null) {
+  const startedAt = performance.now();
   const msgtype = String(content.msgtype || "");
   const url = content.url || null;
-  if (!url && msgtype !== "m.location" && !content.geo_uri) return null;
+  if (!url && msgtype !== "m.location" && !content.geo_uri) {
+    addTimingMetric(metrics, "mediaUrlMs", startedAt);
+    return null;
+  }
 
   let type = "file";
   if (msgtype === "m.image" || content.info?.thumbnail_url) type = "image";
@@ -1596,7 +1748,7 @@ function buildMediaDescriptor(content = {}) {
     type = "audio";
   } else if (msgtype === "m.location") type = "location";
 
-  return {
+  const descriptor = {
     type,
     mxc: url,
     url: buildWhatsAppMediaUrl(url),
@@ -1611,6 +1763,8 @@ function buildMediaDescriptor(content = {}) {
     duration: Number(content.info?.duration || 0) || 0,
     geoUri: content.geo_uri || null,
   };
+  addTimingMetric(metrics, "mediaUrlMs", startedAt);
+  return descriptor;
 }
 
 function resolveMessageText(content = {}) {
@@ -1855,6 +2009,7 @@ function parseRoomEvents({
   bridgeBotMxid = "",
   selfGhostMxid = "",
   selfPhoneDigits = "",
+  historyMetrics = null,
 }) {
   const memberMap = collectMemberMap(roomData);
   const ownCtx = { currentUserId, selfGhostMxid, selfPhoneDigits };
@@ -1875,6 +2030,7 @@ function parseRoomEvents({
   const pendingReactions = new Map();
 
   const resolveSenderProfile = (sender = "") => {
+    const startedAt = performance.now();
     const normalizedSender = String(sender || "");
     const senderMeta = memberMap.get(normalizedSender) || null;
     const senderMember =
@@ -1884,14 +2040,16 @@ function parseRoomEvents({
       };
 
     if (isOwnWhatsAppMember(senderMember, ownCtx)) {
-      return {
+      const profile = {
         senderName: "You",
         senderAvatarUrl: "",
         fromMe: true,
       };
+      addTimingMetric(historyMetrics, "senderMetadataMs", startedAt);
+      return profile;
     }
 
-    return {
+    const profile = {
       senderName:
         String(senderMeta?.displayName || "").trim() ||
         (normalizedSender === bridgeBotMxid
@@ -1902,6 +2060,8 @@ function parseRoomEvents({
       senderAvatarUrl: buildWhatsAppMediaUrl(senderMeta?.avatarMxc || ""),
       fromMe: false,
     };
+    addTimingMetric(historyMetrics, "senderMetadataMs", startedAt);
+    return profile;
   };
 
   const applyReaction = (targetEventId, reactionEvent) => {
@@ -1951,7 +2111,7 @@ function parseRoomEvents({
           }
         : nextContent || {};
     const text = resolveMessageText(content);
-    const media = buildMediaDescriptor(content);
+    const media = buildMediaDescriptor(content, historyMetrics);
     target.text = text;
     target.previewText = text || summarizeEventContent(content);
     target.media = media;
@@ -2026,7 +2186,7 @@ function parseRoomEvents({
           }
         : event.content || {};
     const text = resolveMessageText(content);
-    const media = buildMediaDescriptor(content);
+    const media = buildMediaDescriptor(content, historyMetrics);
     const senderProfile = resolveSenderProfile(sender);
     const message = {
       id: String(event.event_id),
@@ -2239,6 +2399,7 @@ function buildRoomDescriptor({
   // ghosts of the connected user from member lists used for title/avatar.
   selfGhostMxid = "",
   selfPhoneDigits = "",
+  historyMetrics = null,
 }) {
   const memberMap = collectMemberMap(roomData);
   const memberIds = [...memberMap.keys()];
@@ -2349,6 +2510,7 @@ function buildRoomDescriptor({
       bridgeBotMxid,
       selfGhostMxid,
       selfPhoneDigits,
+      historyMetrics,
     }),
     roomData,
     currentUserId,
@@ -2894,6 +3056,11 @@ function invalidateWhatsAppCache(userId) {
     if (key.startsWith(`${userId}:`)) WHATSAPP_SYNC_CACHE.delete(key);
   }
   WHATSAPP_STATUS_CACHE.delete(userId);
+  for (const key of [...WHATSAPP_HISTORY_CONTEXT_CACHE.keys()]) {
+    if (key.startsWith(`${userId}:`)) {
+      WHATSAPP_HISTORY_CONTEXT_CACHE.delete(key);
+    }
+  }
   // NOTE: we deliberately do NOT clear WHATSAPP_CONTACT_SYNC_SENT here.
   // This function is called from ~18 call-sites (send message, load chats,
   // refresh, etc.) and clearing the one-shot flag causes `sync contacts` to
@@ -3011,7 +3178,7 @@ async function fetchSyncSnapshot(
  * it only answers "did something new happen?" — the actual chat refresh is done
  * by the existing poll path once this returns hasNewActivity=true.
  *
- * Returns: { nextBatch, hasNewActivity }
+ * Returns: { nextBatch, hasNewActivity, activities, hasNewPortal }
  * - nextBatch: the `next_batch` token to pass as `since` on the next call.
  * - hasNewActivity: true when an incoming message (from a non-self sender) or a
  *   new room invite appeared in this sync window.
@@ -3051,9 +3218,9 @@ async function waitForWhatsAppActivity(
   const data = response.data || {};
   const nextBatch = data.next_batch || since || "";
 
-  let hasNewActivity = false;
+  const activities = [];
   const joined = data.rooms?.join || {};
-  for (const room of Object.values(joined)) {
+  for (const [roomId, room] of Object.entries(joined)) {
     const events = room?.timeline?.events || [];
     for (const ev of events) {
       if (
@@ -3061,11 +3228,12 @@ async function waitForWhatsAppActivity(
         ev?.sender &&
         String(ev.sender) !== selfMxid
       ) {
-        hasNewActivity = true;
-        break;
+        activities.push({
+          roomId: String(roomId),
+          eventId: String(ev.event_id || ""),
+        });
       }
     }
-    if (hasNewActivity) break;
   }
 
   // New portal-room invites (a brand new WhatsApp chat) also count as activity.
@@ -3073,7 +3241,12 @@ async function waitForWhatsAppActivity(
     ? Object.keys(data.rooms.invite).length
     : 0;
 
-  return { nextBatch, hasNewActivity: hasNewActivity || inviteCount > 0 };
+  return {
+    nextBatch,
+    hasNewActivity: activities.length > 0 || inviteCount > 0,
+    activities,
+    hasNewPortal: inviteCount > 0,
+  };
 }
 
 async function getWhoAmI(userId) {
@@ -3219,7 +3392,9 @@ async function fetchRoomDescriptorById(
   if (!currentSnapshot?.config) return null;
 
   const directMap = parseDirectMap(currentSnapshot.data || {});
-  const bridgeSnapshot = readWhatsAppBridgeSnapshot(currentSnapshot.config.mxid);
+  const bridgeSnapshot =
+    (await readWhatsAppBridgePostgresSnapshot(currentSnapshot.config.mxid)) ||
+    readWhatsAppBridgeSnapshot(currentSnapshot.config.mxid);
   const selfPhone = await resolveWhatsAppSelfPhone(
     userId,
     currentSnapshot.config,
@@ -3657,8 +3832,15 @@ async function resolveBridgeState(
  * Best-effort. If the bridge is offline / not yet logged in, the underlying
  * sendBridgeTextCommand throws and the caller surfaces the error.
  */
-async function syncWhatsAppContacts(userId, options = {}) {
-  const result = await sendBridgeTextCommand(userId, "sync contacts", options);
+async function syncWhatsAppContacts(
+  userId,
+  { includeAvatars = true, ...options } = {}
+) {
+  const result = await sendBridgeTextCommand(
+    userId,
+    includeAvatars ? "sync contacts-with-avatars" : "sync contacts",
+    options
+  );
   invalidateWhatsAppCache(userId);
   return result;
 }
@@ -3667,7 +3849,7 @@ async function sendBridgeTextCommand(userId, command, { timeout = MATRIX_BRIDGE_
   const roomId = await ensureManagementRoom(userId);
   const content = {
     msgtype: "m.text",
-    body: String(command || "").trim(),
+    body: formatWhatsAppBridgeCommand(command),
   };
   if (!content.body) throw new Error("Bridge command is required.");
 
@@ -3896,7 +4078,7 @@ async function connectWhatsAppIntegration(userId, payload = {}) {
 
   try {
     const { integration } = await ensureWhatsAppAccess(userId, {
-      forceLogin: forceReconnect || !existingConfig?.accessToken,
+      forceLogin: !existingConfig?.accessToken,
     });
     const config = buildConfigFromIntegration(integration);
 
@@ -4270,6 +4452,8 @@ function buildStatusProfile({
   whoami = {},
   config = {},
   bridgeSnapshot = null,
+  accountState = null,
+  messagingConnection = null,
   // Fallback phone extracted from bridge bot's "Successfully logged in as +XXX"
   // message in the management room. Used when the SQLite snapshot is empty
   // (e.g. bridge is on Postgres) so the user's profile shows their phone
@@ -4280,8 +4464,20 @@ function buildStatusProfile({
   const resolvedPhone =
     bridgePhone || String(fallbackPhone || "").trim() || String(config.phone || "").trim();
   const bridgeDisplayName =
-    String(bridgeSnapshot?.profileName || "").trim() || resolvedPhone;
-  const avatarMxc = String(matrixProfile.avatar_url || "").trim();
+    String(
+      accountState?.name ||
+        accountState?.profile?.name ||
+        messagingConnection?.remoteAccountDisplay ||
+        bridgeSnapshot?.profileName ||
+        ""
+    ).trim() || resolvedPhone;
+  const validatedAccountAvatar =
+    String(messagingConnection?.remoteAccountAvatarState || "") === "available"
+      ? String(messagingConnection?.remoteAccountAvatarMxc || "").trim()
+      : "";
+  const avatarMxc =
+    validatedAccountAvatar ||
+    String(matrixProfile.avatar_url || "").trim();
 
   // Format the phone for display: "+91 9XXXX XXXXX"
   const displayPhone = resolvedPhone
@@ -4298,6 +4494,11 @@ function buildStatusProfile({
       localpartFromMxid(whoami.user_id || config.mxid),
     avatarUrl: buildWhatsAppMediaUrl(avatarMxc || ""),
     avatarMxc: avatarMxc || null,
+    avatarSource: validatedAccountAvatar
+      ? String(messagingConnection?.remoteAccountAvatarSource || "remote_profile")
+      : matrixProfile.avatar_url
+        ? "matrix_profile"
+        : "none",
     phone: displayPhone || resolvedPhone,
     profileName: String(
       bridgeSnapshot?.profileName || config.profileName || ""
@@ -4558,54 +4759,50 @@ async function getWhatsAppStatus(userId, { forceRefresh = false } = {}) {
       });
     }
 
+    // Runtime V2 bootstrap is idempotent and user-scoped. It creates the
+    // MessagingConnection and persists only strong portal reconciliation
+    // results, so newly linked accounts never depend on an operator CLI.
+    try {
+      const { scheduleWhatsAppRuntimeSync } = require("./messaging/whatsappRuntimeSyncService");
+      scheduleWhatsAppRuntimeSync(userId);
+    } catch {}
+
     // Light read of currently-known chats. Pass `selfPhone` so the listing
     // can filter out the user's own JID (Notes-to-Self chat).
     const rooms = await listWhatsAppChats(userId, {
-      limit: 120,
+      limit: 500,
       force: forceRefresh,
       bridgeSnapshot,
       selfPhone,
     }).catch(() => []);
 
-    // Profile fetch — fast and useful to surface name/avatar immediately.
-    // Strategy: the connected user's WHATSAPP profile picture lives on
-    // their bridge ghost (@whatsapp_<phone>:domain), NOT on their Matrix
-    // login user. So we try the ghost first, fall back to the Matrix login.
+    // The provisioning login profile is the authenticated remote account.
+    // A self-chat or arbitrary ghost must never be used as the account header.
     const whoami = await getWhoAmI(userId).catch(() => ({}));
-    let profile = {};
-    if (selfPhone) {
-      const selfGhostMxid = buildWhatsAppGhostMxid(normalizeDigits(selfPhone));
-      if (selfGhostMxid) {
-        profile = await getProfile(userId, selfGhostMxid).catch(() => ({}));
-      }
-    }
-    if (!profile?.avatar_url) {
-      // Fall back to the Matrix login user's profile (likely empty for
-      // hidden users but won't hurt to try)
-      const loginProfile = await getProfile(
-        userId,
-        whoami.user_id || config.mxid
-      ).catch(() => ({}));
-      profile = {
-        ...loginProfile,
-        // Prefer ghost displayname if we found one; ghost name = WhatsApp
-        // profile name, which is what the user wants to see
-        displayname: profile.displayname || loginProfile.displayname,
-        avatar_url: profile.avatar_url || loginProfile.avatar_url,
-      };
-    }
+    const profile = await getProfile(
+      userId,
+      whoami.user_id || config.mxid
+    ).catch(() => ({}));
+    const messagingConnection = await messagingConnectionRepository.findConnection({
+      userId,
+      provider: "whatsapp",
+    }).catch(() => null);
 
     const statusProfile = buildStatusProfile({
       matrixProfile: profile,
       whoami,
       config,
       bridgeSnapshot,
+      accountState: acctState,
+      messagingConnection,
       fallbackPhone: selfPhone,
     });
 
     if (
-      selfPhone &&
-      !phoneDigitsMatch(selfPhone, fallbackConfig.phone || config.phone || "")
+      (selfPhone &&
+        !phoneDigitsMatch(selfPhone, fallbackConfig.phone || config.phone || "")) ||
+      statusProfile.profileName !== fallbackConfig.profileName ||
+      statusProfile.avatarUrl !== fallbackConfig.avatarUrl
     ) {
       saveWhatsAppIntegration(
         userId,
@@ -4774,6 +4971,58 @@ function buildWhatsAppPlaceholderTimeline(room = {}) {
   };
 }
 
+function exactVerifiedTargetMatches(chats = [], target = "") {
+  const normalized = normalizeSearchValue(target);
+  if (!normalized) return [];
+  return chats.filter((chat) => {
+    const fields = [
+      chat.roomId,
+      chat.id,
+      chat.title,
+      chat.name,
+      chat.contactJid,
+      chat.canonicalContactJid,
+    ].filter(Boolean);
+    return fields.some((field) => normalizeSearchValue(field) === normalized);
+  });
+}
+
+async function resolveVerifiedWhatsAppRoomForOperation(userId, roomRef = "") {
+  const target = String(roomRef || "").trim();
+  if (!target) throw new Error("WhatsApp conversation is required.");
+
+  let roomId = target;
+  if (!target.startsWith("!")) {
+    const chats = await listVerifiedWhatsAppChatsFromIndex(userId, {
+      limit: 200,
+    });
+    const exactMatches = exactVerifiedTargetMatches(chats, target);
+    if (exactMatches.length > 1) {
+      throw new Error(
+        "Multiple verified WhatsApp conversations match that recipient. Open the exact conversation first."
+      );
+    }
+    const match = exactMatches[0] || resolveChatFromList(chats, target);
+    if (!match?.roomId) {
+      throw new Error("Verified WhatsApp conversation not found.");
+    }
+    roomId = match.roomId;
+  }
+
+  const authorization = await assertVerifiedProviderRoom({
+    userId,
+    provider: "whatsapp",
+    roomId,
+    requireConnected: true,
+  });
+
+  return {
+    roomId,
+    connection: authorization.connection,
+    conversation: authorization.conversation,
+  };
+}
+
 function findWhatsAppRoomByContact(matrixRooms = [], contact = {}) {
   const targetKey = buildWhatsAppContactKey(contact);
   const targetPhone = normalizeDigits(contact.phoneNumber || "");
@@ -4914,6 +5163,33 @@ async function requestWhatsAppPortalCreation(userId, contact = {}) {
   return attempted;
 }
 
+async function requestBridgeOwnedPortalCreation(userId, portal = {}) {
+  const portalId = String(portal.portalId || "").trim();
+  const loginId = String(portal.loginId || "").trim();
+  const remoteType = String(portal.remoteChatType || "").trim();
+  if (
+    !portalId ||
+    !loginId ||
+    portal.roomId ||
+    !["dm", "group"].includes(remoteType) ||
+    portal.duplicateAlias ||
+    portal.identityAmbiguous
+  ) {
+    return { attempted: false, reasonCode: "PORTAL_NOT_ELIGIBLE" };
+  }
+  if (!/@(s\.whatsapp\.net|lid|g\.us)$/i.test(portalId)) {
+    return { attempted: false, reasonCode: "REMOTE_CHAT_ID_INVALID" };
+  }
+  if (!shouldRequestWhatsAppPortal(userId, portal.canonicalRemoteChatKey || portalId)) {
+    return { attempted: false, reasonCode: "PORTAL_CREATE_BACKOFF" };
+  }
+  const result = await sendBridgeTextCommand(
+    userId,
+    `create-portal ${loginId} ${portalId}`
+  );
+  return { attempted: true, reasonCode: "PORTAL_CREATE_REQUESTED", ...result };
+}
+
 async function waitForWhatsAppContactRoom(
   userId,
   contact = {},
@@ -4924,7 +5200,7 @@ async function waitForWhatsAppContactRoom(
   while (nowTs() - startedAt < timeoutMs) {
     invalidateWhatsAppCache(userId);
     const rooms = await listWhatsAppChats(userId, {
-      limit: 200,
+      limit: 500,
       force: true,
     }).catch(() => []);
     const match = findWhatsAppRoomByContact(rooms, contact);
@@ -4936,6 +5212,248 @@ async function waitForWhatsAppContactRoom(
   }
 
   return null;
+}
+
+function conversationTypeIsGroup(type = "") {
+  const normalized = String(type || "").trim().toLowerCase();
+  return normalized === "group" || normalized === "broadcast";
+}
+
+function buildVerifiedWhatsAppChat(
+  mapping = {},
+  { mutedRoomSet = new Set(), room = null } = {}
+) {
+  const roomId = String(mapping.matrixRoomId || "").trim();
+  const metadata = mergeConversationMetadata(mapping, {
+    displayName: room?.title || room?.name || "",
+    displayNameSource: DISPLAY_NAME_SOURCES.ROOM_NAME,
+    avatarMxc: room?.avatarMxc || "",
+    avatarSource: room?.avatarMxc ? "room" : "none",
+    avatarState: room?.avatarMxc ? "unknown" : "missing",
+    lastActivityAt: room?.lastMessageAt || null,
+    lastEventId: room?.lastEventId || room?.latestMessageId || "",
+  });
+  const title = metadata.displayName || String(mapping.remoteChatId || "").trim() || "WhatsApp Chat";
+  const lastMessageAt = room?.lastMessageAt || metadata.lastActivityAt || null;
+  const usableAvatarMxc = ["broken", "missing"].includes(metadata.avatarState)
+    ? ""
+    : metadata.avatarMxc || "";
+
+  return {
+    roomId,
+    id: roomId,
+    title,
+    name: title,
+    avatarMxc: usableAvatarMxc,
+    avatarUrl: buildWhatsAppMediaUrl(usableAvatarMxc),
+    avatarSource: metadata.avatarSource,
+    avatarState: metadata.avatarState,
+    lastMessagePreview: room?.lastMessagePreview || room?.lastMessage || "",
+    lastMessageAt,
+    lastMessageTs: normalizeTimestampMs(lastMessageAt),
+    unreadCount: Number(room?.unreadCount || 0) || 0,
+    source: "whatsapp",
+    provider: "whatsapp",
+    isGroup: conversationTypeIsGroup(mapping.type),
+    isPinned: false,
+    isMuted: mutedRoomSet.has(roomId),
+    lastSender: room?.lastSender || "",
+    memberCount: Number(room?.memberCount || 0) || 0,
+    phoneNumber: "",
+    contactJid: String(mapping.remoteChatId || "").trim(),
+    canonicalContactJid: String(mapping.remoteChatId || "").trim(),
+    contactMxid: "",
+    bridgeStatus: "portal",
+    fullName: "",
+    pushName: "",
+    businessName: "",
+    lastEventId: metadata.lastEventId || null,
+    latestMessageId: metadata.lastEventId || null,
+    typingUsers: Array.isArray(room?.typingUsers) ? room.typingUsers : [],
+    canOpenTimeline: true,
+    classificationStatus: String(mapping.classificationStatus || ""),
+    classificationSource: String(mapping.classificationSource || ""),
+    displayNameSource: metadata.displayNameSource,
+    displayNameRank: metadata.displayNameRank,
+  };
+}
+
+function historyContextCacheKey(userId = "", roomId = "") {
+  return `${String(userId || "").trim()}:${String(roomId || "").trim()}`;
+}
+
+function cacheVerifiedWhatsAppHistoryContexts({
+  userId,
+  connection,
+  mappings = [],
+  integration = null,
+} = {}) {
+  if (!userId || !connection || connection.state !== "connected") return;
+  const accessContext = integration
+    ? { integration, config: buildConfigFromIntegration(integration) }
+    : null;
+  const expiresAt = nowTs() + WHATSAPP_HISTORY_CONTEXT_CACHE_TTL_MS;
+  for (const mapping of mappings || []) {
+    const conversation = mapping?.toObject ? mapping.toObject() : mapping || {};
+    const roomId = String(conversation.matrixRoomId || "").trim();
+    if (!roomId || conversation.classificationStatus !== "verified") continue;
+    WHATSAPP_HISTORY_CONTEXT_CACHE.set(
+      historyContextCacheKey(userId, roomId),
+      {
+        roomId,
+        connection,
+        conversation,
+        accessContext,
+        expiresAt,
+      }
+    );
+  }
+}
+
+function getCachedWhatsAppHistoryContext(userId, roomId) {
+  const key = historyContextCacheKey(userId, roomId);
+  const cached = WHATSAPP_HISTORY_CONTEXT_CACHE.get(key);
+  if (!cached) return null;
+  if (cached.expiresAt <= nowTs()) {
+    WHATSAPP_HISTORY_CONTEXT_CACHE.delete(key);
+    return null;
+  }
+  return cached;
+}
+
+async function listVerifiedWhatsAppChatsFromIndex(
+  userId,
+  { search = "", limit = 500 } = {}
+) {
+  const integration = await ensureWhatsAppIntegration(userId);
+  const connection = await messagingConnectionRepository.findConnection({
+    userId,
+    provider: "whatsapp",
+  });
+  if (!connection) {
+    try {
+      const { scheduleWhatsAppRuntimeSync } = require("./messaging/whatsappRuntimeSyncService");
+      scheduleWhatsAppRuntimeSync(userId, { force: true });
+    } catch {}
+    return [];
+  }
+
+  const mutedRoomSet = getMutedRoomSet(integration);
+  const mappings =
+    await messagingConversationRepository.listVerifiedConversationsForConnection({
+      userId,
+      provider: "whatsapp",
+      connectionId: connection._id,
+      limit: Math.max(1, Math.min(500, Number(limit || 500))),
+    });
+  cacheVerifiedWhatsAppHistoryContexts({
+    userId,
+    connection,
+    mappings,
+    integration,
+  });
+
+  let roomDescriptors = new Map();
+  try {
+    const snapshot = await fetchSyncSnapshot(userId, {
+      timelineLimit: 10,
+      force: false,
+    });
+    const bridgeSnapshot =
+      (await readWhatsAppBridgePostgresSnapshot(snapshot.config.mxid)) ||
+      readWhatsAppBridgeSnapshot(snapshot.config.mxid);
+    const selfPhone = await resolveWhatsAppSelfPhone(
+      userId,
+      snapshot.config,
+      bridgeSnapshot
+    );
+    const selfContext = buildWhatsAppSelfDescriptorContext(
+      snapshot.config,
+      selfPhone
+    );
+    const directMap = parseDirectMap(snapshot.data || {});
+    const joined = snapshot.data?.rooms?.join || {};
+    const verifiedIds = new Set(
+      mappings.map((mapping) => String(mapping.matrixRoomId || "").trim())
+    );
+    for (const [roomId, roomData] of Object.entries(joined)) {
+      if (!verifiedIds.has(roomId)) continue;
+      const descriptor = buildRoomDescriptor({
+        roomId,
+        roomData,
+        currentUserId: snapshot.config.mxid,
+        bridgeBotMxid: snapshot.config.bridgeBotMxid,
+        managementRoomId: snapshot.config.managementRoomId,
+        directMap,
+        ...selfContext,
+      });
+      if (!descriptor.isManagement && descriptor.room) {
+        roomDescriptors.set(roomId, descriptor.room);
+      }
+    }
+  } catch (err) {
+    console.info("[WhatsApp] verified chat metadata refresh deferred:", String(err?.code || err?.message || ""));
+  }
+
+  const query = normalizeSearchValue(search);
+  const chats = mappings
+    .map((mapping) => {
+      const doc = mapping.toObject ? mapping.toObject() : mapping;
+      const room = roomDescriptors.get(String(doc.matrixRoomId || "")) || null;
+      const chat = buildVerifiedWhatsAppChat(doc, { mutedRoomSet, room });
+      messagingConversationRepository.updateConversationMetadata({
+        userId,
+        provider: "whatsapp",
+        matrixRoomId: chat.roomId,
+        displayName: chat.title,
+        displayNameSource: chat.displayNameSource,
+        displayNameRank: chat.displayNameRank,
+        avatarMxc: chat.avatarMxc,
+        avatarSource: chat.avatarSource,
+        avatarState: chat.avatarState,
+        lastActivityAt: chat.lastMessageAt,
+        lastEventId: chat.lastEventId,
+      }).catch(() => null);
+      return chat;
+    })
+    .filter((chat) => {
+      if (!chat.roomId || chat.isStatusBroadcast) return false;
+      if (!query) return true;
+      const haystack = normalizeSearchValue(
+        [
+          chat.title,
+          chat.name,
+          chat.phoneNumber,
+          chat.contactJid,
+          chat.fullName,
+          chat.pushName,
+          chat.businessName,
+        ]
+          .filter(Boolean)
+          .join(" ")
+      );
+      return haystack.includes(query);
+    })
+    .sort((left, right) => {
+      const activityDelta = normalizeTimestampMs(right.lastMessageAt) - normalizeTimestampMs(left.lastMessageAt);
+      if (activityDelta !== 0) return activityDelta;
+      return String(left.title || left.name || "").localeCompare(
+        String(right.title || right.name || ""),
+        "en",
+        { sensitivity: "base" }
+      );
+    });
+
+  console.info("WhatsApp chat list source", {
+    provider: "whatsapp",
+    mode: "v2_verified_index",
+    userId,
+    connectionId: String(connection._id || ""),
+    mappingCount: mappings.length,
+    returnedCount: chats.length,
+  });
+
+  return chats.slice(0, Math.max(1, Math.min(500, Number(limit || 500))));
 }
 
 async function listWhatsAppChats(
@@ -4952,11 +5470,17 @@ async function listWhatsAppChats(
     selfPhone = "",
   } = {}
 ) {
+  if (isWhatsAppV2ReadEnabled()) {
+    return listVerifiedWhatsAppChatsFromIndex(userId, { search, limit });
+  }
+
   const integration = await ensureWhatsAppIntegration(userId);
   const config = buildConfigFromIntegration(integration);
   const mutedRoomSet = getMutedRoomSet(integration);
   const bridgeSnapshotData =
-    bridgeSnapshot || readWhatsAppBridgeSnapshot(config.mxid);
+    bridgeSnapshot ||
+    (await readWhatsAppBridgePostgresSnapshot(config.mxid)) ||
+    readWhatsAppBridgeSnapshot(config.mxid);
   const resolvedSelfPhone = await resolveWhatsAppSelfPhone(
     userId,
     config,
@@ -5244,7 +5768,7 @@ async function resolveRoomReference(
   { createIfMissing = false, portalWaitMs = 16_000 } = {}
 ) {
   const normalizedRoomRef = String(roomRef || "").trim();
-  const rooms = await listWhatsAppChats(userId, { limit: 200 });
+  const rooms = await listWhatsAppChats(userId, { limit: 500 });
   const match = resolveChatFromList(rooms, normalizedRoomRef);
 
   if (!match?.roomId) {
@@ -5360,7 +5884,242 @@ function normalizeMessageForClient(message = {}) {
   };
 }
 
-async function getWhatsAppRoomTimeline(userId, roomId, { limit = 50 } = {}) {
+function clampWhatsAppHistoryLimit(
+  limit,
+  fallback = WHATSAPP_INITIAL_HISTORY_LIMIT
+) {
+  const numeric = Number(limit);
+  return Math.max(
+    1,
+    Math.min(
+      WHATSAPP_MAX_HISTORY_PAGE_LIMIT,
+      Number.isFinite(numeric) && numeric > 0 ? numeric : fallback
+    )
+  );
+}
+
+async function measureHistoryStage(fn) {
+  const startedAt = performance.now();
+  const value = await fn();
+  return {
+    value,
+    ms: Math.round((performance.now() - startedAt) * 10) / 10,
+  };
+}
+
+function buildJoinedMemberStateEvents(joined = {}) {
+  return Object.entries(joined || {}).map(([mxid, member]) => ({
+    type: "m.room.member",
+    state_key: String(mxid || ""),
+    sender: String(mxid || ""),
+    content: {
+      membership: "join",
+      displayname: String(member?.display_name || "").trim(),
+      avatar_url: String(member?.avatar_url || "").trim(),
+    },
+  }));
+}
+
+function attachHistoryTiming(result, timing) {
+  Object.defineProperty(result, "_historyTiming", {
+    value: timing,
+    enumerable: false,
+    configurable: true,
+  });
+  if (process.env.NODE_ENV !== "production") {
+    console.info("[WhatsApp history timing]", {
+      history_auth_ms: timing.authMs,
+      matrix_session_ms: timing.sessionMs,
+      matrix_history_ms: timing.matrixHistoryMs,
+      transform_ms: timing.transformMs,
+      metadata_ms: timing.metadataMs,
+      sender_metadata_ms: timing.senderMetadataMs,
+      media_url_ms: timing.mediaUrlMs,
+      total_ms: timing.totalMs,
+      message_count: timing.messageCount,
+    });
+  }
+  return result;
+}
+
+async function getVerifiedWhatsAppRoomHistoryPage(
+  userId,
+  verifiedHistory,
+  {
+    from = "",
+    limit = WHATSAPP_INITIAL_HISTORY_LIMIT,
+    authMs = 0,
+    accessContext = null,
+    sessionMs = 0,
+  } = {}
+) {
+  const totalStartedAt = performance.now();
+  const pageLimit = clampWhatsAppHistoryLimit(limit);
+  const roomId = String(verifiedHistory.roomId || "").trim();
+  const mapping = verifiedHistory.conversation?.toObject
+    ? verifiedHistory.conversation.toObject()
+    : verifiedHistory.conversation || {};
+
+  const sessionStage = accessContext
+    ? { value: accessContext, ms: Number(sessionMs || 0) }
+    : await measureHistoryStage(() =>
+        ensureWhatsAppAccess(userId, { forceLogin: false })
+      );
+  const config = sessionStage.value.config;
+  const messageParams = {
+    dir: "b",
+    limit: pageLimit,
+    filter: WHATSAPP_HISTORY_EVENT_FILTER,
+  };
+  if (String(from || "").trim()) messageParams.from = String(from).trim();
+
+  const messagesPromise = measureHistoryStage(() =>
+    matrixRequest(
+      config,
+      "GET",
+      `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/messages`,
+      {
+        params: messageParams,
+        timeout: 20_000,
+      }
+    )
+  );
+  const membersPromise = measureHistoryStage(() =>
+    matrixRequest(
+      config,
+      "GET",
+      `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/joined_members`,
+      { timeout: 20_000 }
+    ).catch(() => ({ data: { joined: {} } }))
+  );
+  const [messagesStage, membersStage] = await Promise.all([
+    messagesPromise,
+    membersPromise,
+  ]);
+
+  const chunk = Array.isArray(messagesStage.value.data?.chunk)
+    ? messagesStage.value.data.chunk
+    : [];
+  const memberEvents = buildJoinedMemberStateEvents(
+    membersStage.value.data?.joined || {}
+  );
+  const historyMetrics = {
+    senderMetadataMs: 0,
+    mediaUrlMs: 0,
+  };
+  const transformStage = await measureHistoryStage(async () => {
+    const syntheticRoomData = {
+      state: { events: memberEvents },
+      timeline: {
+        events: [...chunk].reverse(),
+        prev_batch: messagesStage.value.data?.end || null,
+      },
+      summary: {},
+      unread_notifications: {},
+      ephemeral: { events: [] },
+    };
+    const directMap = conversationTypeIsGroup(mapping.type)
+      ? new Map()
+      : new Map([[roomId, true]]);
+    const descriptor = buildRoomDescriptor({
+      roomId,
+      roomData: syntheticRoomData,
+      currentUserId: config.mxid,
+      bridgeBotMxid: config.bridgeBotMxid,
+      managementRoomId: config.managementRoomId,
+      directMap,
+      ...buildWhatsAppSelfDescriptorContext(config, config.phone || ""),
+      historyMetrics,
+    });
+    const room = buildVerifiedWhatsAppChat(mapping, {
+      room: descriptor.room,
+    });
+    return {
+      room,
+      messages: descriptor.messages.map(normalizeMessageForClient),
+      prevBatch:
+        chunk.length >= pageLimit
+          ? messagesStage.value.data?.end || null
+          : null,
+    };
+  });
+
+  const timing = {
+    authMs: Math.round(Number(authMs || 0) * 10) / 10,
+    sessionMs: sessionStage.ms,
+    matrixHistoryMs: messagesStage.ms,
+    metadataMs: membersStage.ms,
+    transformMs: transformStage.ms,
+    senderMetadataMs:
+      Math.round(Number(historyMetrics.senderMetadataMs || 0) * 10) / 10,
+    mediaUrlMs: Math.round(Number(historyMetrics.mediaUrlMs || 0) * 10) / 10,
+    totalMs:
+      Math.round(
+        (performance.now() - totalStartedAt +
+          Math.max(Number(authMs || 0), Number(sessionStage.ms || 0))) *
+          10
+      ) /
+      10,
+    messageCount: transformStage.value.messages.length,
+  };
+  return attachHistoryTiming(transformStage.value, timing);
+}
+
+async function resolveVerifiedWhatsAppHistoryRequestContext(userId, roomId) {
+  const targetRoomId = String(roomId || "").trim();
+  const cached = targetRoomId.startsWith("!")
+    ? getCachedWhatsAppHistoryContext(userId, targetRoomId)
+    : null;
+  if (cached?.accessContext) {
+    return {
+      verifiedHistory: cached,
+      accessContext: cached.accessContext,
+      authMs: 0,
+      sessionMs: 0,
+    };
+  }
+
+  const [authStage, sessionStage] = await Promise.all([
+    measureHistoryStage(() =>
+      resolveVerifiedWhatsAppRoomForOperation(userId, roomId)
+    ),
+    measureHistoryStage(() =>
+      ensureWhatsAppAccess(userId, { forceLogin: false })
+    ),
+  ]);
+  cacheVerifiedWhatsAppHistoryContexts({
+    userId,
+    connection: authStage.value.connection,
+    mappings: [authStage.value.conversation],
+    integration: sessionStage.value.integration,
+  });
+  return {
+    verifiedHistory: authStage.value,
+    accessContext: sessionStage.value,
+    authMs: authStage.ms,
+    sessionMs: sessionStage.ms,
+  };
+}
+
+async function getWhatsAppRoomTimeline(
+  userId,
+  roomId,
+  { limit = WHATSAPP_INITIAL_HISTORY_LIMIT } = {}
+) {
+  const v2HistoryEnabled = isWhatsAppV2HistoryEnabled();
+  if (v2HistoryEnabled) {
+    const context = await resolveVerifiedWhatsAppHistoryRequestContext(
+      userId,
+      roomId
+    );
+    return getVerifiedWhatsAppRoomHistoryPage(userId, context.verifiedHistory, {
+      limit,
+      authMs: context.authMs,
+      accessContext: context.accessContext,
+      sessionMs: context.sessionMs,
+    });
+  }
+
   const resolvedRoom = await resolveRoomReference(userId, roomId, {
     createIfMissing: true,
     portalWaitMs: 8_000,
@@ -5375,7 +6134,9 @@ async function getWhatsAppRoomTimeline(userId, roomId, { limit = 50 } = {}) {
     timelineLimit: Math.max(limit, 50),
     force: true,
   });
-  const bridgeSnapshot = readWhatsAppBridgeSnapshot(snapshot.config.mxid);
+  const bridgeSnapshot =
+    (await readWhatsAppBridgePostgresSnapshot(snapshot.config.mxid)) ||
+    readWhatsAppBridgeSnapshot(snapshot.config.mxid);
   const selfPhone = await resolveWhatsAppSelfPhone(
     userId,
     snapshot.config,
@@ -5403,6 +6164,9 @@ async function getWhatsAppRoomTimeline(userId, roomId, { limit = 50 } = {}) {
       descriptor.isManagement ||
       (!descriptor.isWhatsAppRoom && resolvedRoom.bridgeStatus !== "portal")
     ) {
+      if (resolvedRoom.bridgeStatus === "portal") {
+        return buildWhatsAppPlaceholderTimeline(resolvedRoom);
+      }
       throw new Error("WhatsApp conversation not found.");
     }
 
@@ -5468,8 +6232,23 @@ async function getWhatsAppRoomTimeline(userId, roomId, { limit = 50 } = {}) {
 async function getWhatsAppRoomHistory(
   userId,
   roomId,
-  { from = "", limit = 50 } = {}
+  { from = "", limit = WHATSAPP_INITIAL_HISTORY_LIMIT } = {}
 ) {
+  const v2HistoryEnabled = isWhatsAppV2HistoryEnabled();
+  if (v2HistoryEnabled) {
+    const context = await resolveVerifiedWhatsAppHistoryRequestContext(
+      userId,
+      roomId
+    );
+    return getVerifiedWhatsAppRoomHistoryPage(userId, context.verifiedHistory, {
+      from,
+      limit,
+      authMs: context.authMs,
+      accessContext: context.accessContext,
+      sessionMs: context.sessionMs,
+    });
+  }
+
   const resolvedRoom = await resolveRoomReference(userId, roomId, {
     createIfMissing: false,
   });
@@ -5580,10 +6359,20 @@ async function sendWhatsAppMessage(
   text,
   { replyToEventId = null } = {}
 ) {
-  const resolvedRoom = await resolveRoomReference(userId, roomId, {
-    createIfMissing: true,
-    portalWaitMs: 25_000,
-  });
+  const v2SendEnabled = isWhatsAppV2SendEnabled();
+  const verifiedSend = v2SendEnabled
+    ? await resolveVerifiedWhatsAppRoomForOperation(userId, roomId)
+    : null;
+  const resolvedRoom = v2SendEnabled
+    ? {
+        roomId: verifiedSend.roomId,
+        placeholder: false,
+        bridgeStatus: "portal",
+      }
+    : await resolveRoomReference(userId, roomId, {
+        createIfMissing: true,
+        portalWaitMs: 25_000,
+      });
   if (resolvedRoom.placeholder) {
     throw new Error(
       "This WhatsApp chat is known to the bridge, but its live Matrix room has not been created yet. Reconnect WhatsApp or wait for the bridge to finish syncing that chat."
@@ -5617,10 +6406,58 @@ async function sendWhatsAppMessage(
   );
 
   invalidateWhatsAppCache(userId);
-  return {
-    ok: true,
-    eventId: response.data?.event_id || null,
+  const eventId = response.data?.event_id || null;
+  if (!v2SendEnabled) {
+    return {
+      ok: true,
+      eventId,
+      roomId: resolvedRoom.roomId,
+    };
+  }
+
+  if (!eventId) {
+    return {
+      ok: false,
+      eventId: null,
+      roomId: resolvedRoom.roomId,
+      status: CHECKPOINT_SEND_STATUSES.MATRIX_ACCEPTED,
+      matrixAccepted: true,
+      remoteSent: false,
+    };
+  }
+
+  const pending = createPendingSend({
+    provider: "whatsapp",
+    userId,
+    connectionId: String(verifiedSend.connection?._id || ""),
     roomId: resolvedRoom.roomId,
+    eventId,
+    ttlMs: WHATSAPP_REMOTE_CONFIRM_TIMEOUT_MS,
+  });
+  const checkpointResult = await Promise.race([
+    pending.promise,
+    new Promise((resolve) => {
+      const timer = setTimeout(
+        () =>
+          resolve({
+            status: CHECKPOINT_SEND_STATUSES.MATRIX_ACCEPTED,
+            matrixAccepted: true,
+            remoteSent: false,
+            pending: true,
+          }),
+        WHATSAPP_SEND_RESPONSE_TIMEOUT_MS
+      );
+      if (typeof timer.unref === "function") timer.unref();
+    }),
+  ]);
+  return {
+    ok: checkpointResult.remoteSent === true || checkpointResult.pending === true,
+    eventId,
+    roomId: resolvedRoom.roomId,
+    status: checkpointResult.status || CHECKPOINT_SEND_STATUSES.REMOTE_TIMEOUT,
+    matrixAccepted: true,
+    remoteSent: checkpointResult.remoteSent === true,
+    remoteErrorCode: checkpointResult.errorCode || "",
   };
 }
 
@@ -5632,10 +6469,20 @@ async function uploadWhatsAppMedia(
   mimeType,
   { caption = "", replyToEventId = null } = {}
 ) {
-  const resolvedRoom = await resolveRoomReference(userId, roomId, {
-    createIfMissing: true,
-    portalWaitMs: 25_000,
-  });
+  const v2SendEnabled = isWhatsAppV2SendEnabled();
+  const verifiedSend = v2SendEnabled
+    ? await resolveVerifiedWhatsAppRoomForOperation(userId, roomId)
+    : null;
+  const resolvedRoom = v2SendEnabled
+    ? {
+        roomId: verifiedSend.roomId,
+        placeholder: false,
+        bridgeStatus: "portal",
+      }
+    : await resolveRoomReference(userId, roomId, {
+        createIfMissing: true,
+        portalWaitMs: 25_000,
+      });
   if (resolvedRoom.placeholder) {
     throw new Error(
       "This WhatsApp chat is known to the bridge, but its live Matrix room has not been created yet. Reconnect WhatsApp or wait for the bridge to finish syncing that chat."
@@ -5935,7 +6782,7 @@ async function fetchWhatsAppMedia(userId, mxc, { thumbnail = false } = {}) {
 }
 
 async function getWhatsAppUnreadSummary(userId) {
-  const chats = await listWhatsAppChats(userId, { limit: 120 });
+  const chats = await listWhatsAppChats(userId, { limit: 500 });
   const unreadChats = chats
     // Muted chats must never raise notifications (issue #5). isMuted is set
     // from the OrionAI-side mute list inside listWhatsAppChats.
@@ -6010,6 +6857,7 @@ module.exports = {
   getWhatsAppUnreadSignal: getWhatsAppUnreadSummary,
   waitForWhatsAppActivity,
   sendBridgeCommand: sendBridgeTextCommand,
+  requestBridgeOwnedPortalCreation,
   readWhatsAppBridgeSnapshot,
   purgeWhatsAppBridgeLogin,
   findLoginIdFromBridgeBotMessages,
@@ -6021,10 +6869,17 @@ module.exports = {
     resolveMessageText,
     buildMediaDescriptor,
     buildWhatsAppMediaRequestPath,
+    clampWhatsAppHistoryLimit,
+    buildJoinedMemberStateEvents,
+    whatsappHistoryEventFilter: WHATSAPP_HISTORY_EVENT_FILTER,
+    cacheVerifiedWhatsAppHistoryContexts,
+    getCachedWhatsAppHistoryContext,
     buildWhatsAppBridgeSnapshot,
     buildWhatsAppBridgePortalMap,
     buildWhatsAppBridgeContactMap,
     cleanRoomTitle,
+    exactVerifiedTargetMatches,
+    resolveVerifiedWhatsAppRoomForOperation,
     findWhatsAppPortalByRoomId,
     mergeRoomWithBridgePortalMetadata,
     mergeRoomWithBridgeContactMetadata,
@@ -6056,5 +6911,9 @@ module.exports = {
     pickBetterWhatsAppContact,
     applyDeliveryStateToMessages,
     extractMatrixReadReceipts,
+    buildVerifiedWhatsAppChat,
+    buildStatusProfile,
+    conversationTypeIsGroup,
+    formatWhatsAppBridgeCommand,
   },
 };

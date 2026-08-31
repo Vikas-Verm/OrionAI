@@ -1,0 +1,133 @@
+"use strict";
+
+const MATRIX_MESSAGING_PROVIDERS = Object.freeze({
+  WHATSAPP: "whatsapp",
+  SIGNAL: "signal",
+});
+
+const MATRIX_MESSAGING_PROVIDER_VALUES = Object.freeze(
+  Object.values(MATRIX_MESSAGING_PROVIDERS)
+);
+
+const MESSAGING_CONNECTION_STATES = Object.freeze({
+  CONNECTED: "connected",
+  RECONNECTING: "reconnecting",
+  ACTION_REQUIRED: "action_required",
+  DISCONNECTED: "disconnected",
+  DEGRADED: "degraded",
+});
+
+const MESSAGING_CONNECTION_STATE_VALUES = Object.freeze(
+  Object.values(MESSAGING_CONNECTION_STATES)
+);
+
+const MESSAGING_SYNC_STATES = Object.freeze({
+  CONNECTING: "CONNECTING",
+  CONNECTED_SYNCING: "CONNECTED_SYNCING",
+  READY: "READY",
+  ACTION_REQUIRED: "ACTION_REQUIRED",
+  SYNC_FAILED: "SYNC_FAILED",
+});
+
+const MESSAGING_SYNC_STATE_VALUES = Object.freeze(
+  Object.values(MESSAGING_SYNC_STATES)
+);
+
+const MESSAGING_CONVERSATION_TYPES = Object.freeze({
+  DIRECT: "direct",
+  GROUP: "group",
+  BROADCAST: "broadcast",
+  UNKNOWN: "unknown",
+});
+
+const MESSAGING_CONVERSATION_TYPE_VALUES = Object.freeze(
+  Object.values(MESSAGING_CONVERSATION_TYPES)
+);
+
+const MESSAGING_CLASSIFICATION_STATUSES = Object.freeze({
+  VERIFIED: "verified",
+  CONFLICT: "conflict",
+  UNCLASSIFIED: "unclassified",
+  STALE: "stale",
+});
+
+const MESSAGING_CLASSIFICATION_STATUS_VALUES = Object.freeze(
+  Object.values(MESSAGING_CLASSIFICATION_STATUSES)
+);
+
+const MESSAGING_CLASSIFICATION_SOURCES = Object.freeze({
+  BOOTSTRAP: "bootstrap",
+  BRIDGE_RECONCILER: "bridge_reconciler",
+  BRIDGE_PORTAL: "bridge_portal",
+  BRIDGE_PORTAL_MATRIX_OWNER: "bridge_portal+matrix_owner",
+  PROVIDER_CONFLICT: "provider_conflict",
+  MANUAL: "manual",
+  UNKNOWN: "unknown",
+});
+
+const CURRENT_CLASSIFICATION_VERSION = 1;
+
+const ROOM_CLASSIFICATION_RESULTS = Object.freeze({
+  VERIFIED: "verified",
+  UNCLASSIFIED: "unclassified",
+  CONFLICT: "conflict",
+  IGNORED: "ignored",
+  STALE: "stale",
+});
+
+const ROOM_EVIDENCE_STRENGTHS = Object.freeze({
+  STRONG: "strong",
+  MEDIUM: "medium",
+  WEAK: "weak",
+});
+
+const ROOM_CLASSIFICATION_REASON_CODES = Object.freeze({
+  BRIDGE_PORTAL_MATCH: "BRIDGE_PORTAL_MATCH",
+  BRIDGE_ACCOUNT_MATCH: "BRIDGE_ACCOUNT_MATCH",
+  BRIDGE_BOT_MATCH: "BRIDGE_BOT_MATCH",
+  BRIDGE_STATE_EVENT: "BRIDGE_STATE_EVENT",
+  REMOTE_ID_MATCH: "REMOTE_ID_MATCH",
+  MATRIX_OWNER_MATCH: "MATRIX_OWNER_MATCH",
+  GHOST_PREFIX: "GHOST_PREFIX",
+  ROOM_NAME_HINT: "ROOM_NAME_HINT",
+  MANAGEMENT_ROOM: "MANAGEMENT_ROOM",
+  INSUFFICIENT_EVIDENCE: "INSUFFICIENT_EVIDENCE",
+  PROVIDER_EVIDENCE_CONFLICT: "PROVIDER_EVIDENCE_CONFLICT",
+  CONNECTION_MISMATCH: "CONNECTION_MISMATCH",
+  MULTIPLE_PROVIDER_MATCH: "MULTIPLE_PROVIDER_MATCH",
+  ORPHAN_PORTAL: "ORPHAN_PORTAL",
+  STALE_PORTAL: "STALE_PORTAL",
+});
+
+function normalizeMessagingProvider(provider = "") {
+  const normalized = String(provider || "").trim().toLowerCase();
+  return MATRIX_MESSAGING_PROVIDER_VALUES.includes(normalized) ? normalized : "";
+}
+
+function assertMessagingProvider(provider = "") {
+  const normalized = normalizeMessagingProvider(provider);
+  if (!normalized) {
+    throw new Error("Unsupported messaging provider.");
+  }
+  return normalized;
+}
+
+module.exports = {
+  MATRIX_MESSAGING_PROVIDERS,
+  MATRIX_MESSAGING_PROVIDER_VALUES,
+  MESSAGING_CONNECTION_STATES,
+  MESSAGING_CONNECTION_STATE_VALUES,
+  MESSAGING_SYNC_STATES,
+  MESSAGING_SYNC_STATE_VALUES,
+  MESSAGING_CONVERSATION_TYPES,
+  MESSAGING_CONVERSATION_TYPE_VALUES,
+  MESSAGING_CLASSIFICATION_STATUSES,
+  MESSAGING_CLASSIFICATION_STATUS_VALUES,
+  MESSAGING_CLASSIFICATION_SOURCES,
+  CURRENT_CLASSIFICATION_VERSION,
+  ROOM_CLASSIFICATION_RESULTS,
+  ROOM_EVIDENCE_STRENGTHS,
+  ROOM_CLASSIFICATION_REASON_CODES,
+  normalizeMessagingProvider,
+  assertMessagingProvider,
+};

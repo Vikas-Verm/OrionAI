@@ -5,7 +5,10 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "test": "node --test ./tests/*.test.js"
+    "test": "node --test ./tests/*.test.js",
+    "messaging:bootstrap-connections": "node scripts/bootstrapMessagingMappings.js",
+    "messaging:reconcile": "node scripts/reconcileMessaging.js",
+    "messaging:recover-matrix-session": "node scripts/recoverMatrixSession.js"
   },
   "keywords": [],
   "author": "",

@@ -2912,7 +2912,7 @@ async function connectSignalIntegration(userId, payload = {}) {
 
   try {
     const { integration } = await ensureSignalAccess(userId, {
-      forceLogin: forceReconnect || !existingConfig?.accessToken,
+      forceLogin: !existingConfig?.accessToken,
     });
     const config = buildConfigFromIntegration(integration);
 

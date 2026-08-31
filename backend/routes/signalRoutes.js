@@ -73,11 +73,17 @@ router.post("/disconnect", async (req, res) => {
         mxid
       );
       if (!logoutResult.ok) {
-        return res.status(409).json({
-          ok: false,
-          error:
-            "Signal could not be fully disconnected. Please retry; OrionAI kept this integration so another account cannot be linked by mistake.",
-        });
+        const accountState = await provisioningLogin.getBridgeAccountState(
+          "signal",
+          mxid
+        );
+        if (!accountState.ok || accountState.connected) {
+          return res.status(409).json({
+            ok: false,
+            error:
+              "Signal could not be fully disconnected. Please retry; OrionAI kept this integration so another account cannot be linked by mistake.",
+          });
+        }
       }
     }
     await Integration.findOneAndDelete({

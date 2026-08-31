@@ -5,6 +5,49 @@ const assert = require("node:assert/strict");
 
 const { __test } = require("../services/whatsappMatrixService");
 
+test("connected account header uses provisioning profile and never a self-chat avatar", () => {
+  const profile = __test.buildStatusProfile({
+    matrixProfile: {
+      displayname: "Hidden Matrix User",
+      avatar_url: "mxc://orion.local/matrix-fallback",
+    },
+    accountState: {
+      name: "WhatsApp Account",
+      avatar: "mxc://orion.local/remote-account",
+    },
+    messagingConnection: {
+      remoteAccountDisplay: "WhatsApp Account",
+      remoteAccountAvatarMxc: "mxc://orion.local/validated-account",
+      remoteAccountAvatarSource: "remote_profile",
+      remoteAccountAvatarState: "available",
+    },
+    config: { mxid: "@orion_u_test_whatsapp:orion.local" },
+  });
+  assert.equal(profile.displayName, "WhatsApp Account");
+  assert.equal(profile.avatarMxc, "mxc://orion.local/validated-account");
+  assert.equal(profile.avatarSource, "remote_profile");
+});
+
+test("connected account header does not expose an unvalidated remote-profile MXC", () => {
+  const profile = __test.buildStatusProfile({
+    matrixProfile: {},
+    accountState: {
+      name: "WhatsApp Account",
+      avatar: "mxc://orion.local/stale-after-migration",
+    },
+    messagingConnection: {
+      remoteAccountDisplay: "WhatsApp Account",
+      remoteAccountAvatarMxc: "",
+      remoteAccountAvatarState: "broken",
+    },
+    config: { mxid: "@orion_u_test_whatsapp:orion.local" },
+  });
+  assert.equal(profile.displayName, "WhatsApp Account");
+  assert.equal(profile.avatarMxc, null);
+  assert.equal(profile.avatarUrl, null);
+  assert.equal(profile.avatarSource, "none");
+});
+
 test("unfinished WhatsApp QR states can resume after a backend restart", () => {
   assert.equal(
     __test.shouldResumeWhatsAppProvisioningLogin({
@@ -233,6 +276,39 @@ test("buildWhatsAppBridgeSnapshot normalizes login and portal metadata", () => {
     inSpace: true,
     preferred: false,
   });
+});
+
+test("buildWhatsAppBridgeSnapshot accepts Postgres portal rows for chat fallback", () => {
+  const snapshot = __test.buildWhatsAppBridgeSnapshot(
+    {
+      user_mxid: "@orion_u_test_whatsapp:orion.local",
+      id: "919870291255",
+      remote_name: "919870291255",
+      remote_profile: { phone: "919870291255", name: "Vikas" },
+      metadata: { logged_in_at: 1_779_004_675 },
+      space_room: "",
+    },
+    [
+      {
+        room_id: "!portal:orion.local",
+        portal_id: "919999041935@s.whatsapp.net",
+        portal_receiver: "919870291255",
+        name: "Test Contact",
+        avatar_mxc: "",
+        room_type: "dm",
+        in_space: false,
+        preferred: true,
+      },
+    ]
+  );
+
+  assert.equal(snapshot.connected, true);
+  assert.equal(snapshot.portalRooms.length, 1);
+  const room = __test.buildWhatsAppPortalRoom(snapshot.portalRooms[0]);
+  assert.equal(room.roomId, "!portal:orion.local");
+  assert.equal(room.name, "Test Contact");
+  assert.equal(room.contactJid, "919999041935@s.whatsapp.net");
+  assert.equal(room.bridgeStatus, "portal");
 });
 
 test("mergeRoomWithBridgePortalMetadata prefers bridge labels for portal rooms", () => {

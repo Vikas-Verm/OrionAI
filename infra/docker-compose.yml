@@ -23,8 +23,26 @@ services:
       timeout: 5s
       retries: 5
 
+  postgres-synapse:
+    image: postgres:16-alpine
+    container_name: synapse-postgres
+    profiles: ["synapse-postgres-test"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: synapse
+      POSTGRES_PASSWORD: synapse_clean_dev_secret
+      POSTGRES_DB: synapse
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - synapse_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synapse -d synapse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   synapse:
-    image: matrixdotorg/synapse:latest
+    image: matrixdotorg/synapse@sha256:950271eb8700f6a7ca5947a3734164f32110fd31d2f5eef2828bf39a2f05cc21
     container_name: synapse
     restart: unless-stopped
     ports:
@@ -32,8 +50,33 @@ services:
     volumes:
       - ./synapse:/data
 
+  synapse-postgres-test:
+    image: matrixdotorg/synapse@sha256:950271eb8700f6a7ca5947a3734164f32110fd31d2f5eef2828bf39a2f05cc21
+    container_name: synapse-postgres-test
+    profiles: ["synapse-postgres-test"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:18008:8008"
+    depends_on:
+      postgres-synapse:
+        condition: service_healthy
+    volumes:
+      - ./synapse-postgres-test:/data
+      - ./synapse/appservices:/data/appservices:ro
+      - ./synapse/orion.local.signing.key:/data/orion.local.signing.key:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8008/_matrix/client/versions', timeout=5).read()\"",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
   mautrix-signal:
-    image: dock.mau.dev/mautrix/signal:latest
+    image: dock.mau.dev/mautrix/signal@sha256:1c4f713a66ce5f3e468e642127fc282dc9050af4037123cf3b97977aeb2735b9
     container_name: mautrix-signal
     restart: unless-stopped
     # Publish the bridge's HTTP listener (appservice + provisioning API) to the
@@ -89,7 +132,7 @@ services:
       start_period: 15s
 
   mautrix-whatsapp:
-    image: dock.mau.dev/mautrix/whatsapp:latest
+    image: dock.mau.dev/mautrix/whatsapp@sha256:fbc70efc500177f91f7f46e3209591ad99b19201a12a47f29dfa9a1ab83a23c8
     container_name: mautrix-whatsapp
     restart: unless-stopped
     # Publish the bridge HTTP listener (appservice + provisioning API) to host
@@ -117,6 +160,8 @@ services:
       - use-vc
       - timeout:2
       - attempts:5
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # Keep long-lived upstream WebSockets alive (see mautrix-signal above for the
     # full rationale). whatsmeow's login socket and live session socket both get
     # idle-reaped by Docker Desktop's NAT on macOS (logs: "Keepalive timed out"
@@ -138,3 +183,4 @@ services:
 
 volumes:
   mautrix_postgres_data:
+  synapse_postgres_data:

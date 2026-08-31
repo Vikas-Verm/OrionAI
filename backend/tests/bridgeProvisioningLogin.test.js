@@ -30,7 +30,7 @@ function fakeProvisionClient({ before = [], after = [], logoutStatus = 200 }) {
 
 test("logoutAllLogins waits for whoami to confirm every bridge login is gone", async () => {
   const client = fakeProvisionClient({
-    before: [{ id: "old-account" }],
+    before: [{ id: "old-account", state_event: "CONNECTED" }],
     after: [],
   });
 
@@ -51,8 +51,8 @@ test("logoutAllLogins waits for whoami to confirm every bridge login is gone", a
 
 test("logoutAllLogins fails closed when the bridge still reports a linked account", async () => {
   const client = fakeProvisionClient({
-    before: [{ id: "old-account" }],
-    after: [{ id: "old-account" }],
+    before: [{ id: "old-account", state_event: "CONNECTED" }],
+    after: [{ id: "old-account", state_event: "CONNECTED" }],
   });
 
   const result = await logoutAllLogins(
@@ -63,5 +63,23 @@ test("logoutAllLogins fails closed when the bridge still reports a linked accoun
 
   assert.equal(result.ok, false);
   assert.equal(result.reason, "logout_incomplete");
+  assert.equal(result.remaining, 1);
+  assert.equal(result.blockingRemaining, 1);
+});
+
+test("logoutAllLogins allows QR recovery when only dead bridge rows remain", async () => {
+  const client = fakeProvisionClient({
+    before: [{ id: "old-account", state_event: "BAD_CREDENTIALS" }],
+    after: [{ id: "old-account", state_event: "BAD_CREDENTIALS" }],
+  });
+
+  const result = await logoutAllLogins(
+    "signal",
+    "@orion_u_test_signal:orion.local",
+    { client, verifyTimeoutMs: 0, verifyIntervalMs: 0 }
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.loggedOut, 1);
   assert.equal(result.remaining, 1);
 });

@@ -508,19 +508,20 @@ function provisionClient(network, mxid) {
 
 async function fetchBridgeAccountState(network, mxid) {
   const m = String(mxid || "").trim();
-  if (!m) return { connected: false, login: null, logins: [] };
+  if (!m) return { ok: false, connected: false, login: null, logins: [] };
   try {
     const r = await provisionClient(network, m).get("/whoami", {
       timeout: WHOAMI_TIMEOUT_MS,
     });
     if (r.status !== 200 || !r.data || !Array.isArray(r.data.logins)) {
-      return { connected: false, login: null, logins: [] };
+      return { ok: false, connected: false, login: null, logins: [] };
     }
     const logins = r.data.logins;
     const login =
       logins.find((l) => HEALTHY_LOGIN_STATES.has(loginStateEvent(l))) || null;
     const profile = (login && login.profile) || {};
     return {
+      ok: true,
       connected: Boolean(login),
       login,
       logins,
@@ -531,7 +532,7 @@ async function fetchBridgeAccountState(network, mxid) {
       userLoginId: String((login && login.id) || "").trim(),
     };
   } catch (err) {
-    return { connected: false, login: null, logins: [] };
+    return { ok: false, connected: false, login: null, logins: [] };
   }
 }
 
@@ -629,6 +630,9 @@ async function logoutAllLogins(network, mxid, options = {}) {
 
   const deadline = Date.now() + Math.max(0, verifyTimeoutMs);
   let remaining = logins.length;
+  let blockingRemaining = logins.filter((login) =>
+    HEALTHY_LOGIN_STATES.has(loginStateEvent(login))
+  ).length;
   let verificationReason = "";
   do {
     try {
@@ -640,9 +644,14 @@ async function logoutAllLogins(network, mxid, options = {}) {
       }
       remaining = r.data.logins.filter((login) => String(login?.id || "").trim())
         .length;
-      if (remaining === 0) {
+      blockingRemaining = r.data.logins.filter(
+        (login) =>
+          String(login?.id || "").trim() &&
+          HEALTHY_LOGIN_STATES.has(loginStateEvent(login))
+      ).length;
+      if (blockingRemaining === 0) {
         clearBridgeAccountState(network, m);
-        return { ok: true, loggedOut, failed, remaining: 0 };
+        return { ok: true, loggedOut, failed, remaining };
       }
     } catch (err) {
       verificationReason = err?.message || "whoami_failed";
@@ -660,6 +669,7 @@ async function logoutAllLogins(network, mxid, options = {}) {
     loggedOut,
     failed,
     remaining,
+    blockingRemaining,
   };
 }
 
