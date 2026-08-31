@@ -161,6 +161,15 @@
         </button>
       </div>
 
+      <div
+        v-if="!isSidebarCollapsed && isConnected && syncProgressText"
+        class="wa-sync-progress"
+        :class="{ 'has-error': syncStatus.failedCount > 0 }"
+      >
+        <span v-if="syncStatus.pendingConversationCount > 0" class="wa-spinner wa-spinner--sm"></span>
+        <span>{{ syncProgressText }}</span>
+      </div>
+
       <div v-if="loadingChats && chats.length === 0" class="wa-list-state" :class="{ compact: isSidebarCollapsed }">
         <div v-for="n in isSidebarCollapsed ? 6 : 5" :key="`chat-skeleton-${n}`" class="wa-chat-skeleton" :class="{ compact: isSidebarCollapsed }">
           <span class="wa-chat-skeleton-avatar"></span>
@@ -189,13 +198,15 @@
 
       <div v-else-if="filteredChats.length === 0 && !isSidebarCollapsed" class="wa-list-empty">
         <div class="wa-empty-orb">
-          <span>0</span>
+          <span v-if="chatQuery">0</span>
+          <span v-else-if="isConversationSyncing" class="wa-empty-spinner" aria-hidden="true"></span>
+          <span v-else>0</span>
         </div>
-        <strong>{{ chatQuery ? 'No chats match your search' : 'No chats synced yet' }}</strong>
+        <strong>{{ chatQuery ? 'No chats match your search' : emptyChatTitle }}</strong>
         <p>
           {{ chatQuery
             ? 'Try a different name, message preview, or filter.'
-            : 'If you just linked WhatsApp, give OrionAI a moment to finish syncing your rooms.' }}
+            : emptyChatDescription }}
         </p>
       </div>
 
@@ -401,6 +412,8 @@
                         v-if="message.senderAvatarUrl && !isImageBroken(message.senderAvatarUrl)"
                         :src="authMediaUrl(message.senderAvatarUrl)"
                         :alt="message.senderName"
+                        loading="lazy"
+                        decoding="async"
                         @error="markImageBroken(message.senderAvatarUrl)"
                       />
                       <span v-else>{{ avatarInitials(message.senderName) }}</span>
@@ -450,6 +463,8 @@
                             <img
                               :src="authMediaUrl(firstAttachment(message).url)"
                               :alt="firstAttachment(message).fileName"
+                              loading="lazy"
+                              decoding="async"
                               @click="openLightbox(firstAttachment(message))"
                               @error="markImageBroken(firstAttachment(message).url)"
                             />
@@ -477,7 +492,7 @@
                             </div>
                           </div>
 
-                          <p v-if="message.text" class="wa-message-text">{{ message.text }}</p>
+                          <p v-if="message.text" class="wa-message-text" v-html="linkifyText(message.text)"></p>
 
                           <div v-if="message.reactions?.length" class="wa-reaction-row">
                             <span v-for="reaction in message.reactions" :key="`${message.id}-${reaction.key}`" class="wa-reaction-pill">
@@ -568,6 +583,9 @@
 
             <div class="wa-info-actions">
               <button class="wa-chip-btn" @click="markCurrentRoomRead()">Mark read</button>
+              <button class="wa-chip-btn" @click="toggleMuteCurrentRoom">
+                {{ selectedChat.isMuted ? 'Unmute' : 'Mute' }}
+              </button>
               <button class="wa-chip-btn" @click="refreshSelectedConversation">Refresh chat</button>
             </div>
           </aside>
@@ -753,6 +771,13 @@ import CommunicationInsightsWidget from '../components/communications/Communicat
 import { useCommunicationActions, emitCommunicationPriorityRefresh } from '../composables/useCommunicationActions'
 import { useWebSocket } from '../composables/useWebSocket'
 import { store, setModuleContext } from '../stores/app'
+import {
+  mergeConversationLists,
+  mergeConversationMetadata,
+  mergeMessagesByEvent,
+  createConversationHistoryCache,
+  sortConversationsByActivity,
+} from '../utils/whatsappRuntime'
 
 initEmojiMart({ data: emojiData })
 
@@ -774,6 +799,8 @@ const CHAT_FILTERS = [
   { id: 'unread', label: 'Unread' },
   { id: 'groups', label: 'Groups' },
 ]
+const WHATSAPP_INITIAL_HISTORY_LIMIT = 25
+const WHATSAPP_OLDER_HISTORY_LIMIT = 50
 // GIF picker is backed by the backend's Tenor proxy (TENOR_API_KEY in env).
 // We never call Tenor directly from the browser so the key stays server-side.
 
@@ -786,6 +813,21 @@ const status = ref({
   unreadCount: 0,
   profile: null,
   connectedAt: null,
+})
+const syncStatus = ref({
+  state: 'CONNECTING',
+  remoteState: 'UNKNOWN',
+  portalCount: 0,
+  discoveredPortalCount: 0,
+  eligibleConversationCount: 0,
+  verifiedCount: 0,
+  verifiedConversationCount: 0,
+  pendingConversationCount: 0,
+  ignoredCount: 0,
+  duplicateCount: 0,
+  failedCount: 0,
+  lastReconcileAt: null,
+  errorCode: '',
 })
 const chats = ref([])
 const messages = ref([])
@@ -802,6 +844,10 @@ const loadingOlder = ref(false)
 const refreshing = ref(false)
 const deletingChat = ref(false)
 const deletingMessageIds = ref(new Set())
+const historyCache = createConversationHistoryCache({
+  maxEntries: 12,
+  maxAgeMs: 2 * 60 * 1000,
+})
 
 // OrionAI-styled confirm modal. Replaces window.confirm so the dialog feels
 // like part of the app rather than a browser-chrome alert. Each action is
@@ -920,7 +966,33 @@ const showInfoPanel = ref(false)
 const showProfilePanel = ref(false)
 const sidebarCollapsed = ref(false)
 const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1280)
-const localReadCutoffs = ref({})
+// Per-room "read up to" timestamps. Persisted to localStorage so that a chat
+// the user has read in OrionAI stays read across page reloads (previously this
+// was in-memory only, so every reload re-surfaced phantom unread badges — the
+// core of bug #3). Keyed by Matrix room id.
+const READ_CUTOFF_STORAGE_KEY = 'orion.whatsapp.readCutoffs'
+function loadPersistedReadCutoffs() {
+  if (typeof window === 'undefined' || !window.localStorage) return {}
+  try {
+    const raw = window.localStorage.getItem(READ_CUTOFF_STORAGE_KEY)
+    const parsed = raw ? JSON.parse(raw) : {}
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+const localReadCutoffs = ref(loadPersistedReadCutoffs())
+function persistReadCutoffs() {
+  if (typeof window === 'undefined' || !window.localStorage) return
+  try {
+    window.localStorage.setItem(
+      READ_CUTOFF_STORAGE_KEY,
+      JSON.stringify(localReadCutoffs.value || {})
+    )
+  } catch {
+    /* storage full / disabled — non-fatal, falls back to in-memory */
+  }
+}
 
 const fileInputEl = ref(null)
 const messagesEl = ref(null)
@@ -949,6 +1021,29 @@ const { unreadByApp } = useWebSocket()
 const isConnected = computed(() =>
   Boolean(status.value.connected || status.value.loginState === 'connected')
 )
+const isConversationSyncing = computed(() =>
+  Number(syncStatus.value.pendingConversationCount || 0) > 0 ||
+  ['CONNECTING', 'CONNECTED_SYNCING'].includes(String(syncStatus.value.state || ''))
+)
+const syncProgressText = computed(() => {
+  const pending = Number(syncStatus.value.pendingConversationCount || 0)
+  const failed = Number(syncStatus.value.failedCount || 0)
+  if (pending > 0) return `Syncing ${pending} more chat${pending === 1 ? '' : 's'}...`
+  if (failed > 0) return `${failed} chat${failed === 1 ? '' : 's'} need${failed === 1 ? 's' : ''} attention`
+  return ''
+})
+const emptyChatTitle = computed(() => {
+  if (syncStatus.value.state === 'SYNC_FAILED') return 'Chat sync needs attention'
+  if (syncStatus.value.state === 'ACTION_REQUIRED') return 'WhatsApp needs attention'
+  if (syncStatus.value.state === 'READY') return 'No chats yet'
+  return 'Syncing your chats...'
+})
+const emptyChatDescription = computed(() => {
+  if (syncStatus.value.state === 'SYNC_FAILED') return 'OrionAI could not finish verifying your chats. Refresh to retry safely.'
+  if (syncStatus.value.state === 'ACTION_REQUIRED') return 'Open Integrations to restore the WhatsApp connection.'
+  if (syncStatus.value.state === 'READY') return 'Your verified WhatsApp conversations will appear here when available.'
+  return 'OrionAI is verifying your bridge-owned conversations.'
+})
 const isCompactLayout = computed(() => viewportWidth.value <= 860)
 const isSidebarCollapsed = computed(() => !isCompactLayout.value && sidebarCollapsed.value)
 const showSidebarPane = computed(() => {
@@ -1068,6 +1163,24 @@ function normalizeDigits(value = '') {
   return String(value || '').replace(/\D/g, '')
 }
 
+// Escape HTML, then turn URLs into clickable links. Safe: text is escaped
+// first, so only the anchors we build are ever rendered as HTML.
+function linkifyText(value = '') {
+  const raw = String(value || '')
+  if (!raw) return ''
+  const escaped = raw
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+  const urlRe = /((?:https?:\/\/|www\.)[^\s<]+[^\s<.,;:!?)\]}'"])/gi
+  return escaped.replace(urlRe, (match) => {
+    const href = match.startsWith('http') ? match : `https://${match}`
+    return `<a href="${href}" target="_blank" rel="noopener noreferrer" class="wa-link">${match}</a>`
+  })
+}
+
 function normalizeTimestamp(value) {
   if (!value) return 0
   const numeric = Number(value)
@@ -1097,8 +1210,19 @@ function chatsMatch(left = null, right = null) {
 
   const leftRoomId = currentRoomId(left)
   const rightRoomId = currentRoomId(right)
-  if (leftRoomId && rightRoomId && leftRoomId === rightRoomId) return true
+  // STRICT: when BOTH sides have a Matrix room ID, require an exact match.
+  // The previous fuzzy fallback (matching by phone digits when room IDs
+  // differed) caused the selected chat to "auto-jump" to a different chat
+  // during the 8s polling refresh — two contacts with similar phone digits
+  // or one with an empty digit fallback would collide and selectedChat got
+  // swapped to whichever happened to match first.
+  if (leftRoomId && rightRoomId) {
+    return leftRoomId === rightRoomId
+  }
 
+  // Only fall through to the loose identity match when at least one side has
+  // no room ID yet (e.g. a freshly-discovered contact that hasn't been
+  // materialised as a portal yet).
   const leftKey = normalizeChatIdentityKey(left)
   const rightKey = normalizeChatIdentityKey(right)
   return Boolean(leftKey && rightKey && leftKey === rightKey)
@@ -1108,12 +1232,12 @@ function findMatchingChat(collection = [], target = null) {
   return (collection || []).find((chat) => chatsMatch(chat, target)) || null
 }
 
-function replaceChatInList(nextChat = null) {
+function replaceChatInList(nextChat = null, previousChat = null) {
   if (!nextChat?.roomId) return
 
   let matched = false
   chats.value = chats.value.map((chat) => {
-    if (!chatsMatch(chat, nextChat)) return chat
+    if (!chatsMatch(chat, nextChat) && !(previousChat && chatsMatch(chat, previousChat))) return chat
     matched = true
     return normalizeChatReadState({
       ...chat,
@@ -1132,6 +1256,109 @@ function replaceChatInList(nextChat = null) {
       }),
       ...chats.value,
     ]
+  }
+  chats.value = sortConversationsByActivity(chats.value)
+}
+
+function previewForRealtimeMessage(message = {}) {
+  return String(
+    message.text ||
+      message.attachments?.[0]?.fileName ||
+      (message.attachments?.length ? 'Attachment' : '')
+  ).trim()
+}
+
+function handleWhatsAppRealtimeMessage(event) {
+  const detail = event?.detail || {}
+  if (detail.provider !== 'whatsapp' || !detail.roomId || !detail.message) return
+  const roomId = String(detail.roomId)
+  const existing = chats.value.find((chat) => currentRoomId(chat) === roomId)
+  if (!existing) return
+  const message = { ...detail.message, id: detail.eventId || detail.message.id }
+  const active = currentRoomId(selectedChat.value) === roomId
+  const incoming = {
+    roomId,
+    title: detail.conversation?.title || '',
+    displayNameSource: 'room_name',
+    displayNameRank: 80,
+    avatarUrl: detail.conversation?.avatarUrl || '',
+    lastMessagePreview: previewForRealtimeMessage(message),
+    lastMessageAt: message.timestamp || detail.conversation?.lastActivityAt || new Date().toISOString(),
+    lastEventId: message.id,
+    latestMessageId: message.id,
+    unreadCount: active ? 0 : Number(existing.unreadCount || 0) + 1,
+  }
+  const merged = normalizeChatReadState(mergeConversationMetadata(existing, incoming))
+  chats.value = sortConversationsByActivity(
+    chats.value.map((chat) => currentRoomId(chat) === roomId ? merged : chat)
+  )
+  if (active) {
+    messages.value = mergeMessages(messages.value, [message])
+    historyCache.set(roomId, {
+      messages: messages.value,
+      prevBatch: prevBatch.value,
+    })
+    selectedChat.value = merged
+    nextTick(() => scrollToBottom())
+  } else {
+    historyCache.append(roomId, [message])
+  }
+}
+
+function handleWhatsAppSendStatus(event) {
+  const detail = event?.detail || {}
+  if (detail.provider !== 'whatsapp' || !detail.eventId) return
+  const statusValue = String(detail.status || '')
+  messages.value = messages.value.map((message) => {
+    if (String(message.id || message.eventId) !== String(detail.eventId)) return message
+    if (statusValue === 'REMOTE_SENT') {
+      return { ...message, deliveryState: 'sent', deliveryLabel: 'Sent' }
+    }
+    if (statusValue === 'REMOTE_FAILED') {
+      return { ...message, deliveryState: 'failed', deliveryLabel: 'Failed' }
+    }
+    return { ...message, deliveryState: 'pending', deliveryLabel: 'Sending' }
+  })
+  const statusRoomId = String(detail.roomId || currentRoomId(selectedChat.value) || '')
+  if (statusRoomId) {
+    historyCache.update(statusRoomId, (cachedMessages) =>
+      cachedMessages.map((message) => {
+        if (String(message.id || message.eventId) !== String(detail.eventId)) return message
+        if (statusValue === 'REMOTE_SENT') {
+          return { ...message, deliveryState: 'sent', deliveryLabel: 'Sent' }
+        }
+        if (statusValue === 'REMOTE_FAILED') {
+          return { ...message, deliveryState: 'failed', deliveryLabel: 'Failed' }
+        }
+        return { ...message, deliveryState: 'pending', deliveryLabel: 'Sending' }
+      })
+    )
+  }
+}
+
+function handleWhatsAppSyncStatus(event) {
+  const detail = event?.detail || {}
+  const previousVerified = Number(syncStatus.value.verifiedConversationCount || syncStatus.value.verifiedCount || 0)
+  syncStatus.value = {
+    state: detail.state || 'CONNECTING',
+    remoteState: detail.remoteState || 'UNKNOWN',
+    portalCount: Number(detail.portalCount || 0),
+    discoveredPortalCount: Number(detail.discoveredPortalCount || detail.portalCount || 0),
+    eligibleConversationCount: Number(detail.eligibleConversationCount || 0),
+    verifiedCount: Number(detail.verifiedCount || 0),
+    verifiedConversationCount: Number(detail.verifiedConversationCount || detail.verifiedCount || 0),
+    pendingConversationCount: Number(detail.pendingConversationCount || 0),
+    ignoredCount: Number(detail.ignoredCount || 0),
+    duplicateCount: Number(detail.duplicateCount || 0),
+    failedCount: Number(detail.failedCount || 0),
+    lastReconcileAt: detail.lastReconcileAt || null,
+    errorCode: detail.errorCode || '',
+  }
+  if (
+    detail.state === 'READY' ||
+    Number(syncStatus.value.verifiedConversationCount || 0) > previousVerified
+  ) {
+    loadChats({ silent: true }).catch(() => {})
   }
 }
 
@@ -1224,14 +1451,7 @@ function scrollToBottom() {
 }
 
 function mergeMessages(existing = [], incoming = []) {
-  const byId = new Map()
-  ;[...(existing || []), ...(incoming || [])].forEach((message) => {
-    if (!message?.id) return
-    byId.set(String(message.id), message)
-  })
-  return [...byId.values()].sort(
-    (left, right) => normalizeTimestamp(left.timestamp) - normalizeTimestamp(right.timestamp)
-  )
+  return mergeMessagesByEvent(existing, incoming)
 }
 
 function firstAttachment(message = {}) {
@@ -1259,6 +1479,7 @@ function setLocalReadCutoff(roomId = '', timestamp = 0) {
     ...localReadCutoffs.value,
     [key]: normalizeTimestamp(timestamp || Date.now()),
   }
+  persistReadCutoffs()
 }
 
 function clearLocalReadCutoff(roomId = '') {
@@ -1267,6 +1488,7 @@ function clearLocalReadCutoff(roomId = '') {
   const next = { ...localReadCutoffs.value }
   delete next[key]
   localReadCutoffs.value = next
+  persistReadCutoffs()
 }
 
 function getLocalReadCutoff(roomId = '') {
@@ -1301,7 +1523,10 @@ function buildMediaUrlFromMxc(mxc = '') {
 }
 
 async function loadStatus() {
-  const { data } = await api.get('/api/whatsapp/status')
+  const [{ data }, syncResult] = await Promise.all([
+    api.get('/api/whatsapp/status'),
+    api.get('/api/whatsapp/sync-status').catch(() => null),
+  ])
   status.value = data || {
     connected: false,
     loginState: 'disconnected',
@@ -1309,6 +1534,7 @@ async function loadStatus() {
     qrImageUrl: null,
     profile: null,
   }
+  if (syncResult?.data) syncStatus.value = syncResult.data
 }
 
 function updateSelectedChatFromList() {
@@ -1325,7 +1551,8 @@ async function loadChats({ silent = false } = {}) {
     const { data } = await api.get('/api/whatsapp/chats', {
       params: { limit: 200 },
     })
-    chats.value = (Array.isArray(data?.chats) ? data.chats : []).map((chat) => normalizeChatReadState(chat))
+    const incoming = (Array.isArray(data?.chats) ? data.chats : []).map((chat) => normalizeChatReadState(chat))
+    chats.value = mergeConversationLists(chats.value, incoming).map((chat) => normalizeChatReadState(chat))
 
     if (selectedChat.value && !findMatchingChat(chats.value, selectedChat.value)) {
       selectedChat.value = null
@@ -1520,9 +1747,45 @@ async function markCurrentRoomRead(roomId = selectedChat.value?.roomId || '', ev
   }
 }
 
-async function loadSelectedConversation({ from = '', append = false, silent = false } = {}) {
+async function toggleMuteCurrentRoom() {
+  const targetRoomId = currentRoomId(selectedChat.value)
+  if (!targetRoomId) return
+  const nextMuted = !selectedChat.value?.isMuted
+
+  // Optimistic update
+  if (selectedChat.value) {
+    selectedChat.value = { ...selectedChat.value, isMuted: nextMuted }
+  }
+  chats.value = chats.value.map((chat) =>
+    currentRoomId(chat) === targetRoomId ? { ...chat, isMuted: nextMuted } : chat
+  )
+
+  try {
+    await api.post(`/api/whatsapp/rooms/${encodeURIComponent(targetRoomId)}/mute`, {
+      muted: nextMuted,
+    })
+    refreshWhatsAppActions({ silent: true }).catch(() => {})
+  } catch (error) {
+    console.debug('Failed to toggle WhatsApp room mute:', error?.message || error)
+    // Revert on failure
+    if (selectedChat.value && currentRoomId(selectedChat.value) === targetRoomId) {
+      selectedChat.value = { ...selectedChat.value, isMuted: !nextMuted }
+    }
+    chats.value = chats.value.map((chat) =>
+      currentRoomId(chat) === targetRoomId ? { ...chat, isMuted: !nextMuted } : chat
+    )
+  }
+}
+
+async function loadSelectedConversation({
+  from = '',
+  append = false,
+  silent = false,
+  force = false,
+} = {}) {
   if (!selectedChat.value) return
 
+  const requestedChat = { ...selectedChat.value }
   const roomId = currentRoomId(selectedChat.value)
   if (!roomId) return
 
@@ -1532,21 +1795,45 @@ async function loadSelectedConversation({ from = '', append = false, silent = fa
     (message) => String(message.roomId || roomId) === String(roomId)
   )
 
+  if (!append && !from && !force) {
+    const cached = historyCache.get(roomId)
+    if (cached) {
+      const renderStartedAt = performance.now()
+      messages.value = cached.messages
+      prevBatch.value = cached.prevBatch
+      await nextTick()
+      if (import.meta.env.DEV) {
+        console.info('[WhatsApp history frontend timing]', {
+          frontend_network_ms: 0,
+          frontend_render_ms: Math.round((performance.now() - renderStartedAt) * 10) / 10,
+          message_count: messages.value.length,
+          cache_hit: true,
+        })
+      }
+      scrollToBottom()
+      return
+    }
+  }
+
   if (append) loadingOlder.value = true
   else if (!silent) loadingMessages.value = true
 
   try {
+    const networkStartedAt = performance.now()
     const { data } = await api.get(`/api/whatsapp/rooms/${encodeURIComponent(roomId)}/messages`, {
       params: {
-        limit: append ? 50 : 90,
+        limit: append ? WHATSAPP_OLDER_HISTORY_LIMIT : WHATSAPP_INITIAL_HISTORY_LIMIT,
         ...(from ? { from } : {}),
       },
     })
+    const networkMs = performance.now() - networkStartedAt
 
     const incoming = Array.isArray(data?.messages) ? data.messages : []
+    if (!isChatSendTarget(selectedChat.value, requestedChat, roomId)) return
+
     prevBatch.value = data?.prevBatch || null
     selectedChat.value = normalizeChatReadState(data?.room || selectedChat.value)
-    replaceChatInList(selectedChat.value)
+    replaceChatInList(selectedChat.value, requestedChat)
     const resolvedRoomId = currentRoomId(selectedChat.value)
 
     if (append) {
@@ -1558,9 +1845,23 @@ async function loadSelectedConversation({ from = '', append = false, silent = fa
       }
     } else {
       messages.value = sameRoomHistory ? mergeMessages(messages.value, incoming) : incoming
+      const renderStartedAt = performance.now()
       await nextTick()
+      if (import.meta.env.DEV) {
+        console.info('[WhatsApp history frontend timing]', {
+          frontend_network_ms: Math.round(networkMs * 10) / 10,
+          frontend_render_ms: Math.round((performance.now() - renderStartedAt) * 10) / 10,
+          message_count: messages.value.length,
+          cache_hit: false,
+        })
+      }
       if (shouldStick || !silent) scrollToBottom()
     }
+
+    historyCache.set(resolvedRoomId, {
+      messages: messages.value,
+      prevBatch: prevBatch.value,
+    })
 
     const latestVisible = [...messages.value].reverse().find((message) => message?.id) || null
     const unreadCount = Number(data?.room?.unreadCount || selectedChat.value?.unreadCount || 0)
@@ -1602,7 +1903,7 @@ async function selectChat(chat) {
 
 async function refreshSelectedConversation() {
   if (!selectedChat.value?.roomId) return
-  await loadSelectedConversation({ silent: false })
+  await loadSelectedConversation({ silent: false, force: true })
   await loadChats({ silent: true })
 }
 
@@ -1633,7 +1934,7 @@ async function refreshAll() {
       applyUnreadHints()
       await applyModuleContext()
       if (selectedChat.value) {
-        await loadSelectedConversation({ silent: true })
+        await loadSelectedConversation({ silent: true, force: true })
       }
       await refreshWhatsAppActions()
     } else {
@@ -1661,9 +1962,6 @@ function startPolling() {
       await loadStatus()
       if (!isConnected.value) return
       await loadChats({ silent: true })
-      if (selectedChat.value) {
-        await loadSelectedConversation({ silent: true })
-      }
     } catch {
       // Keep the page usable during background polling failures.
     }
@@ -2117,6 +2415,7 @@ function buildOptimisticMessage({
   attachment = null,
   replyToEventId = null,
   timestamp = Date.now(),
+  deliveryStatus = 'MATRIX_ACCEPTED',
 }) {
   const attachmentArray = attachment ? [attachment] : []
   const replySource = replyToEventId
@@ -2147,13 +2446,20 @@ function buildOptimisticMessage({
       : null,
     deleted: false,
     fromMe: true,
-    deliveryState: 'sent',
-    deliveryLabel: 'Sent',
+    deliveryState: deliveryStatus === 'REMOTE_SENT' ? 'sent' : deliveryStatus === 'REMOTE_FAILED' ? 'failed' : 'pending',
+    deliveryLabel: deliveryStatus === 'REMOTE_SENT' ? 'Sent' : deliveryStatus === 'REMOTE_FAILED' ? 'Failed' : 'Sending',
     readByCount: 0,
   }
 }
 
-function applyOptimisticChatState(message = {}) {
+function isChatSendTarget(chat = null, targetChat = null, roomId = '') {
+  if (!chat) return false
+  const targetRoomId = String(roomId || '').trim()
+  if (targetRoomId && currentRoomId(chat) === targetRoomId) return true
+  return Boolean(targetChat && chatsMatch(chat, targetChat))
+}
+
+function applyOptimisticChatState(message = {}, targetChat = null) {
   if (!message?.roomId) return
   const roomId = String(message.roomId)
   const timestamp = normalizeTimestamp(message.timestamp || Date.now())
@@ -2170,7 +2476,7 @@ function applyOptimisticChatState(message = {}) {
           : 'Attachment')
 
   chats.value = chats.value.map((chat) =>
-    chatsMatch(chat, selectedChat.value || { roomId })
+    isChatSendTarget(chat, targetChat, roomId)
       ? normalizeChatReadState({
           ...chat,
           roomId,
@@ -2186,7 +2492,7 @@ function applyOptimisticChatState(message = {}) {
       : chat
   )
 
-  if (selectedChat.value && chatsMatch(selectedChat.value, { roomId, ...selectedChat.value })) {
+  if (isChatSendTarget(selectedChat.value, targetChat, roomId)) {
     selectedChat.value = normalizeChatReadState({
       ...selectedChat.value,
       roomId,
@@ -2202,11 +2508,23 @@ function applyOptimisticChatState(message = {}) {
   }
 }
 
-function appendOptimisticMessages(nextMessages = []) {
+function appendOptimisticMessages(nextMessages = [], targetChat = null) {
   const validMessages = (nextMessages || []).filter(Boolean)
   if (!validMessages.length) return
-  messages.value = mergeMessages(messages.value, validMessages)
-  validMessages.forEach((message) => applyOptimisticChatState(message))
+  const visibleTargetMessages = validMessages.filter((message) =>
+    isChatSendTarget(selectedChat.value, targetChat, message.roomId)
+  )
+  if (visibleTargetMessages.length) {
+    messages.value = mergeMessages(messages.value, visibleTargetMessages)
+    const roomId = String(visibleTargetMessages[0]?.roomId || '')
+    if (roomId) {
+      historyCache.set(roomId, {
+        messages: messages.value,
+        prevBatch: prevBatch.value,
+      })
+    }
+  }
+  validMessages.forEach((message) => applyOptimisticChatState(message, targetChat))
 }
 
 function buildAttachmentPayload(draft, contentUri = '') {
@@ -2226,7 +2544,8 @@ function buildAttachmentPayload(draft, contentUri = '') {
 async function sendMessage() {
   if (!selectedChat.value || sendDisabled.value) return
 
-  const roomId = currentRoomId(selectedChat.value)
+  const targetChat = { ...selectedChat.value }
+  const roomId = currentRoomId(targetChat)
   const text = composer.value.trim()
   const replyToEventId = replyTarget.value?.id || null
   const optimisticMessages = []
@@ -2250,14 +2569,17 @@ async function sendMessage() {
           { headers: { 'Content-Type': 'multipart/form-data' } }
         )
         const resolvedRoomId = String(data?.roomId || roomId)
-        if (selectedChat.value && resolvedRoomId !== currentRoomId(selectedChat.value)) {
-          selectedChat.value = normalizeChatReadState({
-            ...selectedChat.value,
+        if (resolvedRoomId !== currentRoomId(targetChat)) {
+          const nextChat = normalizeChatReadState({
+            ...targetChat,
             roomId: resolvedRoomId,
             id: resolvedRoomId,
             bridgeStatus: 'portal',
           })
-          replaceChatInList(selectedChat.value)
+          if (isChatSendTarget(selectedChat.value, targetChat, '')) {
+            selectedChat.value = nextChat
+          }
+          replaceChatInList(nextChat, targetChat)
         }
 
         optimisticMessages.push(
@@ -2286,14 +2608,17 @@ async function sendMessage() {
         replyToEventId: replyToEventId || undefined,
       })
       const resolvedRoomId = String(data?.roomId || roomId)
-      if (selectedChat.value && resolvedRoomId !== currentRoomId(selectedChat.value)) {
-        selectedChat.value = normalizeChatReadState({
-          ...selectedChat.value,
+      if (resolvedRoomId !== currentRoomId(targetChat)) {
+        const nextChat = normalizeChatReadState({
+          ...targetChat,
           roomId: resolvedRoomId,
           id: resolvedRoomId,
           bridgeStatus: 'portal',
         })
-        replaceChatInList(selectedChat.value)
+        if (isChatSendTarget(selectedChat.value, targetChat, '')) {
+          selectedChat.value = nextChat
+        }
+        replaceChatInList(nextChat, targetChat)
       }
 
       optimisticMessages.push(
@@ -2302,8 +2627,14 @@ async function sendMessage() {
           roomId: resolvedRoomId,
           text,
           replyToEventId,
+          deliveryStatus: data?.status || 'MATRIX_ACCEPTED',
         })
       )
+      if (data?.status === 'REMOTE_FAILED') {
+        composerNotice.value = 'WhatsApp could not deliver this message.'
+      } else if (data?.status === 'REMOTE_TIMEOUT' || data?.status === 'MATRIX_ACCEPTED') {
+        composerNotice.value = 'Message accepted. Delivery confirmation is pending.'
+      }
     }
 
     composer.value = ''
@@ -2311,11 +2642,11 @@ async function sendMessage() {
     clearDraftAttachments()
     emojiPanelOpen.value = false
     gifPanelOpen.value = false
-    appendOptimisticMessages(optimisticMessages)
+    appendOptimisticMessages(optimisticMessages, targetChat)
 
     emitCommunicationPriorityRefresh('communication_replied', {
       sourceApp: 'whatsapp',
-      conversationId: currentRoomId(selectedChat.value) || roomId,
+      conversationId: optimisticMessages[0]?.roomId || roomId,
     })
 
     await nextTick()
@@ -2323,7 +2654,6 @@ async function sendMessage() {
 
     Promise.all([
       loadChats({ silent: true }),
-      loadSelectedConversation({ silent: true }),
       refreshWhatsAppActions({ silent: true }),
     ]).catch(() => {})
 
@@ -2422,6 +2752,9 @@ watch(
 
 onMounted(async () => {
   handleViewportResize()
+  document.addEventListener('ws:whatsapp_message', handleWhatsAppRealtimeMessage)
+  document.addEventListener('ws:whatsapp_send_status', handleWhatsAppSendStatus)
+  document.addEventListener('ws:whatsapp_sync_status', handleWhatsAppSyncStatus)
   await refreshAll()
   startPolling()
   window.addEventListener('resize', handleViewportResize)
@@ -2429,6 +2762,9 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', handleViewportResize)
+  document.removeEventListener('ws:whatsapp_message', handleWhatsAppRealtimeMessage)
+  document.removeEventListener('ws:whatsapp_send_status', handleWhatsAppSendStatus)
+  document.removeEventListener('ws:whatsapp_sync_status', handleWhatsAppSyncStatus)
   stopPolling()
   stopRecordingTimer()
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
@@ -2441,6 +2777,7 @@ onUnmounted(() => {
     emojiPickerEl.value.innerHTML = ''
   }
   emojiPicker = null
+  historyCache.clear()
   showInfoPanel.value = false
   showProfilePanel.value = false
 })
@@ -2704,6 +3041,21 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
+.wa-sync-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 6px 10px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  border-left: 2px solid rgba(69, 211, 152, 0.55);
+}
+
+.wa-sync-progress.has-error {
+  border-left-color: var(--danger, #ef6a6a);
+}
+
 /* FIX 3: chat list must flex: 1 with min-height: 0 to scroll inside sidebar */
 .wa-chat-list {
   flex: 1;
@@ -2880,6 +3232,16 @@ onUnmounted(() => {
   color: #dfffea;
   font-size: 22px;
   font-weight: 700;
+}
+
+.wa-empty-spinner {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid rgba(95, 255, 170, 0.25);
+  border-top-color: #5fffaa;
+  animation: wa-spin 0.9s linear infinite;
+  display: inline-block;
 }
 
 .wa-chat-skeleton {
@@ -3160,9 +3522,11 @@ onUnmounted(() => {
 }
 
 .wa-bubble {
-  padding: 10px 12px 8px;
-  border-radius: var(--radius-md);
-  border-bottom-left-radius: 10px;
+  padding: 7px 10px 7px;
+  /* Authentic WhatsApp bubble tail: incoming messages square the top-left
+     corner (the corner nearest the avatar) while the rest stay rounded. */
+  border-radius: 8px;
+  border-top-left-radius: 0;
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
   color: var(--text-primary);
@@ -3184,8 +3548,9 @@ onUnmounted(() => {
 .wa-message-row.from-me .wa-bubble {
   background: rgba(69, 211, 152, 0.2);
   border-color: rgba(95, 255, 170, 0.18);
-  border-bottom-right-radius: 10px;
-  border-bottom-left-radius: 24px;
+  /* Outgoing bubbles mirror the tail to the top-right corner. */
+  border-top-left-radius: 8px;
+  border-top-right-radius: 0;
 }
 
 .wa-bubble.deleted {
@@ -3315,6 +3680,13 @@ onUnmounted(() => {
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.wa-message-text :deep(.wa-link),
+.wa-link {
+  color: #53bdeb;
+  text-decoration: underline;
+  word-break: break-all;
 }
 
 .wa-reaction-row {
@@ -3797,6 +4169,8 @@ onUnmounted(() => {
   background: rgba(69, 211, 152, 0.9);
   color: #04210f;
   border-color: rgba(95, 255, 170, 0.3);
+  /* Circular send button, matching WhatsApp Web's round mic/send affordance. */
+  border-radius: 50%;
 }
 
 .wa-primary-btn {

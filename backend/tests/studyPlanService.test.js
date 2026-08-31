@@ -4,6 +4,7 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 
 const RevisionItem = require("../models/RevisionItem");
+const StudySession = require("../models/StudySession");
 const studyPlanService = require("../services/studyPlanService");
 
 test("RevisionItem.daysForLevel uses the expected spacing schedule", () => {
@@ -34,4 +35,45 @@ test("studyPlanService date helpers normalize correctly", () => {
 
   const plusTwo = studyPlanService.addDays(start, 2);
   assert.equal(plusTwo.getDate(), start.getDate() + 2);
+});
+
+test("started study items do not count as completed learning work", () => {
+  const topicA = "64f000000000000000000001";
+  const topicB = "64f000000000000000000002";
+  const session = new StudySession({
+    userId: "learner",
+    goalId: "64f000000000000000000099",
+    date: new Date("2026-08-05T00:00:00Z"),
+    plannedItems: [
+      {
+        topicId: topicA,
+        plannedMinutes: 25,
+        order: 0,
+        type: "learn",
+        status: "started",
+        startedAt: new Date("2026-08-05T10:00:00Z"),
+      },
+      {
+        topicId: topicB,
+        plannedMinutes: 35,
+        order: 1,
+        type: "learn",
+        status: "planned",
+      },
+    ],
+  });
+
+  studyPlanService.syncLegacySessionFields(session);
+
+  assert.equal(session.minutesCompleted, 0);
+  assert.equal(session.minutesPlanned, 60);
+  assert.equal(session.status, "in_progress");
+  assert.deepEqual(session.completedTopicIds.map(String), []);
+
+  session.plannedItems[0].status = "completed";
+  session.plannedItems[0].completedAt = new Date("2026-08-05T10:25:00Z");
+  studyPlanService.syncLegacySessionFields(session);
+
+  assert.equal(session.minutesCompleted, 25);
+  assert.deepEqual(session.completedTopicIds.map(String), [topicA]);
 });

@@ -2,7 +2,15 @@
 
 const mongoose = require("mongoose");
 
-const STATUS_VALUES = ["planned", "completed", "missed"];
+const STATUS_VALUES = ["planned", "in_progress", "completed", "missed"];
+const ITEM_TYPE_VALUES = ["learn", "practice", "revise", "flashcards"];
+const ITEM_STATUS_VALUES = [
+  "planned",
+  "started",
+  "completed",
+  "skipped",
+  "moved",
+];
 
 const studySessionSchema = new mongoose.Schema(
   {
@@ -19,6 +27,29 @@ const studySessionSchema = new mongoose.Schema(
     ],
     completedTopicIds: [
       { type: mongoose.Schema.Types.ObjectId, ref: "StudyTopic" },
+    ],
+    plannedItems: [
+      {
+        topicId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "StudyTopic",
+          required: true,
+        },
+        plannedMinutes: { type: Number, default: 0, min: 0 },
+        order: { type: Number, default: 0 },
+        type: {
+          type: String,
+          enum: ITEM_TYPE_VALUES,
+          default: "learn",
+        },
+        status: {
+          type: String,
+          enum: ITEM_STATUS_VALUES,
+          default: "planned",
+        },
+        startedAt: { type: Date, default: null },
+        completedAt: { type: Date, default: null },
+      },
     ],
     minutesPlanned: { type: Number, default: 0 },
     minutesCompleted: { type: Number, default: 0 },
@@ -39,5 +70,7 @@ const StudySession =
   mongoose.model("StudySession", studySessionSchema);
 
 StudySession.STATUS_VALUES = STATUS_VALUES;
+StudySession.ITEM_TYPE_VALUES = ITEM_TYPE_VALUES;
+StudySession.ITEM_STATUS_VALUES = ITEM_STATUS_VALUES;
 
 module.exports = StudySession;

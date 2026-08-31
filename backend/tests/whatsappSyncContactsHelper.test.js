@@ -17,3 +17,14 @@ test("syncWhatsAppContacts is distinct from sendBridgeCommand (they are not the 
     whatsappService.sendBridgeCommand
   );
 });
+
+test("bridge commands use the active WhatsApp command prefix exactly once", () => {
+  assert.equal(
+    whatsappService.__test.formatWhatsAppBridgeCommand("sync contacts-with-avatars"),
+    "!whatsapp sync contacts-with-avatars"
+  );
+  assert.equal(
+    whatsappService.__test.formatWhatsAppBridgeCommand("!whatsapp help"),
+    "!whatsapp help"
+  );
+});

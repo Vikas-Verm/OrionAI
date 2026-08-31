@@ -4,6 +4,7 @@ const StudyGoal = require("../models/StudyGoal");
 const StudyTopic = require("../models/StudyTopic");
 const StudySession = require("../models/StudySession");
 const RevisionItem = require("../models/RevisionItem");
+const PracticeQuestion = require("../models/PracticeQuestion");
 
 const DEFAULT_BLOCK_MINUTES = 30;
 const MIN_BLOCK_MINUTES = 15;
@@ -31,6 +32,14 @@ function addDays(date, days) {
   const d = new Date(date);
   d.setDate(d.getDate() + days);
   return d;
+}
+
+function localDateKey(date = new Date()) {
+  const d = startOfDay(date);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function topicSortKey(topic) {
@@ -92,12 +101,211 @@ function reasonForTopic(topic) {
       return "Continue what you started.";
     case "not_started":
       return "Next topic in your goal.";
+    case "completed":
+      return "Completed today.";
     default:
       return "Recommended for today.";
   }
 }
 
-async function generateTodaysPlan({ userId, goalId = null } = {}) {
+function planItemTypeForTopic(topic) {
+  return topic.status === "revision_due" ? "revise" : "learn";
+}
+
+function plannedMinutesForTopic(topic) {
+  return Number.isFinite(topic?.estimatedMinutes) && topic.estimatedMinutes > 0
+    ? topic.estimatedMinutes
+    : DEFAULT_BLOCK_MINUTES;
+}
+
+function buildPlannedItemsFromPicks(picks = []) {
+  return picks.map(({ topic, plannedMinutes }, index) => ({
+    topicId: topic._id,
+    plannedMinutes:
+      Number.isFinite(plannedMinutes) && plannedMinutes > 0
+        ? plannedMinutes
+        : plannedMinutesForTopic(topic),
+    order: index,
+    type: planItemTypeForTopic(topic),
+    status: "planned",
+    startedAt: null,
+    completedAt: null,
+  }));
+}
+
+function getSessionPlannedItems(session) {
+  if (!session) return [];
+  const plannedItems = Array.isArray(session.plannedItems)
+    ? session.plannedItems
+    : [];
+  if (plannedItems.length) return plannedItems;
+
+  const plannedTopicIds = Array.isArray(session.plannedTopicIds)
+    ? session.plannedTopicIds
+    : [];
+  const completedIds = new Set((session.completedTopicIds || []).map(String));
+  const perTopic =
+    plannedTopicIds.length > 0
+      ? Math.round((Number(session.minutesPlanned) || 0) / plannedTopicIds.length)
+      : 0;
+  return plannedTopicIds.map((topicId, index) => ({
+    topicId,
+    plannedMinutes: perTopic,
+    order: index,
+    type: "learn",
+    status: completedIds.has(String(topicId)) ? "completed" : "planned",
+    startedAt: null,
+    completedAt: null,
+  }));
+}
+
+function syncLegacySessionFields(session) {
+  const items = getSessionPlannedItems(session);
+  session.plannedTopicIds = items
+    .filter((item) => item.status !== "moved" && item.status !== "skipped")
+    .map((item) => item.topicId);
+  session.completedTopicIds = items
+    .filter((item) => item.status === "completed")
+    .map((item) => item.topicId);
+  session.minutesPlanned = items
+    .filter((item) => item.status !== "moved" && item.status !== "skipped")
+    .reduce((sum, item) => sum + (Number(item.plannedMinutes) || 0), 0);
+  session.minutesCompleted = items
+    .filter((item) => item.status === "completed")
+    .reduce((sum, item) => sum + (Number(item.plannedMinutes) || 0), 0);
+
+  const activeItems = items.filter(
+    (item) => item.status !== "moved" && item.status !== "skipped"
+  );
+  const completedCount = activeItems.filter(
+    (item) => item.status === "completed"
+  ).length;
+  const startedCount = activeItems.filter((item) =>
+    ["started", "completed"].includes(item.status)
+  ).length;
+
+  if (activeItems.length > 0 && completedCount >= activeItems.length) {
+    session.status = "completed";
+  } else if (startedCount > 0 || session.minutesCompleted > 0) {
+    session.status = "in_progress";
+  } else if (session.status !== "missed") {
+    session.status = "planned";
+  }
+}
+
+async function markSessionTopicStarted({
+  userId,
+  goalId,
+  topicId,
+  date = new Date(),
+} = {}) {
+  if (!userId || !goalId || !topicId) return null;
+  const dayStart = startOfDay(date);
+  const dayEnd = endOfDay(date);
+  const session = await StudySession.findOne({
+    userId,
+    goalId,
+    date: { $gte: dayStart, $lte: dayEnd },
+  });
+  if (!session) return null;
+
+  const items = getSessionPlannedItems(session).map((item) =>
+    typeof item.toObject === "function" ? item.toObject() : { ...item }
+  );
+  const item = items.find((entry) => String(entry.topicId) === String(topicId));
+  if (!item || item.status === "completed") return session;
+
+  item.status = "started";
+  item.startedAt = item.startedAt || new Date();
+  session.plannedItems = items;
+  syncLegacySessionFields(session);
+  await session.save();
+  return session;
+}
+
+async function markSessionTopicCompleted({
+  userId,
+  goalId,
+  topicId,
+  fallbackMinutes = DEFAULT_BLOCK_MINUTES,
+  type = "learn",
+  date = new Date(),
+} = {}) {
+  if (!userId || !goalId || !topicId) return null;
+  const dayStart = startOfDay(date);
+  const dayEnd = endOfDay(date);
+  let session = await StudySession.findOne({
+    userId,
+    goalId,
+    date: { $gte: dayStart, $lte: dayEnd },
+  });
+
+  const now = new Date();
+  if (!session) {
+    const plannedMinutes =
+      Number.isFinite(fallbackMinutes) && fallbackMinutes > 0
+        ? fallbackMinutes
+        : DEFAULT_BLOCK_MINUTES;
+    session = await StudySession.create({
+      userId,
+      goalId,
+      date: dayStart,
+      plannedTopicIds: [topicId],
+      completedTopicIds: [topicId],
+      plannedItems: [
+        {
+          topicId,
+          plannedMinutes,
+          order: 0,
+          type,
+          status: "completed",
+          startedAt: now,
+          completedAt: now,
+        },
+      ],
+      minutesPlanned: plannedMinutes,
+      minutesCompleted: plannedMinutes,
+      status: "completed",
+    });
+    return session;
+  }
+
+  const items = getSessionPlannedItems(session).map((item) =>
+    typeof item.toObject === "function" ? item.toObject() : { ...item }
+  );
+  let item = items.find((entry) => String(entry.topicId) === String(topicId));
+  if (!item) {
+    item = {
+      topicId,
+      plannedMinutes:
+        Number.isFinite(fallbackMinutes) && fallbackMinutes > 0
+          ? fallbackMinutes
+          : DEFAULT_BLOCK_MINUTES,
+      order: items.length,
+      type,
+      status: "planned",
+      startedAt: null,
+      completedAt: null,
+    };
+    items.push(item);
+  }
+
+  if (item.status !== "completed") {
+    item.status = "completed";
+    item.startedAt = item.startedAt || now;
+    item.completedAt = now;
+  }
+  session.plannedItems = items;
+  syncLegacySessionFields(session);
+  await session.save();
+  return session;
+}
+
+async function generateTodaysPlan({
+  userId,
+  goalId = null,
+  retryOnVersionConflict = true,
+} = {}) {
   if (!userId) throw new Error("userId required");
 
   let goal = null;
@@ -160,6 +368,7 @@ async function generateTodaysPlan({ userId, goalId = null } = {}) {
   });
 
   const plannedTopicIds = picks.map((p) => p.topic._id);
+  const plannedItems = buildPlannedItemsFromPicks(picks);
 
   let session = await StudySession.findOne({
     userId,
@@ -173,6 +382,7 @@ async function generateTodaysPlan({ userId, goalId = null } = {}) {
       goalId: goal._id,
       date: today,
       plannedTopicIds,
+      plannedItems,
       completedTopicIds: [],
       minutesPlanned: totalMinutes,
       minutesCompleted: 0,
@@ -182,27 +392,108 @@ async function generateTodaysPlan({ userId, goalId = null } = {}) {
     // Refresh: replace planned topics (preserve completed history).
     // Also strip out anything that's been moved to a future session in case
     // the in-memory pick above didn't already exclude it (defence in depth).
-    session.plannedTopicIds = plannedTopicIds.filter(
-      (id) => !futureScheduledTopicIds.has(String(id))
+    const previousItems = getSessionPlannedItems(session).map((item) =>
+      typeof item.toObject === "function" ? item.toObject() : { ...item }
     );
-    session.minutesPlanned = totalMinutes;
+    const completedIds = new Set((session.completedTopicIds || []).map(String));
+    const startedByTopic = new Map(
+      previousItems.map((item) => [String(item.topicId), item])
+    );
+    const newItemTopicIds = new Set(plannedItems.map((item) => String(item.topicId)));
+    const completedCarryForward = previousItems.filter(
+      (item) =>
+        item.status === "completed" &&
+        !newItemTopicIds.has(String(item.topicId)) &&
+        !futureScheduledTopicIds.has(String(item.topicId))
+    );
+    session.plannedItems = [
+      ...completedCarryForward,
+      ...plannedItems
+        .filter((item) => !futureScheduledTopicIds.has(String(item.topicId)))
+        .map((item) => {
+          const previous = startedByTopic.get(String(item.topicId));
+          const wasCompleted =
+            completedIds.has(String(item.topicId)) ||
+            previous?.status === "completed";
+          if (wasCompleted) {
+            return {
+              ...item,
+              status: "completed",
+              startedAt:
+                previous?.startedAt || previous?.completedAt || new Date(),
+              completedAt: previous?.completedAt || new Date(),
+            };
+          }
+          if (previous?.status === "started") {
+            return {
+              ...item,
+              status: "started",
+              startedAt: previous.startedAt || new Date(),
+            };
+          }
+          return item;
+        }),
+    ].map((item, index) => ({ ...item, order: index }));
+    syncLegacySessionFields(session);
     if (session.status === "missed") session.status = "planned";
-    await session.save();
+    try {
+      await session.save();
+    } catch (err) {
+      if (err?.name === "VersionError" && retryOnVersionConflict) {
+        return generateTodaysPlan({
+          userId,
+          goalId: goal._id,
+          retryOnVersionConflict: false,
+        });
+      }
+      throw err;
+    }
   }
 
-  const items = picks.map(({ topic, plannedMinutes }) => ({
-    topicId: topic._id,
-    title: topic.title,
-    subject: topic.subject || "",
-    category: topic.category || "",
-    difficulty: topic.difficulty,
-    status: topic.status,
-    plannedMinutes,
-    reason: reasonForTopic(topic),
-    completed: session.completedTopicIds
-      .map(String)
-      .includes(String(topic._id)),
-  }));
+  const visibleSessionItems = getSessionPlannedItems(session)
+    .filter(
+      (item) =>
+        item.status !== "moved" &&
+        item.status !== "skipped" &&
+        item.status !== "completed"
+    )
+    .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
+  const sessionTopicIds = visibleSessionItems.map((item) => item.topicId);
+  const sessionTopics = await StudyTopic.find({
+    userId,
+    _id: { $in: sessionTopicIds },
+  });
+  const sessionTopicById = new Map(
+    sessionTopics.map((topic) => [String(topic._id), topic])
+  );
+  const items = visibleSessionItems
+    .map((item) => {
+      const topic = sessionTopicById.get(String(item.topicId));
+      if (!topic) return null;
+      const displayStatus =
+        dueTopicIdSet.has(String(topic._id)) && topic.status !== "completed"
+          ? "revision_due"
+          : topic.status;
+      return {
+        itemId: item._id,
+        topicId: topic._id,
+        title: topic.title,
+        subject: topic.subject || "",
+        category: topic.category || "",
+        difficulty: topic.difficulty,
+        status: displayStatus,
+        plannedMinutes: Number(item.plannedMinutes) || plannedMinutesForTopic(topic),
+        reason:
+          item.status === "completed"
+            ? "Completed today."
+            : reasonForTopic({ ...topic.toObject(), status: displayStatus }),
+        itemType: item.type || planItemTypeForTopic({ status: displayStatus }),
+        itemStatus: item.status || "planned",
+        started: item.status === "started",
+        completed: item.status === "completed",
+      };
+    })
+    .filter(Boolean);
 
   return { goal, session, items };
 }
@@ -269,22 +560,40 @@ async function getOverviewForUser(userId) {
   const primaryGoal = activeGoals[0] || null;
 
   let todayItems = [];
-  if (todaySession && Array.isArray(todaySession.plannedTopicIds)) {
+  if (todaySession) {
+    const sessionItems = getSessionPlannedItems(todaySession);
+    const plannedTopicIds = sessionItems
+      .filter(
+        (item) =>
+          item.status !== "moved" &&
+          item.status !== "skipped" &&
+          item.status !== "completed"
+      )
+      .map((item) => item.topicId);
     const topics = await StudyTopic.find({
-      _id: { $in: todaySession.plannedTopicIds },
+      _id: { $in: plannedTopicIds },
     });
     const topicMap = new Map(topics.map((t) => [String(t._id), t]));
-    todayItems = todaySession.plannedTopicIds
-      .map((id) => topicMap.get(String(id)))
-      .filter(Boolean)
-      .map((topic) => ({
-        topicId: topic._id,
-        title: topic.title,
-        status: topic.status,
-        completed: todaySession.completedTopicIds
-          .map(String)
-          .includes(String(topic._id)),
-      }));
+    todayItems = sessionItems
+      .filter(
+        (item) =>
+          item.status !== "moved" &&
+          item.status !== "skipped" &&
+          item.status !== "completed"
+      )
+      .map((item) => {
+        const topic = topicMap.get(String(item.topicId));
+        if (!topic) return null;
+        return {
+          topicId: topic._id,
+          title: topic.title,
+          status: topic.status,
+          itemType: item.type || "learn",
+          itemStatus: item.status || "planned",
+          completed: item.status === "completed",
+        };
+      })
+      .filter(Boolean);
   }
 
   const progress = primaryGoal
@@ -307,7 +616,19 @@ async function getOverviewForUser(userId) {
 }
 
 async function computeGoalProgress({ userId, goalId }) {
-  const topics = await StudyTopic.find({ userId, goalId });
+  const [topics, sessions, revisionsCompleted, answeredQuestions] =
+    await Promise.all([
+      StudyTopic.find({ userId, goalId }),
+      StudySession.find({ userId, goalId }).sort({ date: -1 }).lean(),
+      RevisionItem.countDocuments({ userId, goalId, status: "completed" }),
+      PracticeQuestion.find({
+        userId,
+        goalId,
+        answeredCorrectly: { $ne: null },
+      })
+        .select("answeredCorrectly")
+        .lean(),
+    ]);
   const total = topics.length;
   const completed = topics.filter((t) => t.status === "completed").length;
   const inProgress = topics.filter((t) => t.status === "in_progress").length;
@@ -321,6 +642,33 @@ async function computeGoalProgress({ userId, goalId }) {
     dueAt: { $lte: endOfDay() },
   });
 
+  const completedWorkDates = new Set(
+    sessions
+      .filter((session) => {
+        if ((Number(session.minutesCompleted) || 0) > 0) return true;
+        const items = Array.isArray(session.plannedItems) ? session.plannedItems : [];
+        if (items.some((item) => item.status === "completed")) return true;
+        return (
+          Array.isArray(session.completedTopicIds) &&
+          session.completedTopicIds.length > 0
+        );
+      })
+      .map((session) => localDateKey(session.date))
+  );
+  let studyStreakDays = 0;
+  for (let cursor = startOfDay(); ; cursor = addDays(cursor, -1)) {
+    const key = localDateKey(cursor);
+    if (!completedWorkDates.has(key)) break;
+    studyStreakDays += 1;
+  }
+  const minutesStudied = sessions.reduce(
+    (sum, session) => sum + (Number(session.minutesCompleted) || 0),
+    0
+  );
+  const answeredCount = answeredQuestions.length;
+  const correctCount = answeredQuestions.filter((q) => q.answeredCorrectly === true)
+    .length;
+
   return {
     total,
     completed,
@@ -328,6 +676,12 @@ async function computeGoalProgress({ userId, goalId }) {
     weak,
     notStarted,
     dueRevisions,
+    studyStreakDays,
+    minutesStudied,
+    revisionsCompleted,
+    practiceAccuracy:
+      answeredCount > 0 ? Math.round((correctCount / answeredCount) * 100) : null,
+    answeredQuestions: answeredCount,
     completionPercent: total > 0 ? Math.round((completed / total) * 100) : 0,
   };
 }
@@ -337,7 +691,12 @@ module.exports = {
   scheduleNextRevisionForTopic,
   getOverviewForUser,
   computeGoalProgress,
+  getSessionPlannedItems,
+  markSessionTopicStarted,
+  markSessionTopicCompleted,
+  syncLegacySessionFields,
   startOfDay,
   endOfDay,
   addDays,
+  localDateKey,
 };

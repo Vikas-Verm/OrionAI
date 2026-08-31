@@ -653,8 +653,9 @@
                                     <button class="int-btn int-btn-test" @click.stop="emit('openModule', 'signal')">
                                         Open chats ↗
                                     </button>
-                                    <button class="int-btn int-btn-test" @click.stop="refreshSignalStatus">
-                                        Refresh status
+                                    <button class="int-btn int-btn-test" :disabled="signalCheckingStatus" @click.stop="checkSignalStatusClick">
+                                        <span v-if="signalCheckingStatus" class="int-spinner"></span>
+                                        <span v-else>Refresh status</span>
                                     </button>
                                     <button class="int-btn int-btn-remove" :disabled="removing === 'signal'" @click.stop="removeIntegration('signal')">
                                         <span v-if="removing === 'signal'" class="int-spinner int-spinner-danger"></span>
@@ -689,7 +690,10 @@
                                 </div>
                                 <div class="int-actions">
                                     <button class="int-btn int-btn-save" @click.stop="openSignalQrModal">Open QR</button>
-                                    <button class="int-btn int-btn-test" @click.stop="refreshSignalStatus">Check status</button>
+                                    <button class="int-btn int-btn-test" :disabled="signalCheckingStatus" @click.stop="checkSignalStatusClick">
+                                        <span v-if="signalCheckingStatus" class="int-spinner"></span>
+                                        <span v-else>Check status</span>
+                                    </button>
                                     <button class="int-btn int-btn-remove" :disabled="removing === 'signal'" @click.stop="removeIntegration('signal')">
                                         <span v-if="removing === 'signal'" class="int-spinner int-spinner-danger"></span>
                                         <span v-else>Cancel</span>
@@ -708,7 +712,10 @@
                                         <span v-if="signalConnecting" class="int-spinner"></span>
                                         <span v-else>Retry</span>
                                     </button>
-                                    <button class="int-btn int-btn-test" @click.stop="refreshSignalStatus">Check status</button>
+                                    <button class="int-btn int-btn-test" :disabled="signalCheckingStatus" @click.stop="checkSignalStatusClick">
+                                        <span v-if="signalCheckingStatus" class="int-spinner"></span>
+                                        <span v-else>Check status</span>
+                                    </button>
                                     <button class="int-btn int-btn-remove" :disabled="removing === 'signal'" @click.stop="removeIntegration('signal')">
                                         <span v-if="removing === 'signal'" class="int-spinner int-spinner-danger"></span>
                                         <span v-else>Disconnect</span>
@@ -750,8 +757,9 @@
                                     <button class="int-btn int-btn-test" @click.stop="emit('openModule', 'whatsapp')">
                                         Open chats ↗
                                     </button>
-                                    <button class="int-btn int-btn-test" @click.stop="refreshWhatsAppStatus">
-                                        Refresh status
+                                    <button class="int-btn int-btn-test" :disabled="whatsappCheckingStatus" @click.stop="checkWhatsAppStatusClick">
+                                        <span v-if="whatsappCheckingStatus" class="int-spinner"></span>
+                                        <span v-else>Refresh status</span>
                                     </button>
                                     <button class="int-btn int-btn-remove" :disabled="removing === 'whatsapp'" @click.stop="removeIntegration('whatsapp')">
                                         <span v-if="removing === 'whatsapp'" class="int-spinner int-spinner-danger"></span>
@@ -786,7 +794,10 @@
                                 </div>
                                 <div class="int-actions">
                                     <button class="int-btn int-btn-save" @click.stop="openWhatsAppQrModal">Open QR</button>
-                                    <button class="int-btn int-btn-test" @click.stop="refreshWhatsAppStatus">Check status</button>
+                                    <button class="int-btn int-btn-test" :disabled="whatsappCheckingStatus" @click.stop="checkWhatsAppStatusClick">
+                                        <span v-if="whatsappCheckingStatus" class="int-spinner"></span>
+                                        <span v-else>Check status</span>
+                                    </button>
                                     <button class="int-btn int-btn-remove" :disabled="removing === 'whatsapp'" @click.stop="removeIntegration('whatsapp')">
                                         <span v-if="removing === 'whatsapp'" class="int-spinner int-spinner-danger"></span>
                                         <span v-else>Cancel</span>
@@ -805,7 +816,10 @@
                                         <span v-if="whatsappConnecting" class="int-spinner"></span>
                                         <span v-else>Retry</span>
                                     </button>
-                                    <button class="int-btn int-btn-test" @click.stop="refreshWhatsAppStatus">Check status</button>
+                                    <button class="int-btn int-btn-test" :disabled="whatsappCheckingStatus" @click.stop="checkWhatsAppStatusClick">
+                                        <span v-if="whatsappCheckingStatus" class="int-spinner"></span>
+                                        <span v-else>Check status</span>
+                                    </button>
                                     <button class="int-btn int-btn-remove" :disabled="removing === 'whatsapp'" @click.stop="removeIntegration('whatsapp')">
                                         <span v-if="removing === 'whatsapp'" class="int-spinner int-spinner-danger"></span>
                                         <span v-else>Disconnect</span>
@@ -896,7 +910,10 @@
                     </div>
 
                     <div class="int-actions">
-                        <button class="int-btn int-btn-test" @click.stop="refreshSignalStatus">Check status</button>
+                        <button class="int-btn int-btn-test" :disabled="signalCheckingStatus" @click.stop="checkSignalStatusClick">
+                            <span v-if="signalCheckingStatus" class="int-spinner"></span>
+                            <span v-else>Check status</span>
+                        </button>
                         <button
                             v-if="signalCardState === 'error'"
                             class="int-btn int-btn-save"
@@ -947,7 +964,10 @@
                     </div>
 
                     <div class="int-actions">
-                        <button class="int-btn int-btn-test" @click.stop="refreshWhatsAppStatus">Check status</button>
+                        <button class="int-btn int-btn-test" :disabled="whatsappCheckingStatus" @click.stop="checkWhatsAppStatusClick">
+                            <span v-if="whatsappCheckingStatus" class="int-spinner"></span>
+                            <span v-else>Check status</span>
+                        </button>
                         <button
                             v-if="whatsappCardState === 'error'"
                             class="int-btn int-btn-save"
@@ -997,8 +1017,32 @@ const signalQrModalOpen = ref(false)
 const whatsappStatus = ref(null)
 const whatsappQrModalOpen = ref(false)
 const whatsappQrStableSrc = ref('')
+// Per-click "Check status" busy flags so the button shows immediate visual
+// feedback even when the backend status cache returns instantly.
+const signalCheckingStatus = ref(false)
+const whatsappCheckingStatus = ref(false)
 let signalPollTimer = null
 let whatsappPollTimer = null
+
+async function checkSignalStatusClick() {
+    signalCheckingStatus.value = true
+    try {
+        await refreshSignalStatus()
+    } finally {
+        // Brief minimum so the spinner is visible even if the cache returns
+        // in <100ms. Avoids a "did anything happen?" experience.
+        setTimeout(() => { signalCheckingStatus.value = false }, 400)
+    }
+}
+
+async function checkWhatsAppStatusClick() {
+    whatsappCheckingStatus.value = true
+    try {
+        await refreshWhatsAppStatus()
+    } finally {
+        setTimeout(() => { whatsappCheckingStatus.value = false }, 400)
+    }
+}
 
 const cards = [
   {
@@ -1229,6 +1273,10 @@ function syncSignalPolling() {
         return
     }
     if (signalPollTimer) return
+    // Poll every 2.5s while pending/QR. Backend has a 1.5s status cache and
+    // Synapse's bridge bot needs headroom to send its "Successfully logged in"
+    // confirmation message — too-aggressive polling 429s Synapse and starves
+    // the bridge's outgoing messages.
     signalPollTimer = setInterval(async () => {
         try {
             await refreshSignalStatus()
@@ -1245,6 +1293,8 @@ function syncWhatsAppPolling() {
         return
     }
     if (whatsappPollTimer) return
+    // Poll every 2.5s while pending/QR. Synapse rate limits punish faster
+    // intervals and the bridge bot's "logged in" message needs headroom.
     whatsappPollTimer = setInterval(async () => {
         try {
             await refreshWhatsAppStatus()

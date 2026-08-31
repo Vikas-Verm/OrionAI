@@ -43,6 +43,8 @@ const practiceQuestionSchema = new mongoose.Schema(
       default: "medium",
     },
     source: { type: String, enum: SOURCE_VALUES, default: "generated" },
+    sourceType: { type: String, default: "general" },
+    sourceRefs: [{ type: String }],
     userAnswer: { type: String, default: "" },
     userMarkedWeak: { type: Boolean, default: false },
     answeredCorrectly: { type: Boolean, default: null },

@@ -36,6 +36,10 @@
             @click="openTopicModal()">
             Add topic
           </button>
+          <button class="sh-btn sh-btn--ghost" type="button" :disabled="!materialTargetTopicId"
+            @click="openTopicLearning(materialTargetTopicId, { tab: 'materials', openMaterial: true })">
+            Add material
+          </button>
           <button class="sh-btn sh-btn--ghost" type="button" :disabled="!activeGoal || planLoading"
             @click="refreshTodayPlan">
             {{ planLoading ? 'Generating…' : "Generate today's plan" }}
@@ -79,16 +83,20 @@
             </div>
             <span v-if="goals.length" class="sh-pill">{{ goals.length }}</span>
           </header>
+          <label v-if="goals.length" class="sh-filter-field">
+            <span>Search goals</span>
+            <input v-model="goalSearch" type="search" placeholder="Search goals..." />
+          </label>
 
           <div v-if="loading" class="sh-skeleton">Loading your goals…</div>
 
           <div
-            v-else-if="goals.length"
+            v-else-if="filteredGoals.length"
             class="sh-goal-list"
-            :class="{ 'sh-goal-list--scroll': goals.length > 3 }"
+            :class="{ 'sh-goal-list--scroll': filteredGoals.length > 3 }"
           >
             <article
-              v-for="goal in goals"
+              v-for="goal in filteredGoals"
               :key="goal._id"
               class="sh-goal-card"
               :class="{ 'sh-goal-card--active': isActiveGoal(goal) }"
@@ -156,6 +164,32 @@
               {{ planLoading ? 'Refreshing…' : 'Refresh' }}
             </button>
           </header>
+          <div v-if="activeGoal" class="sh-filter-row">
+            <label class="sh-filter-field">
+              <span>Search</span>
+              <input v-model="topicFilters.search" type="search" placeholder="Search topics..." />
+            </label>
+            <label class="sh-filter-field">
+              <span>Status</span>
+              <select v-model="topicFilters.status">
+                <option value="">All</option>
+                <option value="not_started">Not started</option>
+                <option value="in_progress">In progress</option>
+                <option value="completed">Completed</option>
+                <option value="weak">Weak</option>
+                <option value="revision_due">Revision due</option>
+              </select>
+            </label>
+            <label class="sh-filter-field">
+              <span>Difficulty</span>
+              <select v-model="topicFilters.difficulty">
+                <option value="">All</option>
+                <option value="easy">Easy</option>
+                <option value="medium">Medium</option>
+                <option value="hard">Hard</option>
+              </select>
+            </label>
+          </div>
 
           <div v-if="!activeGoal" class="sh-empty-block">
             <strong>No active goal selected.</strong>
@@ -184,11 +218,15 @@
                   <span class="sh-status-tag" :data-status="item.status">{{ statusLabel(item.status) }}</span>
                 </p>
                 <p class="sh-plan-item-reason">{{ item.reason }}</p>
+                <p v-if="item.itemStatus === 'started'" class="sh-plan-item-reason">
+                  Started. Completed minutes and streak update after you finish real learning work.
+                </p>
               </div>
               <div class="sh-plan-item-actions">
                 <button class="sh-btn sh-btn--ghost sh-btn--sm" type="button"
-                  @click="openTopicLearning(item.topicId)">
-                  Start studying
+                  :disabled="actionPendingTopicId === item.topicId"
+                  @click="openTopicLearning(item.topicId, { start: true })">
+                  {{ item.itemStatus === 'started' ? 'Continue studying' : 'Start studying' }}
                 </button>
                 <button class="sh-btn sh-btn--primary sh-btn--sm" type="button"
                   :disabled="item.completed || actionPendingTopicId === item.topicId"
@@ -263,12 +301,12 @@
           <div v-else-if="topicsLoading" class="sh-skeleton">Loading topics…</div>
 
           <div
-            v-else-if="topics.length"
+            v-else-if="filteredTopics.length"
             class="sh-topic-list"
-            :class="{ 'sh-topic-list--scroll': topics.length > 10 }"
+            :class="{ 'sh-topic-list--scroll': filteredTopics.length > 10 }"
           >
             <article
-              v-for="topic in topics"
+              v-for="topic in filteredTopics"
               :key="topic._id"
               class="sh-topic-row"
             >
@@ -323,6 +361,69 @@
           </div>
         </section>
 
+        <!-- ── Materials card ─────────────────────────────────────── -->
+        <section class="sh-panel">
+          <header class="sh-panel-head">
+            <div>
+              <h3>Materials</h3>
+              <p>Recently added study sources.</p>
+            </div>
+          </header>
+          <div v-if="!recentMaterials.length" class="sh-empty-block">
+            <strong>No materials yet.</strong>
+            <p>Add materials from a topic page so OrionAI can use them for grounded study.</p>
+          </div>
+          <ul v-else class="sh-material-list">
+            <li v-for="m in recentMaterials" :key="m._id" class="sh-material-row">
+              <span class="sh-status-tag" :data-status="m.processingStatus">{{ m.type }}</span>
+              <div>
+                <strong>{{ m.title }}</strong>
+                <p>{{ m.processingStatus || m.status }}<span v-if="m.processingError"> · {{ m.processingError }}</span></p>
+              </div>
+            </li>
+          </ul>
+        </section>
+
+        <!-- ── Consistency card ───────────────────────────────────── -->
+        <section class="sh-panel sh-panel--span-2">
+          <header class="sh-panel-head">
+            <div>
+              <h3>Your Consistency</h3>
+              <p>Actual study activity only. Opening topics and uploading files do not count.</p>
+            </div>
+            <select v-model="consistencyRange" class="sh-range-select">
+              <option value="30_days">Last 30 days</option>
+              <option value="12_weeks">Last 12 weeks</option>
+              <option value="6_months">Last 6 months</option>
+              <option value="year">Current year</option>
+            </select>
+          </header>
+          <div v-if="consistencyLoading" class="sh-skeleton">Loading consistency...</div>
+          <div v-else-if="!consistency.activeDays" class="sh-empty-block">
+            <strong>Start your first study session to build your consistency.</strong>
+            <p>Complete study work, practice, flashcards, notes, or revision to fill this graph.</p>
+          </div>
+          <div v-else>
+            <div class="sh-consistency-stats">
+              <span>Current {{ consistency.currentStreak }}d</span>
+              <span>Longest {{ consistency.longestStreak }}d</span>
+              <span>{{ consistency.activeDays }} active days</span>
+              <span>{{ consistency.totalMinutes }} min</span>
+              <span>{{ consistency.averageMinutesPerActiveDay }} min/day</span>
+            </div>
+            <div class="sh-heatmap" role="list" aria-label="Study activity heatmap">
+              <button
+                v-for="day in consistency.days"
+                :key="day.date"
+                class="sh-heat-day"
+                :data-level="day.intensity"
+                type="button"
+                :title="consistencyTitle(day)"
+              ></button>
+            </div>
+          </div>
+        </section>
+
         <!-- ── Revision Due card ───────────────────────────────────── -->
         <section class="sh-panel">
           <header class="sh-panel-head">
@@ -350,7 +451,7 @@
               </div>
               <div class="sh-revision-actions">
                 <button class="sh-link" type="button" :disabled="!rev.topic"
-                  @click="openTopicLearning(rev.topicId)">
+                  @click="openTopicLearning(rev.topicId, { start: true })">
                   Revise now
                 </button>
                 <button class="sh-link" type="button"
@@ -452,6 +553,47 @@
       @close="closeTopicFilterModal"
       @open-topic="onTopicFilterOpenTopic"
     />
+    <div v-if="quickReview.open" class="sh-modal-backdrop">
+      <section class="sh-quick-modal" role="dialog" aria-modal="true">
+        <header class="sh-panel-head">
+          <div>
+            <h3>Quick Review</h3>
+            <p>{{ quickReview.reason || 'Let’s quickly refresh previous topics before starting.' }}</p>
+          </div>
+          <button
+            class="sh-icon-btn"
+            type="button"
+            aria-label="Close Quick Review"
+            title="Close Quick Review"
+            @click="closeQuickReview"
+          >
+            ×
+          </button>
+        </header>
+        <div v-if="quickReview.loading" class="sh-skeleton">Preparing review...</div>
+        <template v-else>
+          <p v-if="quickReview.previousTopics.length" class="sh-plan-item-reason">
+            Reviewing: {{ quickReview.previousTopics.map((t) => t.title).join(', ') }}
+          </p>
+          <article v-for="q in quickReview.questions" :key="q.questionId" class="sh-quick-question">
+            <strong>{{ q.question }}</strong>
+            <input v-model="quickReview.answers[q.questionId]" type="text" placeholder="Your answer" />
+            <p v-if="q.answeredAt" class="sh-plan-item-reason">
+              {{ q.isCorrect === true ? 'Correct.' : q.isCorrect === false ? `Answer: ${q.correctAnswer}` : 'Saved.' }}
+            </p>
+          </article>
+          <footer class="sh-quick-actions">
+            <button class="sh-link" type="button" @click="skipQuickReview">Skip for now</button>
+            <button class="sh-btn sh-btn--ghost sh-btn--sm" type="button" @click="startTopicDirectly">
+              Start new topic directly
+            </button>
+            <button class="sh-btn sh-btn--primary sh-btn--sm" type="button" @click="completeQuickReview">
+              Continue to new topic
+            </button>
+          </footer>
+        </template>
+      </section>
+    </div>
   </div>
 </template>
 
@@ -498,12 +640,29 @@ const planItems = ref([])
 const planSession = ref(null)
 const revisions = ref([])
 const upcomingRevisions = ref([])
+const recentMaterials = ref([])
+const consistency = ref({
+  days: [],
+  currentStreak: 0,
+  longestStreak: 0,
+  activeDays: 0,
+  totalMinutes: 0,
+  averageMinutesPerActiveDay: 0,
+})
 
 const activeGoalId = ref('')
+const goalSearch = ref('')
+const topicFilters = ref({
+  search: '',
+  status: '',
+  difficulty: '',
+})
+const consistencyRange = ref('12_weeks')
 const loading = ref(true)
 const topicsLoading = ref(false)
 const planLoading = ref(false)
 const revisionsLoading = ref(false)
+const consistencyLoading = ref(false)
 
 const showGoalModal = ref(false)
 const editingGoal = ref(null)
@@ -519,12 +678,23 @@ const topicFilterModal = ref({
   subtitle: '',
   items: [],
 })
+const quickReview = ref({
+  open: false,
+  loading: false,
+  topicId: '',
+  reviewId: '',
+  reason: '',
+  previousTopics: [],
+  questions: [],
+  answers: {},
+})
 
 const planMessage = ref('')
 const planCode = ref('')
 const planNoTopicsState = computed(
   () => !planItems.value.length && planCode.value === 'no_topics'
 )
+const ACTIVE_GOAL_STORAGE_KEY = 'orion.study.activeGoalId'
 
 const notice = ref({ type: 'info', text: '' })
 let noticeTimer = null
@@ -539,6 +709,29 @@ function showNotice(text, type = 'info', durationMs = 3200) {
 }
 
 const activeGoal = computed(() => goals.value.find((g) => g._id === activeGoalId.value) || null)
+const firstPlannedTopicId = computed(() => planItems.value.find((item) => !item.completed)?.topicId || '')
+const materialTargetTopicId = computed(
+  () => firstPlannedTopicId.value || filteredTopics.value[0]?._id || topics.value[0]?._id || ''
+)
+const filteredGoals = computed(() => {
+  const q = goalSearch.value.trim().toLowerCase()
+  if (!q) return goals.value
+  return goals.value.filter((goal) =>
+    [goal.title, goal.purpose, goal.level].some((value) =>
+      String(value || '').toLowerCase().includes(q)
+    )
+  )
+})
+const filteredTopics = computed(() => {
+  const q = topicFilters.value.search.trim().toLowerCase()
+  return topics.value.filter((topic) => {
+    if (topicFilters.value.status && topic.status !== topicFilters.value.status) return false
+    if (topicFilters.value.difficulty && topic.difficulty !== topicFilters.value.difficulty) return false
+    if (!q) return true
+    return [topic.title, topic.subject, topic.category, topic.description, ...(topic.tags || [])]
+      .some((value) => String(value || '').toLowerCase().includes(q))
+  })
+})
 
 const progress = computed(() => {
   const goalStats = activeGoal.value?.stats || {}
@@ -554,11 +747,32 @@ const progress = computed(() => {
     notStarted,
     weak,
     dueRevisions: revisions.value.length,
+    studyStreakDays: goalStats.studyStreakDays || 0,
+    minutesStudied: goalStats.minutesStudied || 0,
+    revisionsCompleted: goalStats.revisionsCompleted || 0,
+    practiceAccuracy:
+      typeof goalStats.practiceAccuracy === 'number' ? goalStats.practiceAccuracy : null,
     completionPercent: total > 0 ? Math.round((completed / total) * 100) : 0,
   }
 })
 
 const progressStats = computed(() => [
+  {
+    id: 'streak',
+    label: 'Study streak',
+    value: `${progress.value.studyStreakDays} day${progress.value.studyStreakDays === 1 ? '' : 's'}`,
+    hint: 'completed work only',
+    modifier: 'sh-stat--success',
+    clickable: false,
+  },
+  {
+    id: 'minutes',
+    label: 'Minutes studied',
+    value: progress.value.minutesStudied,
+    hint: 'from completed plan items',
+    modifier: '',
+    clickable: false,
+  },
   {
     id: 'completed',
     label: 'Topics completed',
@@ -603,6 +817,25 @@ const progressStats = computed(() => [
     modifier: 'sh-stat--accent',
     clickable: progress.value.dueRevisions > 0,
     source: 'revisions',
+  },
+  {
+    id: 'revisions_completed',
+    label: 'Revisions completed',
+    value: progress.value.revisionsCompleted,
+    hint: 'real review sessions',
+    modifier: '',
+    clickable: false,
+  },
+  {
+    id: 'practice_accuracy',
+    label: 'Practice accuracy',
+    value:
+      progress.value.practiceAccuracy === null
+        ? 'Not enough data'
+        : `${progress.value.practiceAccuracy}%`,
+    hint: 'checked answers',
+    modifier: '',
+    clickable: false,
   },
   {
     id: 'completion',
@@ -679,6 +912,13 @@ async function loadGoals() {
   try {
     const { data } = await studyAPI.listGoals()
     goals.value = Array.isArray(data?.goals) ? data.goals : []
+    const savedGoalId =
+      typeof window !== 'undefined'
+        ? window.localStorage.getItem(ACTIVE_GOAL_STORAGE_KEY)
+        : ''
+    if (savedGoalId && goals.value.some((g) => g._id === savedGoalId)) {
+      activeGoalId.value = savedGoalId
+    }
     if (!activeGoalId.value && goals.value.length) {
       const firstActive = goals.value.find((g) => g.status === 'active')
       activeGoalId.value = (firstActive || goals.value[0])._id
@@ -742,6 +982,53 @@ async function loadRevisions() {
   }
 }
 
+async function loadMaterialsForActiveGoal() {
+  if (!activeGoal.value) {
+    recentMaterials.value = []
+    return
+  }
+  try {
+    const { data } = await studyAPI.listMaterials({ goalId: activeGoal.value._id })
+    recentMaterials.value = Array.isArray(data?.materials)
+      ? data.materials.slice(0, 5)
+      : []
+  } catch (err) {
+    console.error('Load materials failed', err)
+    recentMaterials.value = []
+  }
+}
+
+async function loadConsistency() {
+  consistencyLoading.value = true
+  try {
+    const { data } = await studyAPI.consistency({ range: consistencyRange.value })
+    consistency.value = {
+      days: Array.isArray(data?.days) ? data.days : [],
+      currentStreak: data?.currentStreak || 0,
+      longestStreak: data?.longestStreak || 0,
+      activeDays: data?.activeDays || 0,
+      totalMinutes: data?.totalMinutes || 0,
+      averageMinutesPerActiveDay: data?.averageMinutesPerActiveDay || 0,
+    }
+  } catch (err) {
+    console.error('Load consistency failed', err)
+  } finally {
+    consistencyLoading.value = false
+  }
+}
+
+function consistencyTitle(day) {
+  return [
+    day.date,
+    `${day.totalMinutes || 0} minutes studied`,
+    `${day.topicCount || 0} topics`,
+    `${day.lessonCount || 0} lessons`,
+    `${day.practiceQuestionCount || 0} practice`,
+    `${day.revisionCount || 0} revisions`,
+    `${day.flashcardReviewCount || 0} flashcards`,
+  ].join(' · ')
+}
+
 function formatRelativeDue(value) {
   if (!value) return ''
   const due = new Date(value)
@@ -765,7 +1052,7 @@ async function loadTodayPlan(force = false) {
     planMessage.value = ''
     return
   }
-  if (planLoading.value && !force) return
+  if (planLoading.value) return
   planLoading.value = true
   try {
     const { data } = await studyAPI.generateTodaysPlan({ goalId: activeGoal.value._id })
@@ -835,6 +1122,9 @@ async function refreshTodayPlan() {
 async function setActiveGoal(goal) {
   if (!goal || goal._id === activeGoalId.value) return
   activeGoalId.value = goal._id
+  if (typeof window !== 'undefined') {
+    window.localStorage.setItem(ACTIVE_GOAL_STORAGE_KEY, goal._id)
+  }
 }
 
 async function updateGoalStatus(goal, status) {
@@ -918,6 +1208,9 @@ async function onGoalSaved(goal) {
   if (!goal) return
   await loadGoals()
   activeGoalId.value = goal._id
+  if (typeof window !== 'undefined') {
+    window.localStorage.setItem(ACTIVE_GOAL_STORAGE_KEY, goal._id)
+  }
 }
 
 function openTopicModal(topic = null) {
@@ -938,14 +1231,113 @@ async function onTopicSaved(topic) {
   await Promise.all([loadTopicsForActiveGoal(), loadGoals()])
 }
 
-function openTopicLearning(topicId) {
+async function openTopicLearning(topicId, options = {}) {
   if (!topicId) return
-  emit('openTopic', String(topicId))
+  if (activeGoal.value?._id && typeof window !== 'undefined') {
+    window.localStorage.setItem(ACTIVE_GOAL_STORAGE_KEY, activeGoal.value._id)
+  }
+  if (options.start) {
+    if (!options.skipReview) {
+      const shouldPause = await maybeOpenQuickReview(topicId)
+      if (shouldPause) return
+    }
+    actionPendingTopicId.value = String(topicId)
+    try {
+      await studyAPI.startTopic(topicId)
+    } catch (err) {
+      console.error('Start topic failed', err)
+    } finally {
+      actionPendingTopicId.value = ''
+    }
+  }
+  emit('openTopic', {
+    topicId: String(topicId),
+    tab: options.tab || '',
+    openMaterial: options.openMaterial === true,
+  })
+}
+
+function closeQuickReview() {
+  quickReview.value.open = false
+  quickReview.value.loading = false
+}
+
+async function maybeOpenQuickReview(topicId) {
+  try {
+    const { data } = await studyAPI.getPreTopicReview(topicId)
+    if (!data?.recommended) return false
+    quickReview.value = {
+      open: true,
+      loading: true,
+      topicId: String(topicId),
+      reviewId: '',
+      reason: data.reason || '',
+      previousTopics: data.previousTopics || [],
+      questions: [],
+      answers: {},
+    }
+    const generated = await studyAPI.generatePreTopicReview(topicId, { maxQuestions: 5 })
+    const review = generated?.data?.review
+    if (!review?._id) {
+      quickReview.value.open = false
+      return false
+    }
+    quickReview.value = {
+      ...quickReview.value,
+      loading: false,
+      reviewId: review._id,
+      questions: review.questions || [],
+    }
+    return true
+  } catch (err) {
+    console.error('Quick review check failed', err)
+    return false
+  }
+}
+
+async function startTopicDirectly() {
+  const topicId = quickReview.value.topicId
+  quickReview.value.open = false
+  if (topicId) await openTopicLearning(topicId, { start: true, skipReview: true })
+}
+
+async function skipQuickReview() {
+  const { reviewId, topicId } = quickReview.value
+  try {
+    if (reviewId) await studyAPI.skipPreTopicReview(reviewId)
+  } catch (err) {
+    console.error('Skip quick review failed', err)
+  }
+  quickReview.value.open = false
+  if (topicId) await openTopicLearning(topicId, { start: true, skipReview: true })
+}
+
+async function completeQuickReview() {
+  const { reviewId, topicId, questions, answers } = quickReview.value
+  try {
+    for (const q of questions) {
+      const answer = String(answers[q.questionId] || '').trim()
+      if (!answer || q.answeredAt) continue
+      const { data } = await studyAPI.answerPreTopicReview(reviewId, {
+        questionId: q.questionId,
+        answer,
+      })
+      const next = data?.review?.questions || []
+      quickReview.value.questions = next
+    }
+    if (reviewId) await studyAPI.completePreTopicReview(reviewId)
+  } catch (err) {
+    console.error('Complete quick review failed', err)
+  }
+  quickReview.value.open = false
+  if (topicId) await openTopicLearning(topicId, { start: true, skipReview: true })
 }
 
 watch(activeGoalId, async () => {
-  await Promise.all([loadTopicsForActiveGoal(), loadTodayPlan(true)])
+  await Promise.all([loadTopicsForActiveGoal(), loadTodayPlan(true), loadMaterialsForActiveGoal()])
 })
+
+watch(consistencyRange, loadConsistency)
 
 onMounted(async () => {
   await loadGoals()
@@ -953,6 +1345,8 @@ onMounted(async () => {
     loadTopicsForActiveGoal(),
     loadRevisions(),
     loadTodayPlan(true),
+    loadMaterialsForActiveGoal(),
+    loadConsistency(),
   ])
 })
 </script>
@@ -1190,6 +1584,22 @@ onMounted(async () => {
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+.sh-icon-btn {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: rgba(255,255,255,0.04);
+  color: var(--text-muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.sh-icon-btn:hover {
+  color: var(--text-primary);
+  border-color: rgba(79, 140, 255, 0.36);
+}
 .sh-pill {
   display: inline-flex;
   align-items: center;
@@ -1330,6 +1740,129 @@ onMounted(async () => {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 2px;
+}
+
+.sh-filter-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) 140px 140px;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.sh-filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.sh-filter-field input,
+.sh-filter-field select,
+.sh-range-select {
+  min-height: 34px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: rgba(255,255,255,0.04);
+  color: var(--text-primary);
+  padding: 0 10px;
+}
+
+.sh-material-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sh-material-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.sh-material-row strong { display: block; font-size: 13px; }
+.sh-material-row p { margin: 3px 0 0; font-size: 12px; color: var(--text-muted); }
+
+.sh-consistency-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.sh-consistency-stats span {
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border-subtle);
+}
+.sh-heatmap {
+  display: grid;
+  grid-template-rows: repeat(7, 12px);
+  grid-auto-flow: column;
+  grid-auto-columns: 12px;
+  gap: 4px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+}
+.sh-heat-day {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid rgba(255,255,255,0.06);
+  background: rgba(255,255,255,0.05);
+}
+.sh-heat-day[data-level="1"] { background: rgba(83, 180, 255, 0.35); }
+.sh-heat-day[data-level="2"] { background: rgba(83, 180, 255, 0.55); }
+.sh-heat-day[data-level="3"] { background: rgba(82, 211, 157, 0.65); }
+.sh-heat-day[data-level="4"] { background: rgba(82, 211, 157, 0.9); }
+
+.sh-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0,0,0,0.52);
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+.sh-quick-modal {
+  width: min(620px, 100%);
+  max-height: min(720px, 90vh);
+  overflow: auto;
+  padding: 18px;
+  border-radius: 12px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  box-shadow: 0 22px 60px rgba(0,0,0,0.34);
+}
+.sh-quick-question {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.sh-quick-question strong {
+  display: block;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+.sh-quick-question input {
+  width: 100%;
+  min-height: 36px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: rgba(255,255,255,0.04);
+  color: var(--text-primary);
+  padding: 0 10px;
+}
+.sh-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
 }
 .sh-link {
   border: none;
@@ -1531,5 +2064,6 @@ onMounted(async () => {
   .sh-shell { padding: 24px 18px; }
   .sh-grid { grid-template-columns: 1fr; }
   .sh-panel--span-2 { grid-column: span 1; }
+  .sh-filter-row { grid-template-columns: 1fr; }
 }
 </style>

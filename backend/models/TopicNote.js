@@ -28,6 +28,12 @@ const topicNoteSchema = new mongoose.Schema(
     },
     content: { type: String, required: true },
     source: { type: String, enum: SOURCE_VALUES, default: "manual" },
+    sourceMaterialId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "StudyMaterial",
+      default: null,
+    },
+    pinned: { type: Boolean, default: false, index: true },
   },
   { timestamps: true }
 );

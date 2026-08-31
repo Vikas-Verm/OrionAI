@@ -5,6 +5,7 @@ const router = express.Router();
 const multer = require("multer");
 const { authenticate } = require("../middleware/auth");
 const Integration = require("../models/Integration");
+const provisioningLogin = require("../services/bridgeProvisioningLogin");
 const {
   connectSignalIntegration,
   getSignalStatus,
@@ -20,6 +21,7 @@ const {
   sendBridgeCommand,
   fetchSignalMedia,
   invalidateSignalCache,
+  invalidateSignalCacheForReconnect,
 } = require("../services/signalMatrixService");
 
 router.use(authenticate);
@@ -62,11 +64,33 @@ router.get("/status", async (req, res) => {
 
 router.post("/disconnect", async (req, res) => {
   try {
+    const userId = req.user?.username;
+    const integration = await Integration.findOne({ userId, type: "signal" });
+    const mxid = integration?.matrix?.mxid || integration?.signal?.mxid || "";
+    if (mxid) {
+      const logoutResult = await provisioningLogin.logoutAllLogins(
+        "signal",
+        mxid
+      );
+      if (!logoutResult.ok) {
+        const accountState = await provisioningLogin.getBridgeAccountState(
+          "signal",
+          mxid
+        );
+        if (!accountState.ok || accountState.connected) {
+          return res.status(409).json({
+            ok: false,
+            error:
+              "Signal could not be fully disconnected. Please retry; OrionAI kept this integration so another account cannot be linked by mistake.",
+          });
+        }
+      }
+    }
     await Integration.findOneAndDelete({
-      userId: req.user?.username,
+      userId,
       type: "signal",
     });
-    invalidateSignalCache(req.user?.username);
+    invalidateSignalCacheForReconnect(userId);
     res.json({ ok: true });
   } catch (err) {
     console.error("Signal disconnect error:", err.message);

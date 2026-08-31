@@ -16,10 +16,13 @@ const PURPOSE_VALUES = [
   "other",
 ];
 
-const LEVEL_VALUES = ["beginner", "intermediate", "advanced"];
-const STATUS_VALUES = ["active", "paused", "completed"];
+const LEVEL_VALUES = ["beginner", "intermediate", "advanced", "not_sure"];
+const STATUS_VALUES = ["active", "paused", "completed", "archived"];
 const LEARNING_STYLE_VALUES = [
   "simple_explanation",
+  "examples_first",
+  "practical_learning",
+  "step_by_step",
   "deep_explanation",
   "practice_first",
   "notes_first",

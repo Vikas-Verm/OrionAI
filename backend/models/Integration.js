@@ -164,6 +164,10 @@ const integrationSchema = new mongoose.Schema({
     profileName: { type: String, default: "" },
     avatarUrl: { type: String, default: "" },
     connectedAt: { type: Date, default: null },
+    // OrionAI-side mute list (Matrix room ids). WhatsApp phone-side mute state
+    // is not visible to us without Matrix double-puppeting, so OrionAI keeps
+    // its own per-room mute set. Muted rooms are suppressed from notifications.
+    mutedRooms: { type: [String], default: [] },
   },
 
   // ── Custom Webhook ─────────────────────────────────────────────────────────

@@ -50,6 +50,7 @@ const googleDocsRoutes = require("./routes/googleDocsRoutes");
 const googleSheetsRoutes = require("./routes/googleSheetsRoutes");
 const onboardingRoutes = require("./routes/onboardingRoutes");
 const studyRoutes = require("./routes/studyRoutes");
+const internalMessagingRoutes = require("./routes/internalMessagingRoutes");
 const {
   initErrorMonitoring,
   attachErrorMonitoringContext,
@@ -71,6 +72,9 @@ app.use(
 app.use(express.json({ limit: "25mb" }));
 app.use(express.urlencoded({ extended: true, limit: "25mb" }));
 attachErrorMonitoringContext(app);
+
+// Internal bridge callbacks authenticate with appservice credentials.
+app.use("/internal/messaging", internalMessagingRoutes);
 
 // ── Public ────────────────────────────────────────────────────────────────────
 app.use("/auth", authRoutes);

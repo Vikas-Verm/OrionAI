@@ -433,8 +433,15 @@ const studyTopicId = ref(initialRoute.studyTopicId || null)
 
 function pushRouteIfChanged(targetPath) {
   if (typeof window === 'undefined') return
-  const current = normalizePathname(window.location?.pathname || '/')
-  if (current === normalizePathname(targetPath)) return
+  const current = `${normalizePathname(window.location?.pathname || '/')}${window.location?.search || ''}`
+  let normalizedTarget = targetPath
+  try {
+    const url = new URL(targetPath, window.location.origin)
+    normalizedTarget = `${normalizePathname(url.pathname)}${url.search}`
+  } catch {
+    normalizedTarget = normalizePathname(targetPath)
+  }
+  if (current === normalizedTarget) return
   try {
     window.history.pushState({}, '', targetPath)
   } catch {
@@ -558,12 +565,19 @@ function openStudyHub() {
   pushRouteIfChanged(STUDY_HUB_PATH)
 }
 
-function openStudyTopic(topicId) {
+function openStudyTopic(payload) {
+  const topicId = typeof payload === 'object' ? payload?.topicId : payload
   if (!topicId) return
+  const tab = typeof payload === 'object' ? payload?.tab : ''
+  const openMaterial = typeof payload === 'object' && payload?.openMaterial === true
+  const query = new URLSearchParams()
+  if (tab) query.set('tab', tab)
+  if (openMaterial) query.set('openMaterial', '1')
   resetSurfaceState()
   showStudyHub.value = true
   studyTopicId.value = String(topicId)
-  pushRouteIfChanged(`${STUDY_HUB_PATH}/topics/${encodeURIComponent(topicId)}`)
+  const suffix = query.toString() ? `?${query.toString()}` : ''
+  pushRouteIfChanged(`${STUDY_HUB_PATH}/topics/${encodeURIComponent(topicId)}${suffix}`)
 }
 
 function closeStudyTopic() {

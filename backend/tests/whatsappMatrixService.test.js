@@ -5,6 +5,73 @@ const assert = require("node:assert/strict");
 
 const { __test } = require("../services/whatsappMatrixService");
 
+test("connected account header uses provisioning profile and never a self-chat avatar", () => {
+  const profile = __test.buildStatusProfile({
+    matrixProfile: {
+      displayname: "Hidden Matrix User",
+      avatar_url: "mxc://orion.local/matrix-fallback",
+    },
+    accountState: {
+      name: "WhatsApp Account",
+      avatar: "mxc://orion.local/remote-account",
+    },
+    messagingConnection: {
+      remoteAccountDisplay: "WhatsApp Account",
+      remoteAccountAvatarMxc: "mxc://orion.local/validated-account",
+      remoteAccountAvatarSource: "remote_profile",
+      remoteAccountAvatarState: "available",
+    },
+    config: { mxid: "@orion_u_test_whatsapp:orion.local" },
+  });
+  assert.equal(profile.displayName, "WhatsApp Account");
+  assert.equal(profile.avatarMxc, "mxc://orion.local/validated-account");
+  assert.equal(profile.avatarSource, "remote_profile");
+});
+
+test("connected account header does not expose an unvalidated remote-profile MXC", () => {
+  const profile = __test.buildStatusProfile({
+    matrixProfile: {},
+    accountState: {
+      name: "WhatsApp Account",
+      avatar: "mxc://orion.local/stale-after-migration",
+    },
+    messagingConnection: {
+      remoteAccountDisplay: "WhatsApp Account",
+      remoteAccountAvatarMxc: "",
+      remoteAccountAvatarState: "broken",
+    },
+    config: { mxid: "@orion_u_test_whatsapp:orion.local" },
+  });
+  assert.equal(profile.displayName, "WhatsApp Account");
+  assert.equal(profile.avatarMxc, null);
+  assert.equal(profile.avatarUrl, null);
+  assert.equal(profile.avatarSource, "none");
+});
+
+test("unfinished WhatsApp QR states can resume after a backend restart", () => {
+  assert.equal(
+    __test.shouldResumeWhatsAppProvisioningLogin({
+      mxid: "@orion_u_test_whatsapp:orion.local",
+      loginState: "logging_in",
+    }),
+    true
+  );
+  assert.equal(
+    __test.shouldResumeWhatsAppProvisioningLogin({
+      mxid: "@orion_u_test_whatsapp:orion.local",
+      loginState: "pending_qr",
+    }),
+    true
+  );
+  assert.equal(
+    __test.shouldResumeWhatsAppProvisioningLogin({
+      mxid: "@orion_u_test_whatsapp:orion.local",
+      loginState: "error",
+    }),
+    false
+  );
+});
+
 test("parseRoomEvents keeps QR image edits from the WhatsApp bridge", () => {
   const roomId = "!whatsapp-bridge:orion.local";
   const currentUserId = "@orion_u_test:orion.local";
@@ -211,6 +278,39 @@ test("buildWhatsAppBridgeSnapshot normalizes login and portal metadata", () => {
   });
 });
 
+test("buildWhatsAppBridgeSnapshot accepts Postgres portal rows for chat fallback", () => {
+  const snapshot = __test.buildWhatsAppBridgeSnapshot(
+    {
+      user_mxid: "@orion_u_test_whatsapp:orion.local",
+      id: "919870291255",
+      remote_name: "919870291255",
+      remote_profile: { phone: "919870291255", name: "Vikas" },
+      metadata: { logged_in_at: 1_779_004_675 },
+      space_room: "",
+    },
+    [
+      {
+        room_id: "!portal:orion.local",
+        portal_id: "919999041935@s.whatsapp.net",
+        portal_receiver: "919870291255",
+        name: "Test Contact",
+        avatar_mxc: "",
+        room_type: "dm",
+        in_space: false,
+        preferred: true,
+      },
+    ]
+  );
+
+  assert.equal(snapshot.connected, true);
+  assert.equal(snapshot.portalRooms.length, 1);
+  const room = __test.buildWhatsAppPortalRoom(snapshot.portalRooms[0]);
+  assert.equal(room.roomId, "!portal:orion.local");
+  assert.equal(room.name, "Test Contact");
+  assert.equal(room.contactJid, "919999041935@s.whatsapp.net");
+  assert.equal(room.bridgeStatus, "portal");
+});
+
 test("mergeRoomWithBridgePortalMetadata prefers bridge labels for portal rooms", () => {
   const merged = __test.mergeRoomWithBridgePortalMetadata(
     {
@@ -320,6 +420,93 @@ test("deriveWhatsAppConnectionState ignores stale QR timeout errors when the bri
   assert.equal(state.loginState, "connected");
   assert.equal(state.lastError, "");
   assert.equal(state.connectedAt, "2026-04-16T11:00:23.000Z");
+});
+
+test("deriveWhatsAppConnectionState treats a QR timeout as retryable during an active login (no scary error)", () => {
+  const state = __test.deriveWhatsAppConnectionState({
+    fallbackConfig: {
+      loginState: "logging_in",
+      connectedAt: null,
+      lastError: "",
+    },
+    bridgeState: {
+      loginState: "error",
+      latestError: { timestamp: 3_000 },
+      lastErrorText:
+        "Login failed: Entering code or scanning QR timed out. Please try again.",
+    },
+    bridgeSnapshot: null,
+    activeLoginWindow: true,
+  });
+
+  assert.equal(state.connected, false);
+  assert.equal(state.loginState, "logging_in");
+  assert.equal(state.lastError, "");
+  assert.equal(state.retryableTimeout, true);
+});
+
+test("deriveWhatsAppConnectionState surfaces a QR timeout as an error when NOT mid-login and not connected", () => {
+  const state = __test.deriveWhatsAppConnectionState({
+    fallbackConfig: {
+      loginState: "error",
+      connectedAt: null,
+      lastError: "",
+    },
+    bridgeState: {
+      loginState: "error",
+      latestError: { timestamp: 3_000 },
+      lastErrorText:
+        "Login failed: Entering code or scanning QR timed out. Please try again.",
+    },
+    bridgeSnapshot: null,
+    activeLoginWindow: false,
+  });
+
+  assert.equal(state.connected, false);
+  assert.equal(state.loginState, "error");
+  assert.equal(state.retryableTimeout, false);
+});
+
+test("deriveWhatsAppConnectionState keeps a connected session through a transient disconnect (laptop sleep)", () => {
+  const state = __test.deriveWhatsAppConnectionState({
+    fallbackConfig: {
+      loginState: "connected",
+      connectedAt: "2026-04-16T11:00:23.000Z",
+      lastError: "",
+    },
+    bridgeState: {
+      loginState: "error",
+      latestError: { timestamp: 5_000 },
+      lastErrorText:
+        "State update for +919773767632: TRANSIENT_DISCONNECT (wa-transient-disconnect) not resolved after waiting 3 minutes: Disconnected from WhatsApp. Trying to reconnect.",
+    },
+    bridgeSnapshot: null,
+  });
+
+  assert.equal(state.connected, true);
+  assert.equal(state.loginState, "connected");
+  assert.equal(state.lastError, "");
+});
+
+test("deriveWhatsAppConnectionState still disconnects on a real logout (BAD_CREDENTIALS)", () => {
+  const state = __test.deriveWhatsAppConnectionState({
+    fallbackConfig: {
+      loginState: "connected",
+      connectedAt: "2026-04-16T11:00:23.000Z",
+      lastError: "",
+    },
+    bridgeState: {
+      loginState: "error",
+      latestError: { timestamp: 5_000 },
+      lastErrorText:
+        "State update for +919773767632: BAD_CREDENTIALS: 403 opening websocket, we are logged out",
+    },
+    bridgeSnapshot: null,
+  });
+
+  assert.equal(state.connected, false);
+  assert.equal(state.loginState, "error");
+  assert.match(state.lastError, /logged out|BAD_CREDENTIALS/i);
 });
 
 test("contact room helpers preserve deterministic placeholder ids", () => {
@@ -590,4 +777,100 @@ test("buildRoomDescriptor filters internal start-chat bridge commands from porta
   assert.equal(descriptor.messages.length, 1);
   assert.equal(descriptor.messages[0].id, "$reply");
   assert.equal(descriptor.room.lastMessage, "Hello from WhatsApp");
+});
+
+test("buildRoomDescriptor treats the linked user's WhatsApp ghost as self", () => {
+  const currentUserId = "@orion_u_test_whatsapp:orion.local";
+  const bridgeBotMxid = "@whatsappbot:orion.local";
+  const selfGhostMxid = __test.buildWhatsAppGhostMxid("919773767632");
+  const remoteGhostMxid = "@whatsapp_919870291255:orion.local";
+  const selfAvatar = "mxc://orion.local/self-avatar";
+  const remoteAvatar = "mxc://orion.local/remote-avatar";
+  const roomId = "!portal:orion.local";
+
+  const descriptor = __test.buildRoomDescriptor({
+    roomId,
+    currentUserId,
+    bridgeBotMxid,
+    selfGhostMxid,
+    selfPhoneDigits: "919773767632",
+    roomData: {
+      state: {
+        events: [
+          {
+            type: "m.room.member",
+            state_key: currentUserId,
+            content: { membership: "join", displayname: "OrionAI WhatsApp" },
+          },
+          {
+            type: "m.room.member",
+            state_key: bridgeBotMxid,
+            content: { membership: "join", displayname: "WhatsApp Bridge" },
+          },
+          {
+            type: "m.room.member",
+            state_key: selfGhostMxid,
+            content: {
+              membership: "join",
+              displayname: "+919773767632 (WA)",
+              avatar_url: selfAvatar,
+            },
+          },
+          {
+            type: "m.room.member",
+            state_key: remoteGhostMxid,
+            content: {
+              membership: "join",
+              displayname: "Ashirvad",
+              avatar_url: remoteAvatar,
+            },
+          },
+          {
+            type: "m.room.name",
+            state_key: "",
+            content: { name: "Ashirvad, +919773767632 (WA)" },
+          },
+          {
+            type: "m.room.avatar",
+            state_key: "",
+            content: { url: selfAvatar },
+          },
+        ],
+      },
+      timeline: {
+        events: [
+          {
+            type: "m.room.message",
+            event_id: "$from-mobile",
+            sender: selfGhostMxid,
+            origin_server_ts: 1_000,
+            content: { msgtype: "m.text", body: "Okay sir" },
+          },
+          {
+            type: "m.room.message",
+            event_id: "$from-contact",
+            sender: remoteGhostMxid,
+            origin_server_ts: 2_000,
+            content: { msgtype: "m.text", body: "okay" },
+          },
+        ],
+      },
+      summary: {
+        "m.joined_member_count": 4,
+      },
+      unread_notifications: {},
+    },
+    directMap: new Map(),
+  });
+
+  assert.equal(descriptor.room.title, "Ashirvad");
+  assert.equal(descriptor.room.isDirect, true);
+  assert.equal(descriptor.room.isGroup, false);
+  assert.equal(
+    descriptor.room.avatarUrl,
+    `/api/whatsapp/media?mxc=${encodeURIComponent(remoteAvatar)}`
+  );
+  assert.equal(descriptor.messages[0].fromMe, true);
+  assert.equal(descriptor.messages[0].senderName, "You");
+  assert.equal(descriptor.messages[1].fromMe, false);
 });

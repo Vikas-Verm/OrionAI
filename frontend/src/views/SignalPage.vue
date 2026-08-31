@@ -1,13 +1,13 @@
 <template>
-  <div class="sg-page">
-    <aside class="sg-sidebar">
+  <div class="sg-page" :class="{ 'is-collapsed': sidebarCollapsed }">
+    <aside class="sg-sidebar" :class="{ collapsed: sidebarCollapsed }">
       <div class="sg-sidebar-head">
         <button
           class="sg-brand sg-brand-btn"
           type="button"
-          :disabled="!status.connected"
-          title="View your Signal profile"
-          @click="showProfilePanel = !showProfilePanel"
+          :disabled="!sidebarCollapsed && !status.connected"
+          :title="sidebarCollapsed ? 'Expand sidebar' : (status.connected ? 'View your Signal profile' : 'Signal not connected')"
+          @click="sidebarCollapsed ? (sidebarCollapsed = false) : (showProfilePanel = !showProfilePanel)"
         >
           <div class="sg-brand-icon">
             <img
@@ -26,12 +26,12 @@
               <path d="M12 7.35a4.65 4.65 0 1 0 0 9.3 4.65 4.65 0 0 0 0-9.3Zm0 8.1a3.45 3.45 0 1 1 0-6.9 3.45 3.45 0 0 1 0 6.9Z" fill="#3b82f6" />
             </svg>
           </div>
-          <div class="sg-brand-copy">
+          <div v-if="!sidebarCollapsed" class="sg-brand-copy">
             <strong>Signal</strong>
             <span>{{ status.connected ? (status.profile?.displayName || 'Connected') : 'Connect Signal in Integrations' }}</span>
           </div>
         </button>
-        <div class="sg-head-actions">
+        <div v-if="!sidebarCollapsed" class="sg-head-actions">
           <button class="sg-icon-btn" title="Refresh Signal" :disabled="refreshing" @click="refreshAll">
             <span v-if="refreshing" class="sg-spinner sg-spinner-sm"></span>
             <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -41,16 +41,15 @@
               <path d="M1 14l4.6 4.4A9 9 0 0 0 20.5 15" />
             </svg>
           </button>
-          <button class="sg-icon-btn" title="Back to integrations" @click="emit('close')">
+          <button class="sg-icon-btn" title="Collapse sidebar" @click="sidebarCollapsed = true">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M19 12H5" />
-              <path d="m12 5-7 7 7 7" />
+              <path d="m15 18-6-6 6-6" />
             </svg>
           </button>
         </div>
       </div>
 
-      <div v-if="showProfilePanel && status.connected" class="sg-profile-popover">
+      <div v-if="showProfilePanel && status.connected && !sidebarCollapsed" class="sg-profile-popover">
         <div class="sg-profile-card">
           <div class="sg-profile-actions">
             <button class="sg-icon-btn sg-icon-btn--ghost" title="Close profile" @click="showProfilePanel = false">
@@ -99,7 +98,7 @@
         </div>
       </div>
 
-      <div v-if="status.connected" class="sg-action-panel-wrap">
+      <div v-if="!sidebarCollapsed && status.connected" class="sg-action-panel-wrap">
         <CommunicationInsightsWidget
           title="OrionAI insights"
           panel-title="Reply / Action Required"
@@ -119,7 +118,7 @@
         />
       </div>
 
-      <div class="sg-search-wrap">
+      <div v-show="!sidebarCollapsed" class="sg-search-wrap">
         <input
           v-model="roomQuery"
           class="sg-search"
@@ -128,29 +127,39 @@
         />
       </div>
 
-      <div v-if="loadingRooms" class="sg-state">
+      <div v-if="!sidebarCollapsed && loadingRooms" class="sg-state">
         <span class="sg-spinner"></span>
         <span>Loading Signal rooms...</span>
       </div>
 
-      <div v-else-if="!status.connected" class="sg-empty">
+      <div v-else-if="!sidebarCollapsed && !status.connected" class="sg-empty">
         <div class="sg-empty-icon">🛡️</div>
-        <strong>Signal is not connected</strong>
-        <p>{{ status.lastError || status.error || 'Connect Signal in Integrations to load conversations.' }}</p>
+        <strong>{{ status.loginState === 'pending_qr' ? 'Finish linking Signal' : 'Signal is not connected' }}</strong>
+        <div v-if="status.loginState === 'pending_qr' && status.qrImageUrl" class="sg-qr">
+          <img :src="status.qrImageUrl" alt="Signal QR code" />
+        </div>
+        <p>
+          {{ status.loginState === 'pending_qr'
+            ? 'Scan this QR from Signal on your phone to link OrionAI.'
+            : status.lastError || status.error || 'Connect Signal in Integrations to load conversations.' }}
+        </p>
         <button class="sg-empty-btn" @click="emit('open-integrations')">Open Integrations</button>
       </div>
 
-      <div v-else-if="filteredRooms.length === 0" class="sg-empty sg-empty--rooms">
-        <div class="sg-empty-icon">💬</div>
-        <strong>{{ roomQuery ? 'No matching rooms' : 'No Signal rooms yet' }}</strong>
+      <div v-else-if="!sidebarCollapsed && filteredRooms.length === 0" class="sg-empty sg-empty--rooms">
+        <div class="sg-empty-icon">
+          <span v-if="roomQuery">💬</span>
+          <span v-else class="sg-empty-spinner" aria-hidden="true"></span>
+        </div>
+        <strong>{{ roomQuery ? 'No matching rooms' : 'Syncing your Signal chats…' }}</strong>
         <p>
           {{ roomQuery
             ? 'Try a different search term.'
-            : 'If you just linked Signal, give OrionAI a moment to finish syncing your chats.' }}
+            : 'Signal is backfilling your conversations. Chats will appear here as they finish syncing.' }}
         </p>
       </div>
 
-      <div v-else class="sg-room-list">
+      <div v-else-if="!sidebarCollapsed" class="sg-room-list">
         <button
           v-for="room in filteredRooms"
           :key="room.roomId"
@@ -184,10 +193,21 @@
     <main class="sg-main">
       <div v-if="!selectedRoom" class="sg-empty sg-empty--main">
         <div class="sg-empty-icon">💬</div>
-        <strong>{{ status.connected ? 'Select a conversation' : 'Signal is waiting for setup' }}</strong>
+        <strong>
+          {{ status.connected
+            ? 'Select a conversation'
+            : status.loginState === 'pending_qr'
+              ? 'Scan the Signal QR'
+              : 'Signal is waiting for setup' }}
+        </strong>
+        <div v-if="!status.connected && status.loginState === 'pending_qr' && status.qrImageUrl" class="sg-qr sg-qr--main">
+          <img :src="status.qrImageUrl" alt="Signal QR code" />
+        </div>
         <p>
           {{ status.connected
             ? 'Choose a chat from the left to open your Signal timeline, upload files, and manage replies.'
+            : status.loginState === 'pending_qr'
+              ? 'Open Signal on your phone, use Linked Devices, and scan this code.'
             : 'Once connected, notifications, urgent WorkspaceBriefing items, and the full Signal workspace will appear here.' }}
         </p>
       </div>
@@ -355,7 +375,7 @@
                             </span>
                           </a>
 
-                          <div v-if="message.text" class="sg-message-text">{{ message.text }}</div>
+                          <div v-if="message.text" class="sg-message-text" v-html="linkifyText(message.text)"></div>
                         </template>
 
                         <div class="sg-message-footer">
@@ -444,6 +464,7 @@
           </aside>
         </div>
 
+        <section class="sg-composer-shell">
         <div v-if="replyTarget || editingMessage || pendingUploads.length || isRecordingVoice" class="sg-compose-top">
           <div v-if="replyTarget" class="sg-compose-banner">
             <span class="sg-compose-banner-label">Replying to {{ replyTarget.senderName }}</span>
@@ -510,6 +531,7 @@
             </svg>
           </button>
         </footer>
+        </section>
       </template>
     </main>
 
@@ -533,10 +555,13 @@ const emit = defineEmits(['close', 'open-integrations'])
 
 const status = ref({
   connected: false,
+  loginState: 'disconnected',
+  qrImageUrl: null,
   roomCount: 0,
   unreadCount: 0,
   profile: null,
 })
+const sidebarCollapsed = ref(false)
 const rooms = ref([])
 const selectedRoom = ref(null)
 const messages = ref([])
@@ -870,6 +895,24 @@ function buildOptimisticMessage({
   }
 }
 
+// Escape HTML, then turn URLs into clickable links. Safe: text is escaped
+// first, so only the anchors we build are ever rendered as HTML.
+function linkifyText(value = '') {
+  const raw = String(value || '')
+  if (!raw) return ''
+  const escaped = raw
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+  const urlRe = /((?:https?:\/\/|www\.)[^\s<]+[^\s<.,;:!?)\]}'"])/gi
+  return escaped.replace(urlRe, (match) => {
+    const href = match.startsWith('http') ? match : `https://${match}`
+    return `<a href="${href}" target="_blank" rel="noopener noreferrer" class="sg-link">${match}</a>`
+  })
+}
+
 function applyOptimisticRoomState(message) {
   if (!message?.roomId) return
   const roomId = String(message.roomId)
@@ -912,7 +955,11 @@ function appendOptimisticMessages(nextMessages = []) {
 
 async function loadStatus() {
   const { data } = await api.get('/api/signal/status')
-  status.value = data || { connected: false }
+  status.value = data || {
+    connected: false,
+    loginState: 'disconnected',
+    qrImageUrl: null,
+  }
   if (!status.value.connected) {
     stopPolling()
     showProfilePanel.value = false
@@ -1584,14 +1631,24 @@ onUnmounted(() => {
 .sg-sidebar {
   position: relative;
   width: 342px;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding: 16px 14px 14px;
   border-right: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(4, 9, 22, 0.74);
-  }
+  background: rgba(7, 12, 22, 0.78);
+  box-sizing: border-box;
+}
+
+.sg-sidebar.collapsed {
+  padding-inline: 10px;
+  width: auto;
+  flex-shrink: 0;
+}
 
 .sg-sidebar-head,
 .sg-chat-head {
@@ -1987,6 +2044,46 @@ onUnmounted(() => {
 
 .sg-empty-icon {
   font-size: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sg-empty-spinner {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid rgba(120, 200, 255, 0.25);
+  border-top-color: #79c8ff;
+  animation: sg-spin 0.9s linear infinite;
+  display: inline-block;
+}
+
+.sg-qr {
+  width: 178px;
+  height: 178px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  background: #fff;
+  border-radius: var(--radius-md);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.28);
+}
+
+.sg-qr--main {
+  width: 220px;
+  height: 220px;
+}
+
+.sg-qr img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+@keyframes sg-spin {
+  to { transform: rotate(360deg); }
 }
 
 .sg-room-list {
@@ -2363,6 +2460,13 @@ onUnmounted(() => {
   line-height: 1.5;
 }
 
+.sg-message-text :deep(.sg-link),
+.sg-link {
+  color: #53bdeb;
+  text-decoration: underline;
+  word-break: break-all;
+}
+
 .sg-media-card {
   margin-bottom: 10px;
   overflow: hidden;
@@ -2525,8 +2629,18 @@ onUnmounted(() => {
   overflow-wrap: anywhere;
 }
 
+/* Composer shell — mirrors WhatsApp chat composer (.wa-composer-shell):
+   an elevated bar with a top border + backdrop so the input area reads as a
+   distinct surface instead of floating directly on the thread. */
+.sg-composer-shell {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(7, 12, 22, 0.78);
+  padding: 12px 18px 18px;
+  flex-shrink: 0;
+}
+
 .sg-compose-top {
-  margin: 0 18px 12px;
+  margin: 0 0 12px;
   padding: 12px;
   display: flex;
   flex-direction: column;
@@ -2592,15 +2706,21 @@ onUnmounted(() => {
   font-size: 11px;
 }
 
+/* Match WhatsApp's .wa-compose grid: icon buttons + flexible input + send,
+   all bottom-aligned with a consistent 10px gutter. */
 .sg-compose {
-  padding: 0 18px 18px;
+  padding: 0;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
 }
 
 .sg-compose-btn,
 .sg-compose-send,
 .sg-console-send {
-  width: 44px;
-  height: 44px;
+  width: 42px;
+  height: 42px;
   border-radius: var(--radius-md);
   display: inline-flex;
   align-items: center;
@@ -2626,6 +2746,8 @@ onUnmounted(() => {
   background: var(--accent);
   border-color: rgba(79, 140, 255, 0.22);
   color: white;
+  /* Circular send button, mirroring WhatsApp Web's round send affordance. */
+  border-radius: 50%;
 }
 
 .sg-compose-btn:disabled,

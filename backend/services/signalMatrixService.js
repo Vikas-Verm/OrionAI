@@ -6,6 +6,11 @@ const fs = require("fs");
 const path = require("path");
 const QRCode = require("qrcode");
 const Integration = require("../models/Integration");
+const provisioningLogin = require("./bridgeProvisioningLogin");
+const {
+  registerMatrixAccountWithSharedSecret,
+  resetMatrixAccountWithSharedSecretAdmin,
+} = require("./hiddenMatrixService");
 let SqliteDatabase = null;
 
 try {
@@ -15,8 +20,31 @@ try {
 const SIGNAL_SYNC_CACHE = new Map();
 const SIGNAL_SYNC_CACHE_TTL_MS = 10 * 1000;
 const SIGNAL_LOGIN_BACKOFF = new Map();
+// Tracks when we last asked the bridge for a QR (`login`) per user. The
+// mautrix-signal QR-link flow auto-refreshes the QR ~5 times (over ~4 min)
+// then posts "Login failed: too many QR code refreshes". That failure is NOT
+// a hard error — it just means nobody scanned in time. While the user is
+// still on the connect screen (i.e. /status is being polled) we treat it as
+// retryable: keep the UI in "logging_in" and silently re-issue `login` so a
+// fresh QR sequence appears instead of showing a scary error.
+const SIGNAL_LOGIN_REQUESTED_AT = new Map();
+const SIGNAL_LOGIN_RESEND_AT = new Map();
+const SIGNAL_LOGIN_ACTIVE_WINDOW_MS = 5 * 60 * 1000;
+const SIGNAL_LOGIN_RESEND_THROTTLE_MS = 60 * 1000;
+// Bridge messages that mean "the QR expired / nobody scanned" rather than a
+// genuine failure. These are retried (fresh QR) during an active login.
+const SIGNAL_RETRYABLE_LOGIN_RE =
+  /\b(too many qr code refreshes|qr code(?: refresh| scan)?.*(?:timed out|expired|refreshes)|scanning qr|scan .*qr.*timed out|entering code|login timed out|timed out|timeout)\b/i;
 const SIGNAL_QR_CACHE = new Map();
 const SIGNAL_QR_CACHE_TTL_MS = 15 * 1000;
+// Short-lived status cache to coalesce rapid polls (1.5s TTL). Without this,
+// each /status call triggers Matrix sync + room hydration that takes 3–10s
+// and piles up under polling pressure.
+const SIGNAL_STATUS_CACHE = new Map();
+const SIGNAL_STATUS_CACHE_TTL_MS = 1500;
+// In-flight portal hydration tasks. Lets us fire-and-forget room joins so
+// /status doesn't wait for them.
+const SIGNAL_BG_HYDRATION = new Map();
 const SIGNAL_PORTAL_READ_HINTS = new Map();
 const SIGNAL_GHOST_RE = /^@signal_[^:]+:/i;
 const SIGNAL_CONTACT_ROOM_PREFIX = "signal-contact:";
@@ -27,6 +55,10 @@ const SIGNAL_LOGIN_STATE_VALUES = new Set([
   "pending_qr",
   "connected",
   "error",
+]);
+const SIGNAL_RESUMABLE_LOGIN_STATES = new Set([
+  "logging_in",
+  "pending_qr",
 ]);
 const BRIDGE_SUCCESS_RE =
   /\b(successfully logged in|logged in as|already logged in|login successful|connected to signal|linked successfully)\b/i;
@@ -56,6 +88,36 @@ function defaultBridgeBotMxid() {
     process.env.SIGNAL_BRIDGE_BOT_MXID ||
     "@signalbot:orion.local"
   );
+}
+
+function readRegistrationAsToken(filePath = "") {
+  try {
+    const contents = fs.readFileSync(filePath, "utf8");
+    return String(contents.match(/^as_token:\s*"?([^"\s]+)"?\s*$/m)?.[1] || "")
+      .trim();
+  } catch {
+    return "";
+  }
+}
+
+function defaultSignalAppserviceToken() {
+  return (
+    String(process.env.MATRIX_SIGNAL_AS_TOKEN || "").trim() ||
+    readRegistrationAsToken(
+      path.resolve(__dirname, "../../infra/mautrix-signal/registration.yaml")
+    ) ||
+    readRegistrationAsToken(
+      path.resolve(
+        __dirname,
+        "../../infra/synapse/appservices/mautrix-signal-registration.yaml"
+      )
+    )
+  );
+}
+
+function isSignalAppserviceToken(token = "") {
+  const normalized = String(token || "").trim();
+  return Boolean(normalized && normalized === defaultSignalAppserviceToken());
 }
 
 function defaultMatrixDeviceName() {
@@ -115,6 +177,28 @@ function buildHiddenSignalPassword(userId = "") {
 
 function nowTs() {
   return Date.now();
+}
+
+function shouldResumeSignalProvisioningLogin(config = {}) {
+  const mxid = String(config.mxid || "").trim();
+  return Boolean(
+    mxid && SIGNAL_RESUMABLE_LOGIN_STATES.has(String(config.loginState || ""))
+  );
+}
+
+function resumeSignalProvisioningLogin(config = {}) {
+  const mxid = String(config.mxid || "").trim();
+  if (!mxid) return null;
+
+  const runner = provisioningLogin.getLoginState("signal", mxid);
+  if (runner) return runner;
+  if (!shouldResumeSignalProvisioningLogin(config)) {
+    return null;
+  }
+
+  // Runners live only in this Node process. Recover a persisted in-flight
+  // login after a backend restart instead of returning a stale status forever.
+  return provisioningLogin.startLogin("signal", mxid);
 }
 
 function normalizeTimestampMs(value = 0) {
@@ -275,7 +359,9 @@ function buildSignalMediaUrl(mxc = "") {
 }
 
 function normalizePhoneNumber(value = "") {
-  return String(value || "").replace(/[^\d+]/g, "").trim();
+  return String(value || "")
+    .replace(/[^\d+]/g, "")
+    .trim();
 }
 
 function isPhoneLikeLabel(value = "") {
@@ -284,7 +370,9 @@ function isPhoneLikeLabel(value = "") {
 }
 
 function normalizeSearchValue(value = "") {
-  return String(value || "").trim().toLowerCase();
+  return String(value || "")
+    .trim()
+    .toLowerCase();
 }
 
 function safeJsonParse(value, fallback = null) {
@@ -453,7 +541,9 @@ function hydrateSignalMessagesForRoom(room = null, messages = []) {
 
     return {
       ...message,
-      senderName: shouldHydrateName ? roomName || senderName || "Signal" : senderName,
+      senderName: shouldHydrateName
+        ? roomName || senderName || "Signal"
+        : senderName,
       senderAvatarUrl: message.senderAvatarUrl || roomAvatarUrl || "",
     };
   });
@@ -476,6 +566,21 @@ function isSignalBridgeLoginActive(login = null) {
         String(profile.name || "").trim() ||
         String(login.remoteName || "").trim() ||
         Number(login.metadata?.last_contact_sync || 0))
+  );
+}
+
+function signalProvisioningLoginState(login = null) {
+  return String(
+    login?.state_event || login?.state?.state_event || ""
+  ).toUpperCase();
+}
+
+function hasDeadSignalProvisioningLogin(accountState = null) {
+  const logins = Array.isArray(accountState?.logins) ? accountState.logins : [];
+  return logins.some((login) =>
+    ["BAD_CREDENTIALS", "LOGGED_OUT"].includes(
+      signalProvisioningLoginState(login)
+    )
   );
 }
 
@@ -539,7 +644,8 @@ function buildMediaDescriptor(content = {}) {
 }
 
 function resolveMessageText(content = {}) {
-  const replyToEventId = content["m.relates_to"]?.["m.in_reply_to"]?.event_id || null;
+  const replyToEventId =
+    content["m.relates_to"]?.["m.in_reply_to"]?.event_id || null;
   const body = stripReplyFallback(content.body || "", Boolean(replyToEventId));
   if (body) return body;
   return summarizeEventContent(content);
@@ -567,16 +673,33 @@ function collectMemberMap(roomData = {}) {
   return map;
 }
 
-function getRoomName(roomId, roomData, memberMap, currentUserId, bridgeBotMxid) {
+function getRoomName(
+  roomId,
+  roomData,
+  memberMap,
+  currentUserId,
+  bridgeBotMxid
+) {
   const stateEvents = roomData.state?.events || [];
-  const explicitName =
-    stateEvents.find((event) => event.type === "m.room.name")?.content?.name ||
-    "";
+  // With lazy_load_members + incremental /sync, a recent m.room.name change can
+  // land in the TIMELINE rather than the state block. Scan both and take the
+  // latest, so portal renames (e.g. "Signal Note to Self") aren't missed —
+  // otherwise we wrongly fall through to the other member's name.
+  const timelineEvents = roomData.timeline?.events || [];
+  const nameEvents = [...stateEvents, ...timelineEvents]
+    .filter((event) => event?.type === "m.room.name" && event?.content?.name)
+    .sort(
+      (a, b) =>
+        Number(a.origin_server_ts || 0) - Number(b.origin_server_ts || 0)
+    );
+  const explicitName = nameEvents.length
+    ? nameEvents[nameEvents.length - 1].content.name
+    : "";
   if (String(explicitName).trim()) return String(explicitName).trim();
 
   const canonicalAlias =
-    stateEvents.find((event) => event.type === "m.room.canonical_alias")?.content
-      ?.alias || "";
+    stateEvents.find((event) => event.type === "m.room.canonical_alias")
+      ?.content?.alias || "";
   if (String(canonicalAlias).trim()) {
     return String(canonicalAlias).replace(/^#/, "").split(":")[0];
   }
@@ -589,7 +712,9 @@ function getRoomName(roomId, roomData, memberMap, currentUserId, bridgeBotMxid) 
   );
 
   if (otherMembers.length === 1) {
-    return otherMembers[0].displayName || localpartFromMxid(otherMembers[0].mxid);
+    return (
+      otherMembers[0].displayName || localpartFromMxid(otherMembers[0].mxid)
+    );
   }
 
   if (otherMembers.length > 1) {
@@ -605,8 +730,9 @@ function getRoomName(roomId, roomData, memberMap, currentUserId, bridgeBotMxid) 
 
 function getRoomAvatar(roomData, memberMap, currentUserId, bridgeBotMxid) {
   const explicitAvatar =
-    (roomData.state?.events || []).find((event) => event.type === "m.room.avatar")
-      ?.content?.url || null;
+    (roomData.state?.events || []).find(
+      (event) => event.type === "m.room.avatar"
+    )?.content?.url || null;
   if (explicitAvatar) return explicitAvatar;
 
   const directMember = [...memberMap.values()].find(
@@ -622,8 +748,10 @@ function getRoomAvatar(roomData, memberMap, currentUserId, bridgeBotMxid) {
 function getRoomMemberCount(roomData = {}, memberMap = new Map()) {
   const joinedCount =
     Number(roomData.summary?.["m.joined_member_count"] || 0) ||
-    [...memberMap.values()].filter((member) => member.membership === "join").length;
-  const invitedCount = Number(roomData.summary?.["m.invited_member_count"] || 0) || 0;
+    [...memberMap.values()].filter((member) => member.membership === "join")
+      .length;
+  const invitedCount =
+    Number(roomData.summary?.["m.invited_member_count"] || 0) || 0;
   return joinedCount + invitedCount;
 }
 
@@ -640,7 +768,10 @@ function parseRoomEvents({
     ...(roomData.timeline?.events || []),
   ]
     .filter((event) => event && (event.event_id || event.state_key))
-    .sort((a, b) => Number(a.origin_server_ts || 0) - Number(b.origin_server_ts || 0));
+    .sort(
+      (a, b) =>
+        Number(a.origin_server_ts || 0) - Number(b.origin_server_ts || 0)
+    );
 
   const messages = [];
   const messageMap = new Map();
@@ -712,7 +843,10 @@ function parseRoomEvents({
     }
     const content =
       typeof nextContent === "string"
-        ? { body: String(nextContent || "").trim(), msgtype: target.messageType || "m.text" }
+        ? {
+            body: String(nextContent || "").trim(),
+            msgtype: target.messageType || "m.text",
+          }
         : nextContent || {};
     const text = resolveMessageText(content);
     const media = buildMediaDescriptor(content);
@@ -733,7 +867,10 @@ function parseRoomEvents({
     if (!targetEventId) return;
     const target = messageMap.get(String(targetEventId));
     if (!target) {
-      pendingRedactions.set(String(targetEventId), String(redactionEventId || ""));
+      pendingRedactions.set(
+        String(targetEventId),
+        String(redactionEventId || "")
+      );
       return;
     }
     target.deleted = true;
@@ -835,7 +972,9 @@ function parseRoomEvents({
     }
     if (pendingReactions.has(message.id)) {
       const queued = pendingReactions.get(message.id) || [];
-      queued.forEach((reactionEvent) => applyReaction(message.id, reactionEvent));
+      queued.forEach((reactionEvent) =>
+        applyReaction(message.id, reactionEvent)
+      );
       pendingReactions.delete(message.id);
     }
   }
@@ -906,7 +1045,8 @@ function buildRoomDescriptor({
   const isDirect =
     directMap.get(String(roomId)) === true ||
     (!isManagement &&
-      (memberCount <= 2 && (containsGhostMember || isKnownPortal)));
+      memberCount <= 2 &&
+      (containsGhostMember || isKnownPortal));
   const messages = parseRoomEvents({
     roomId,
     roomData,
@@ -918,19 +1058,37 @@ function buildRoomDescriptor({
     .reverse()
     .find((message) => !message.deleted || message.previewText);
 
+  // Signal's self-chat portal is named "Signal Note to Self". Detect it so we
+  // can (a) render a clean "Note to Self" label, (b) collapse duplicate
+  // self-portals left behind by re-links, and (c) recover the user's own
+  // profile (name + avatar) from its single ghost member.
+  const isNoteToSelf = /note to self/i.test(String(roomName || ""));
+  const selfOtherMember = isNoteToSelf
+    ? [...memberMap.values()].find(
+        (member) =>
+          member.mxid !== currentUserId &&
+          member.mxid !== bridgeBotMxid &&
+          member.membership !== "leave"
+      )
+    : null;
+  const displayName = isNoteToSelf ? "Note to Self" : roomName;
+
   return {
     isSignalRoom,
     isManagement,
     room: {
       roomId: String(roomId),
       id: String(roomId),
-      name: roomName,
+      name: displayName,
+      isSelf: isNoteToSelf,
+      selfProfileName: selfOtherMember?.displayName || "",
       avatarMxc: roomAvatar || null,
       avatarUrl: buildSignalMediaUrl(roomAvatar || ""),
       isDirect,
       isGroup: !isDirect && !isManagement,
       memberCount,
-      unreadCount: Number(roomData.unread_notifications?.notification_count || 0) || 0,
+      unreadCount:
+        Number(roomData.unread_notifications?.notification_count || 0) || 0,
       highlightCount:
         Number(roomData.unread_notifications?.highlight_count || 0) || 0,
       lastEventId: lastMessage?.eventId || null,
@@ -950,7 +1108,9 @@ function buildRoomDescriptor({
 function parseDirectMap(syncData = {}) {
   const directMap = new Map();
   const accountDataEvents = syncData.account_data?.events || [];
-  const directEvent = accountDataEvents.find((event) => event.type === "m.direct");
+  const directEvent = accountDataEvents.find(
+    (event) => event.type === "m.direct"
+  );
   const content = directEvent?.content || {};
   for (const roomIds of Object.values(content)) {
     if (!Array.isArray(roomIds)) continue;
@@ -988,16 +1148,20 @@ function buildDefaultMatrixState(userId = "") {
 }
 
 function normalizeSignalLoginState(value = "", fallback = "disconnected") {
-  const normalized = String(value || "").trim().toLowerCase();
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
   if (SIGNAL_LOGIN_STATE_VALUES.has(normalized)) return normalized;
   return fallback;
 }
 
 function buildConfigFromIntegration(integration = {}) {
-  const signal =
-    integration.signal?.toObject ? integration.signal.toObject() : integration.signal || {};
-  const matrix =
-    integration.matrix?.toObject ? integration.matrix.toObject() : integration.matrix || {};
+  const signal = integration.signal?.toObject
+    ? integration.signal.toObject()
+    : integration.signal || {};
+  const matrix = integration.matrix?.toObject
+    ? integration.matrix.toObject()
+    : integration.matrix || {};
   const defaults = buildDefaultMatrixState(integration.userId || "");
 
   return {
@@ -1018,7 +1182,9 @@ function buildConfigFromIntegration(integration = {}) {
     ).trim(),
     loginState: normalizeSignalLoginState(
       matrix.loginState,
-      matrix.connectedAt || signal.connectedAt ? "connected" : defaults.loginState
+      matrix.connectedAt || signal.connectedAt
+        ? "connected"
+        : defaults.loginState
     ),
     lastError: String(matrix.lastError || "").trim(),
     connectedAt: matrix.connectedAt || signal.connectedAt || null,
@@ -1080,12 +1246,104 @@ function getSignalBridgeLogin(config = {}) {
   }
 }
 
+/**
+ * NUCLEAR OPTION: directly delete the bridge's user_login + user_portal rows
+ * for the given mxid. The bridge's `logout` command via Matrix message has
+ * been observed to NOT delete the row, leaving stale sessions that prevent
+ * fresh QR generation. Opens a read-write SQLite connection, removes the
+ * rows, and closes it. SQLite WAL mode handles concurrent access safely.
+ */
+function purgeSignalBridgeLogin(mxid = "") {
+  if (!SqliteDatabase) {
+    return { ok: false, reason: "no_sqlite_driver" };
+  }
+  const normalizedMxid = normalizeMxid(mxid);
+  if (!normalizedMxid) {
+    return { ok: false, reason: "no_mxid" };
+  }
+
+  const dbPath = String(defaultSignalBridgeDbPath() || "").trim();
+  if (!dbPath || !fs.existsSync(dbPath)) {
+    console.warn("[Signal purge] Bridge DB file not found at %s", dbPath);
+    return { ok: false, reason: "db_not_found" };
+  }
+
+  // Close cached readonly connection first to avoid lock conflicts
+  if (signalBridgeDb) {
+    try {
+      signalBridgeDb.close();
+    } catch {}
+    signalBridgeDb = null;
+    signalBridgeDbPath = "";
+  }
+
+  let writeDb = null;
+  try {
+    writeDb = new SqliteDatabase(dbPath, {
+      readonly: false,
+      fileMustExist: true,
+      timeout: 5_000,
+    });
+    try {
+      writeDb.pragma("busy_timeout = 5000");
+    } catch {}
+    try {
+      writeDb.pragma("journal_mode = WAL");
+    } catch {}
+    try {
+      writeDb.pragma("foreign_keys = ON");
+    } catch {}
+
+    const txn = writeDb.transaction((targetMxid) => {
+      let portalRowsDeleted = 0;
+      let loginRowsDeleted = 0;
+      try {
+        const r1 = writeDb
+          .prepare("DELETE FROM user_portal WHERE user_mxid = ?")
+          .run(targetMxid);
+        portalRowsDeleted = r1.changes || 0;
+      } catch (e) {
+        console.warn("[Signal purge] user_portal delete error:", e.message);
+      }
+      try {
+        const r2 = writeDb
+          .prepare("DELETE FROM user_login WHERE user_mxid = ?")
+          .run(targetMxid);
+        loginRowsDeleted = r2.changes || 0;
+      } catch (e) {
+        console.warn("[Signal purge] user_login delete error:", e.message);
+      }
+      return { portalRowsDeleted, loginRowsDeleted };
+    });
+
+    const result = txn(normalizedMxid);
+    console.log(
+      "[Signal purge] mxid=%s deleted login=%d portal=%d",
+      normalizedMxid,
+      result.loginRowsDeleted,
+      result.portalRowsDeleted
+    );
+    return { ok: true, ...result };
+  } catch (err) {
+    console.error("[Signal purge] failed:", err.message);
+    return { ok: false, reason: err.message };
+  } finally {
+    if (writeDb) {
+      try {
+        writeDb.close();
+      } catch {}
+    }
+  }
+}
+
 function listSignalBridgeContacts(bridgeLogin = null) {
   const db = getSignalBridgeDb();
   const loginId = String(bridgeLogin?.loginId || "").trim();
   if (!db || !loginId) return [];
 
-  const selfPhone = normalizePhoneNumber(bridgeLogin?.remoteProfile?.phone || "");
+  const selfPhone = normalizePhoneNumber(
+    bridgeLogin?.remoteProfile?.phone || ""
+  );
 
   try {
     const rows = db
@@ -1148,7 +1406,8 @@ function findSignalContactByIdentifier(bridgeLogin = null, identifier = "") {
   if (!normalizedIdentifier) return null;
   return (
     listSignalBridgeContacts(bridgeLogin).find(
-      (contact) => String(contact.identifier || "").trim() === normalizedIdentifier
+      (contact) =>
+        String(contact.identifier || "").trim() === normalizedIdentifier
     ) || null
   );
 }
@@ -1218,8 +1477,7 @@ function applySignalPortalFallbackToRoom(room = null, portal = {}) {
     isGroup: false,
     memberCount: 2,
     bridgeStatus: "portal",
-    signalIdentifier:
-      room.signalIdentifier || fallback.signalIdentifier || "",
+    signalIdentifier: room.signalIdentifier || fallback.signalIdentifier || "",
     phoneNumber: room.phoneNumber || fallback.phoneNumber || "",
   };
 }
@@ -1228,7 +1486,11 @@ function signalPortalReadHintKey(userId = "", roomId = "") {
   return `${String(userId || "").trim()}:${String(roomId || "").trim()}`;
 }
 
-function getSignalPortalReadMarker(userId = "", roomId = "", fallbackValue = 0) {
+function getSignalPortalReadMarker(
+  userId = "",
+  roomId = "",
+  fallbackValue = 0
+) {
   const key = signalPortalReadHintKey(userId, roomId);
   if (SIGNAL_PORTAL_READ_HINTS.has(key)) {
     return normalizeTimestampMs(SIGNAL_PORTAL_READ_HINTS.get(key) || 0);
@@ -1261,9 +1523,7 @@ function applySignalPortalReadState(userId, room = null, portal = {}) {
 
   return {
     ...room,
-    unreadCount: hasUnreadFallback
-      ? 1
-      : Number(room.unreadCount || 0) || 0,
+    unreadCount: hasUnreadFallback ? 1 : Number(room.unreadCount || 0) || 0,
     highlightCount: hasUnreadFallback
       ? Math.max(1, Number(room.highlightCount || 0) || 0)
       : Number(room.highlightCount || 0) || 0,
@@ -1331,7 +1591,9 @@ function getSignalBridgePortals(config = {}) {
         receiver: String(row.portal_receiver || "").trim(),
         otherUserId: String(row.other_user_id || "").trim(),
         name: String(row.portal_name || "").trim(),
-        avatarMxc: String(row.portal_avatar_mxc || row.ghost_avatar_mxc || "").trim(),
+        avatarMxc: String(
+          row.portal_avatar_mxc || row.ghost_avatar_mxc || ""
+        ).trim(),
         contactName: String(row.contact_name || "").trim(),
         profileName: String(row.profile_name || "").trim(),
         ghostName: String(row.ghost_name || "").trim(),
@@ -1354,14 +1616,19 @@ function findSignalPortalByRoomId(config = {}, roomId = "") {
   );
 }
 
-function listSignalFallbackRooms(bridgeLogin = null, { search = "", limit = 80 } = {}) {
+function listSignalFallbackRooms(
+  bridgeLogin = null,
+  { search = "", limit = 80 } = {}
+) {
   const query = normalizeSearchValue(search);
   const rooms = listSignalBridgeContacts(bridgeLogin)
     .map((contact) => buildSignalContactRoom(contact))
     .filter((room) => {
       if (!query) return true;
       return normalizeSearchValue(
-        [room.name, room.phoneNumber, room.signalIdentifier].filter(Boolean).join(" ")
+        [room.name, room.phoneNumber, room.signalIdentifier]
+          .filter(Boolean)
+          .join(" ")
       ).includes(query);
     });
 
@@ -1475,9 +1742,34 @@ async function ensureHiddenSignalAccount(
   const password = buildHiddenSignalPassword(userId);
   const userPath = `/_synapse/admin/v2/users/${encodeURIComponent(mxid)}`;
 
-  const lookup = await synapseAdminRequest("GET", userPath, {
-    validateStatus: (status) => status === 200 || status === 404,
-  });
+  let lookup = null;
+  try {
+    lookup = await synapseAdminRequest("GET", userPath, {
+      validateStatus: (status) => status === 200 || status === 404,
+    });
+  } catch (err) {
+    if (!isMatrixAuthFailure(err)) throw err;
+    await registerMatrixAccountWithSharedSecret({
+      homeserverUrl: defaultHomeserverUrl(),
+      mxid,
+      password,
+      admin: false,
+    }).catch((registerErr) => {
+      const errcode = String(registerErr?.response?.data?.errcode || "").trim();
+      if (errcode !== "M_USER_IN_USE") throw registerErr;
+      return resetMatrixAccountWithSharedSecretAdmin({
+        mxid,
+        password,
+        displayName: "OrionAI Signal",
+      });
+    });
+    return {
+      homeserverUrl: normalizeHomeserverUrl(defaultHomeserverUrl()),
+      mxid,
+      password,
+      bridgeBotMxid: normalizeMxid(defaultBridgeBotMxid()),
+    };
+  }
 
   if (lookup.status === 404 || forceResetPassword) {
     await synapseAdminRequest("PUT", userPath, {
@@ -1541,14 +1833,10 @@ async function loginToMatrix({
     } catch (err) {
       lastError = err;
       if (isMatrixRateLimitedError(err)) {
-        throw createSignalServiceError(
-          formatSignalRateLimitMessage(err),
-          err,
-          {
-            retryAfterMs: getMatrixRetryAfterMs(err),
-            signalRateLimited: true,
-          }
-        );
+        throw createSignalServiceError(formatSignalRateLimitMessage(err), err, {
+          retryAfterMs: getMatrixRetryAfterMs(err),
+          signalRateLimited: true,
+        });
       }
     }
   }
@@ -1606,22 +1894,96 @@ async function loginHiddenMatrixAccount(userId) {
   }
 }
 
+async function loginExistingHiddenSignalAccount(userId) {
+  const defaults = buildDefaultMatrixState(userId);
+  const login = await loginToMatrix({
+    homeserverUrl: defaults.homeserverUrl,
+    mxid: defaults.mxid,
+    password: buildHiddenSignalPassword(userId),
+    deviceDisplayName: defaultMatrixDeviceName(),
+  }).catch((err) => {
+    const asToken = defaultSignalAppserviceToken();
+    if (!asToken || !isMatrixAuthFailure(err)) throw err;
+    return {
+      user_id: defaults.mxid,
+      access_token: asToken,
+      device_id: "",
+    };
+  });
+
+  return {
+    hiddenAccount: {
+      homeserverUrl: defaults.homeserverUrl,
+      mxid: defaults.mxid,
+      bridgeBotMxid: defaults.bridgeBotMxid,
+    },
+    login,
+  };
+}
+
+// Transient network errors that we should retry. Without this, a single
+// ECONNRESET (common in Docker overlay networks during container churn)
+// kills the whole connect flow with an opaque error.
+const MATRIX_RETRIABLE_CODES = new Set([
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "ECONNABORTED",
+  "EAI_AGAIN",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "EPIPE",
+]);
+
+function isRetriableMatrixError(error) {
+  if (!error) return false;
+  const code = String(error.code || "").toUpperCase();
+  if (MATRIX_RETRIABLE_CODES.has(code)) return true;
+  const status = Number(error.response?.status || 0);
+  return status === 502 || status === 503 || status === 504;
+}
+
 async function matrixRequest(config, method, path, options = {}) {
   const headers = { ...(options.headers || {}) };
   if (config.accessToken) {
     headers.Authorization = `Bearer ${config.accessToken}`;
   }
-  const response = await axios({
-    method,
-    url: `${config.homeserverUrl}${path}`,
-    params: options.params,
-    data: options.data,
-    headers,
-    responseType: options.responseType || "json",
-    timeout: options.timeout || 20_000,
-    validateStatus: options.validateStatus,
-  });
-  return response;
+  const params = { ...(options.params || {}) };
+  if (isSignalAppserviceToken(config.accessToken) && config.mxid) {
+    params.user_id = normalizeMxid(config.mxid);
+  }
+  const maxAttempts = options.maxAttempts || 3;
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await axios({
+        method,
+        url: `${config.homeserverUrl}${path}`,
+        params,
+        data: options.data,
+        headers,
+        responseType: options.responseType || "json",
+        timeout: options.timeout || 20_000,
+        validateStatus: options.validateStatus,
+      });
+    } catch (err) {
+      lastError = err;
+      if (attempt >= maxAttempts || !isRetriableMatrixError(err)) {
+        throw err;
+      }
+      const backoffMs = Math.min(500 * 2 ** (attempt - 1) + 500, 4000);
+      console.warn(
+        "[Signal matrix] %s %s failed (%s) attempt %d/%d, retrying in %dms",
+        method,
+        path,
+        err.code || err.response?.status || err.message,
+        attempt,
+        maxAttempts,
+        backoffMs
+      );
+      await new Promise((r) => setTimeout(r, backoffMs));
+    }
+  }
+  throw lastError;
 }
 
 async function ensureSignalAccess(userId, { forceLogin = false } = {}) {
@@ -1631,7 +1993,12 @@ async function ensureSignalAccess(userId, { forceLogin = false } = {}) {
     return { integration, config };
   }
 
-  const { hiddenAccount, login } = await loginHiddenMatrixAccount(userId);
+  const { hiddenAccount, login } = await loginHiddenMatrixAccount(userId).catch(
+    (err) => {
+      if (!isMatrixAuthFailure(err)) throw err;
+      return loginExistingHiddenSignalAccount(userId);
+    }
+  );
   const saved = await saveSignalIntegration(userId, {
     homeserverUrl: hiddenAccount.homeserverUrl,
     mxid: normalizeMxid(login.user_id || hiddenAccount.mxid),
@@ -1685,7 +2052,9 @@ async function ensureJoinedSignalRoom(userId, roomId = "") {
     invalidateSignalCache(userId);
     return response.data || { room_id: targetRoomId };
   } catch (err) {
-    const message = String(err?.response?.data?.error || err?.message || "").trim();
+    const message = String(
+      err?.response?.data?.error || err?.message || ""
+    ).trim();
     if (
       matrixErrorStatus(err) === 403 &&
       /already in room|is already joined/i.test(message)
@@ -1696,13 +2065,117 @@ async function ensureJoinedSignalRoom(userId, roomId = "") {
   }
 }
 
+/**
+ * Pull pending Matrix invites from /sync and return the room IDs that look
+ * like they came from the Signal bridge (inviter is the bridge bot or a
+ * Signal ghost). This is the Matrix-native way to discover newly-created
+ * portal rooms — works regardless of whether the bridge is on SQLite or
+ * Postgres, because it goes through the Matrix protocol, not the bridge DB.
+ *
+ * WHY THIS EXISTS: the Signal bridge (bridgev2/megabridge, running on
+ * Postgres) creates a portal room per chat and *invites* the user puppet
+ * (@orion_u_<user>:orion.local). Until that invite is accepted (joined),
+ * Matrix /sync returns the room under `rooms.invite`, NOT `rooms.join` — and
+ * our chat list only reads `rooms.join`. That left the Signal chat list empty
+ * forever ("Syncing your Signal chats…"). Beeper auto-accepts these invites;
+ * this mirrors that. (WhatsApp already does the same via
+ * discoverPendingBridgeInvites/ensureBridgePortalRoomsJoined.)
+ */
+async function discoverPendingSignalBridgeInvites(
+  userId,
+  { bridgeBotMxid = "" } = {}
+) {
+  try {
+    const syncSnapshot = await fetchSyncSnapshot(userId, {
+      timelineLimit: 5,
+      force: false,
+    });
+    const invites = syncSnapshot?.data?.rooms?.invite || {};
+    const targetMxid = String(bridgeBotMxid || "").trim();
+    const matches = [];
+    for (const [roomId, roomData] of Object.entries(invites)) {
+      const events = roomData?.invite_state?.events || [];
+      const inviter =
+        events.find(
+          (ev) =>
+            ev?.type === "m.room.member" &&
+            ev?.content?.membership === "invite"
+        )?.sender || "";
+      // Accept invites from the bridge bot OR any Signal ghost user.
+      if (
+        (targetMxid && inviter === targetMxid) ||
+        isSignalGhostMxid(inviter)
+      ) {
+        matches.push(roomId);
+      }
+    }
+    return matches;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Accept (join) any pending Signal portal-room invites so they surface in the
+ * chat list. Best-effort and idempotent; only joins invites coming from the
+ * Signal bridge bot / ghosts. Returns the list of room IDs successfully joined.
+ */
+async function ensureSignalPortalRoomsJoined(
+  userId,
+  { config = {}, joinedRoomIds = new Set(), maxRooms = 50 } = {}
+) {
+  const joinedSet = new Set(
+    [...(joinedRoomIds instanceof Set ? joinedRoomIds : joinedRoomIds || [])]
+      .map((roomId) => String(roomId || "").trim())
+      .filter(Boolean)
+  );
+
+  const pendingInvites = await discoverPendingSignalBridgeInvites(userId, {
+    bridgeBotMxid: config?.bridgeBotMxid,
+  });
+
+  const pendingRoomIds = [...new Set(pendingInvites)]
+    .filter((roomId) => roomId && !joinedSet.has(roomId))
+    .slice(0, Math.max(1, Number(maxRooms || 50)));
+
+  const successful = [];
+  for (const roomId of pendingRoomIds) {
+    try {
+      await ensureJoinedSignalRoom(userId, roomId);
+      successful.push(roomId);
+      joinedSet.add(roomId);
+    } catch {
+      // best-effort: a single failed join must not block the rest
+    }
+  }
+
+  if (successful.length) {
+    invalidateSignalCache(userId);
+  }
+  return successful;
+}
+
 function invalidateSignalCache(userId) {
   for (const key of [...SIGNAL_SYNC_CACHE.keys()]) {
     if (key.startsWith(`${userId}:`)) SIGNAL_SYNC_CACHE.delete(key);
   }
+  SIGNAL_STATUS_CACHE.delete(userId);
 }
 
-async function fetchSyncSnapshot(userId, { timelineLimit = 30, force = false } = {}) {
+/**
+ * Full reset for disconnect / logout flows. Also drops the active-login
+ * bookkeeping so the next connect cycle starts a clean QR window.
+ */
+function invalidateSignalCacheForReconnect(userId) {
+  invalidateSignalCache(userId);
+  SIGNAL_LOGIN_REQUESTED_AT.delete(userId);
+  SIGNAL_LOGIN_RESEND_AT.delete(userId);
+}
+
+async function fetchSyncSnapshot(
+  userId,
+  { timelineLimit = 30, force = false } = {}
+) {
   const cacheKey = `${userId}:${timelineLimit}`;
   const cached = SIGNAL_SYNC_CACHE.get(cacheKey);
   if (!force && cached && cached.expiresAt > nowTs()) {
@@ -1713,7 +2186,9 @@ async function fetchSyncSnapshot(userId, { timelineLimit = 30, force = false } =
   const filter = JSON.stringify({
     presence: { types: [] },
     room: {
-      timeline: { limit: Math.max(1, Math.min(100, Number(timelineLimit || 30))) },
+      timeline: {
+        limit: Math.max(1, Math.min(100, Number(timelineLimit || 30))),
+      },
       state: { lazy_load_members: true },
       account_data: { types: ["m.tag", "m.fully_read"] },
       ephemeral: { types: ["m.receipt", "m.typing"] },
@@ -1742,6 +2217,70 @@ async function fetchSyncSnapshot(userId, { timelineLimit = 30, force = false } =
   return snapshot;
 }
 
+// Real-time push: a single Matrix /sync long-poll that resolves as soon as the
+// homeserver reports new Signal activity (an incoming message in any joined
+// portal room, or a brand-new portal invite). Mirrors the WhatsApp listener so
+// Signal notifications arrive instantly instead of waiting on the 15s poll.
+async function waitForSignalActivity(
+  userId,
+  { since = "", timeoutMs = 25000 } = {}
+) {
+  const { config } = await ensureSignalAccess(userId);
+  const selfMxid = String(config?.mxid || "");
+  const filter = JSON.stringify({
+    presence: { types: [] },
+    account_data: { types: [] },
+    room: {
+      timeline: { limit: 1 },
+      state: { types: [], lazy_load_members: true },
+      ephemeral: { types: [] },
+      account_data: { types: [] },
+    },
+  });
+
+  const params = { timeout: Math.max(0, Number(timeoutMs) || 0), filter };
+  if (since) params.since = since;
+
+  const response = await matrixRequestWithRefresh(
+    userId,
+    "GET",
+    "/_matrix/client/v3/sync",
+    {
+      params,
+      // Give axios headroom over the Matrix long-poll timeout so the HTTP layer
+      // doesn't abort the request before the homeserver responds.
+      timeout: (Number(timeoutMs) || 0) + 20000,
+    }
+  );
+
+  const data = response.data || {};
+  const nextBatch = data.next_batch || since || "";
+
+  let hasNewActivity = false;
+  const joined = data.rooms?.join || {};
+  for (const room of Object.values(joined)) {
+    const events = room?.timeline?.events || [];
+    for (const ev of events) {
+      if (
+        ev?.type === "m.room.message" &&
+        ev?.sender &&
+        String(ev.sender) !== selfMxid
+      ) {
+        hasNewActivity = true;
+        break;
+      }
+    }
+    if (hasNewActivity) break;
+  }
+
+  // New portal-room invites (a brand new Signal chat) also count as activity.
+  const inviteCount = data.rooms?.invite
+    ? Object.keys(data.rooms.invite).length
+    : 0;
+
+  return { nextBatch, hasNewActivity: hasNewActivity || inviteCount > 0 };
+}
+
 async function getWhoAmI(userId) {
   const response = await matrixRequestWithRefresh(
     userId,
@@ -1764,7 +2303,8 @@ async function getProfile(userId, mxid = "") {
 
 async function findManagementRoom(userId, snapshot = null) {
   const currentSnapshot =
-    snapshot || (await fetchSyncSnapshot(userId, { timelineLimit: 5, force: false }));
+    snapshot ||
+    (await fetchSyncSnapshot(userId, { timelineLimit: 5, force: false }));
   const directMap = parseDirectMap(currentSnapshot.data);
   const rooms = currentSnapshot.data.rooms?.join || {};
 
@@ -1784,7 +2324,10 @@ async function findManagementRoom(userId, snapshot = null) {
 }
 
 async function ensureManagementRoom(userId) {
-  const snapshot = await fetchSyncSnapshot(userId, { timelineLimit: 5, force: true });
+  const snapshot = await fetchSyncSnapshot(userId, {
+    timelineLimit: 5,
+    force: true,
+  });
   if (snapshot.config.managementRoomId) {
     return String(snapshot.config.managementRoomId);
   }
@@ -1843,7 +2386,8 @@ async function fetchRoomDescriptorById(
   if (!currentSnapshot?.config) return null;
 
   const directMap = parseDirectMap(currentSnapshot.data || {});
-  const syncRoomData = currentSnapshot.data?.rooms?.join?.[targetRoomId] || null;
+  const syncRoomData =
+    currentSnapshot.data?.rooms?.join?.[targetRoomId] || null;
   if (syncRoomData) {
     return buildRoomDescriptor({
       roomId: targetRoomId,
@@ -1938,7 +2482,8 @@ async function waitForManagementRoomReady(
 
     if (descriptor) {
       const bridgeJoined =
-        descriptor.memberMap.get(String(snapshot.config.bridgeBotMxid))?.membership === "join";
+        descriptor.memberMap.get(String(snapshot.config.bridgeBotMxid))
+          ?.membership === "join";
       const bridgeSpoke = (descriptor.messages || []).some((message) =>
         isBridgeBotMessage(message, snapshot.config.bridgeBotMxid)
       );
@@ -1974,7 +2519,9 @@ async function getManagementRoomDescriptor(
     : null;
 
   if (!descriptor) {
-    const existing = await findManagementRoom(userId, snapshot).catch(() => null);
+    const existing = await findManagementRoom(userId, snapshot).catch(
+      () => null
+    );
     if (existing?.roomId) {
       roomId = existing.roomId;
       descriptor = await fetchRoomDescriptorById(userId, roomId, {
@@ -2009,12 +2556,15 @@ function isBridgeBotMessage(message = {}, bridgeBotMxid = "") {
 }
 
 function pickLatestManagementSignal(entries = []) {
-  return [...entries]
-    .filter((entry) => entry?.message && entry?.state)
-    .sort(
-      (left, right) =>
-        Number(right.message?.timestamp || 0) - Number(left.message?.timestamp || 0)
-    )[0] || null;
+  return (
+    [...entries]
+      .filter((entry) => entry?.message && entry?.state)
+      .sort(
+        (left, right) =>
+          Number(right.message?.timestamp || 0) -
+          Number(left.message?.timestamp || 0)
+      )[0] || null
+  );
 }
 
 function prefersPrefixedBridgeCommands(descriptor = null, bridgeBotMxid = "") {
@@ -2054,16 +2604,16 @@ function extractBridgeRoomState(descriptor = null, bridgeBotMxid = "") {
   const latestQrText = [...botMessages]
     .reverse()
     .find((message) =>
-      BRIDGE_QR_RE.test(String(message.text || message.previewText || "").trim())
+      BRIDGE_QR_RE.test(
+        String(message.text || message.previewText || "").trim()
+      )
     );
   const latestQr = latestQrImage || latestQrText || null;
-  const latestError = [...botMessages]
-    .reverse()
-    .find((message) => {
-      const text = String(message.text || message.previewText || "").trim();
-      if (!text) return false;
-      return BRIDGE_ERROR_RE.test(text) && !BRIDGE_SUCCESS_RE.test(text);
-    });
+  const latestError = [...botMessages].reverse().find((message) => {
+    const text = String(message.text || message.previewText || "").trim();
+    if (!text) return false;
+    return BRIDGE_ERROR_RE.test(text) && !BRIDGE_SUCCESS_RE.test(text);
+  });
 
   const latestSignal = pickLatestManagementSignal([
     { state: "connected", message: latestConnected },
@@ -2077,9 +2627,7 @@ function extractBridgeRoomState(descriptor = null, bridgeBotMxid = "") {
     latestQrImage,
     latestQrText,
     latestError,
-    loginState:
-      latestSignal?.state ||
-      (latestQr ? "pending_qr" : null),
+    loginState: latestSignal?.state || (latestQr ? "pending_qr" : null),
     qrPayload: String(
       latestQrImage?.text ||
         latestQrImage?.previewText ||
@@ -2106,7 +2654,10 @@ function extractBridgeRoomState(descriptor = null, bridgeBotMxid = "") {
           latestQr?.media?.thumbnailUrl ||
           null,
     lastErrorText:
-      latestError?.text || latestError?.previewText || latestError?.media?.body || "",
+      latestError?.text ||
+      latestError?.previewText ||
+      latestError?.media?.body ||
+      "",
     latestConnectedAt:
       latestConnected?.isoTimestamp ||
       (latestConnected?.timestamp
@@ -2122,7 +2673,10 @@ async function resolveQrImageUrl(userId, bridgeState = {}) {
     const cachedPayload = getCachedQrImage(payloadCacheKey);
     if (cachedPayload) return cachedPayload;
     try {
-      return cacheQrImage(payloadCacheKey, await buildSignalQrDataUrl(qrPayload));
+      return cacheQrImage(
+        payloadCacheKey,
+        await buildSignalQrDataUrl(qrPayload)
+      );
     } catch {}
   }
 
@@ -2136,7 +2690,9 @@ async function resolveQrImageUrl(userId, bridgeState = {}) {
 
   try {
     const media = await fetchSignalMedia(userId, mxc);
-    const contentType = String(media?.contentType || "").trim().toLowerCase();
+    const contentType = String(media?.contentType || "")
+      .trim()
+      .toLowerCase();
     if (!contentType.startsWith("image/")) {
       return bridgeState?.qrImageUrl || null;
     }
@@ -2146,7 +2702,9 @@ async function resolveQrImageUrl(userId, bridgeState = {}) {
     if (!buffer.length) return bridgeState?.qrImageUrl || null;
     return cacheQrImage(
       mxc,
-      `data:${media?.contentType || "image/png"};base64,${buffer.toString("base64")}`
+      `data:${media?.contentType || "image/png"};base64,${buffer.toString(
+        "base64"
+      )}`
     );
   } catch {
     return bridgeState?.qrImageUrl || null;
@@ -2163,7 +2721,12 @@ async function buildSignalQrDataUrl(payload = "") {
 
 async function resolveBridgeState(
   userId,
-  { managementRoomId = "", bridgeBotMxid = "", force = false, timelineLimit = 60 } = {}
+  {
+    managementRoomId = "",
+    bridgeBotMxid = "",
+    force = false,
+    timelineLimit = 60,
+  } = {}
 ) {
   const roomId = String(managementRoomId || "").trim();
   const descriptor = await getManagementRoomDescriptor(userId, {
@@ -2195,6 +2758,48 @@ async function resolveBridgeState(
   }
 
   return bridgeState;
+}
+
+/**
+ * Extract the Signal loginId (Signal ACI/UUID) from the bridge bot's
+ * "Successfully logged in as ..." message. Matrix-protocol fallback for
+ * when the SQLite snapshot is empty (e.g. bridge is on Postgres).
+ *
+ * Signal's mautrix bridge identifies logins by ACI UUID rather than phone
+ * number. The bot's message looks like:
+ *   "Successfully logged in as +1 234 567 8900 (ACI: 775e7dce-bfc1-4edb-...)"
+ * So we look for a UUID pattern first, falling back to phone digits.
+ */
+async function findSignalLoginIdFromBridgeBotMessages(
+  userId,
+  { managementRoomId = "", bridgeBotMxid = "" } = {}
+) {
+  const roomId = String(managementRoomId || "").trim();
+  if (!roomId) return "";
+  try {
+    const descriptor = await getManagementRoomDescriptor(userId, {
+      force: false,
+      timelineLimit: 80,
+    }).catch(() => null);
+    const botMessages = (descriptor?.messages || []).filter((m) =>
+      isBridgeBotMessage(m, bridgeBotMxid)
+    );
+    for (let i = botMessages.length - 1; i >= 0; i -= 1) {
+      const text = String(
+        botMessages[i]?.text || botMessages[i]?.previewText || ""
+      );
+      const uuidMatch = text.match(
+        /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i
+      );
+      if (uuidMatch) return uuidMatch[0].toLowerCase();
+      const phoneMatch = text.match(/logged in as\s*\+?([\d\s\-()]{6,})/i);
+      if (phoneMatch) {
+        const digits = phoneMatch[1].replace(/\D/g, "");
+        if (digits.length >= 6) return digits;
+      }
+    }
+  } catch {}
+  return "";
 }
 
 async function sendBridgeTextCommand(userId, command) {
@@ -2238,7 +2843,7 @@ async function sendBridgeTextCommand(userId, command) {
 
 async function waitForSignalLoginState(
   userId,
-  { timeoutMs = 20_000, intervalMs = 1_500 } = {}
+  { timeoutMs = 8_000, intervalMs = 800 } = {}
 ) {
   const startedAt = nowTs();
   let latestStatus = await getSignalStatus(userId, { forceRefresh: true });
@@ -2253,7 +2858,9 @@ async function waitForSignalLoginState(
     }
 
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
-    latestStatus = await getSignalStatus(userId, { forceRefresh: true });
+    // Use cached path during polling — short status cache (1.5s) keeps us
+    // responsive without redundant heavy work each iteration.
+    latestStatus = await getSignalStatus(userId, { forceRefresh: false });
   }
 
   return latestStatus;
@@ -2274,7 +2881,8 @@ async function connectSignalIntegration(userId, payload = {}) {
       }).catch(() => null)
     : null;
   const hasActiveQr =
-    currentStatus?.loginState === "pending_qr" && Boolean(currentStatus?.qrImageUrl);
+    currentStatus?.loginState === "pending_qr" &&
+    Boolean(currentStatus?.qrImageUrl);
 
   if (
     !forceReconnect &&
@@ -2297,13 +2905,14 @@ async function connectSignalIntegration(userId, payload = {}) {
     bridgeBotMxid: hiddenAccount.bridgeBotMxid,
     loginState: "creating_account",
     lastError: "",
-    connectedAt:
-      forceReconnect ? null : existingConfig?.connectedAt || undefined,
+    connectedAt: forceReconnect
+      ? null
+      : existingConfig?.connectedAt || undefined,
   });
 
   try {
     const { integration } = await ensureSignalAccess(userId, {
-      forceLogin: forceReconnect || !existingConfig?.accessToken,
+      forceLogin: !existingConfig?.accessToken,
     });
     const config = buildConfigFromIntegration(integration);
 
@@ -2326,16 +2935,74 @@ async function connectSignalIntegration(userId, payload = {}) {
       connectedAt: forceReconnect ? null : config.connectedAt || null,
     });
 
-    const shouldSendLogin =
-      forceReconnect ||
-      !currentStatus ||
-      !hasActiveQr;
-
-    if (shouldSendLogin) {
-      await sendBridgeTextCommand(userId, "login");
+    // Clear any stale bridge session so the bridge generates a fresh QR.
+    // SAFETY: only purge on fresh connect (no existing Integration) or
+    // explicit force-reconnect. Otherwise we risk destroying a fresh
+    // user_login row that the bridge just wrote from a successful QR scan
+    // (e.g. user double-clicked Connect).
+    const isFreshConnect = !existingIntegration;
+    if (isFreshConnect || forceReconnect) {
+      const logoutResult = await provisioningLogin.logoutAllLogins(
+        "signal",
+        config.mxid
+      );
+      if (!logoutResult.ok) {
+        throw new Error(
+          "Signal is still linked to the previous account. Disconnect it completely before connecting another account."
+        );
+      }
+    }
+    const staleBridgeLogin = getSignalBridgeLogin({ mxid: hiddenAccount.mxid });
+    if (
+      staleBridgeLogin &&
+      staleBridgeLogin.loginId &&
+      (isFreshConnect || forceReconnect)
+    ) {
+      console.log(
+        "[Signal connect] Existing bridge session found (loginId=%s), sending logout to bridge before fresh login",
+        staleBridgeLogin.loginId
+      );
+      try {
+        await sendBridgeTextCommand(
+          userId,
+          `logout ${staleBridgeLogin.loginId}`
+        );
+        // Give the bridge ~3s to process the logout asynchronously and clear
+        // its own state. Then we'll send `login` for a fresh QR.
+        await new Promise((r) => setTimeout(r, 3000));
+      } catch (logoutErr) {
+        console.warn(
+          "[Signal connect] Bridge logout command failed (continuing anyway):",
+          logoutErr.message
+        );
+      }
     }
 
-    const status = await waitForSignalLoginState(userId);
+    const shouldSendLogin = forceReconnect || !currentStatus || !hasActiveQr;
+
+    if (shouldSendLogin) {
+      // Drive the bridge's Provisioning API directly (Beeper parity): the
+      // background runner long-polls the bridge and always exposes the live,
+      // currently-scannable QR — no more stale Matrix-room QR copies that the
+      // phone rejects with "Network error". The runner self-restarts each QR
+      // cycle so the user always has a fresh code.
+      provisioningLogin.stopLogin("signal", config.mxid);
+      provisioningLogin.startLogin("signal", config.mxid, {
+        force: forceReconnect || isFreshConnect,
+      });
+      // Open the "active login window" so status polls keep treating this as
+      // an in-progress login.
+      SIGNAL_LOGIN_REQUESTED_AT.set(userId, nowTs());
+      SIGNAL_LOGIN_RESEND_AT.set(userId, nowTs());
+    }
+
+    // Wait briefly (up to 8s) for QR to surface. If not yet ready, return
+    // immediately so the UI can render "Generating QR…". The frontend polls
+    // /status every 1.5s and picks up the QR within ~2s of it being produced.
+    const status = await waitForSignalLoginState(userId, {
+      timeoutMs: 8_000,
+      intervalMs: 800,
+    });
     const latestIntegration = await ensureSignalIntegration(userId);
 
     return {
@@ -2358,7 +3025,9 @@ async function connectSignalIntegration(userId, payload = {}) {
 
 function disconnectedSignalStatus(overrides = {}) {
   const lastError = String(
-    overrides.lastError !== undefined ? overrides.lastError : overrides.error || ""
+    overrides.lastError !== undefined
+      ? overrides.lastError
+      : overrides.error || ""
   ).trim();
   return {
     connected: false,
@@ -2374,9 +3043,53 @@ function disconnectedSignalStatus(overrides = {}) {
   };
 }
 
+async function adoptConnectedSignalIntegration(userId) {
+  const normalizedUserId = String(userId || "").trim();
+  if (!normalizedUserId) return null;
+
+  const defaults = buildDefaultMatrixState(normalizedUserId);
+  const acctState = await provisioningLogin
+    .getBridgeAccountState("signal", defaults.mxid)
+    .catch(() => null);
+  if (!acctState?.connected) return null;
+
+  const connectedAt = acctState.login?.state?.timestamp
+    ? new Date(Number(acctState.login.state.timestamp) * 1000)
+    : new Date();
+  const matrixSession = await loginHiddenMatrixAccount(normalizedUserId).catch(
+    (err) => {
+      console.warn(
+        "[Signal] connected bridge adoption could not refresh Matrix token:",
+        err?.message || err
+      );
+      return null;
+    }
+  );
+  const matrixLogin = matrixSession?.login || null;
+  const hiddenAccount = matrixSession?.hiddenAccount || defaults;
+
+  return saveSignalIntegration(normalizedUserId, {
+    homeserverUrl: hiddenAccount.homeserverUrl || defaults.homeserverUrl,
+    mxid: normalizeMxid(
+      matrixLogin?.user_id || hiddenAccount.mxid || defaults.mxid
+    ),
+    accessToken: matrixLogin?.access_token || "",
+    deviceId: matrixLogin?.device_id || "",
+    bridgeBotMxid: hiddenAccount.bridgeBotMxid || defaults.bridgeBotMxid,
+    loginState: "connected",
+    lastError: "",
+    connectedAt,
+  });
+}
+
 async function listMatrixSignalRooms(
   userId,
-  { search = "", limit = 80, force = false, knownPortalRoomIds = new Set() } = {}
+  {
+    search = "",
+    limit = 80,
+    force = false,
+    knownPortalRoomIds = new Set(),
+  } = {}
 ) {
   const snapshot = await fetchSyncSnapshot(userId, {
     timelineLimit: 20,
@@ -2399,13 +3112,17 @@ async function listMatrixSignalRooms(
     )
     .filter((descriptor) => descriptor.isSignalRoom && !descriptor.isManagement)
     .map((descriptor) => descriptor.room)
-    .sort((a, b) => Number(b.lastMessageTs || 0) - Number(a.lastMessageTs || 0));
+    .sort(
+      (a, b) => Number(b.lastMessageTs || 0) - Number(a.lastMessageTs || 0)
+    );
 
   const query = normalizeSearchValue(search);
   const filtered = query
     ? descriptors.filter((room) => {
         const haystack = normalizeSearchValue(
-          [room.name, room.lastMessage, room.lastSender].filter(Boolean).join(" ")
+          [room.name, room.lastMessage, room.lastSender]
+            .filter(Boolean)
+            .join(" ")
         );
         return haystack.includes(query);
       })
@@ -2414,28 +3131,131 @@ async function listMatrixSignalRooms(
   return filtered.slice(0, Math.max(1, Math.min(200, Number(limit || 80))));
 }
 
-function buildSignalStatusProfile({ matrixProfile = {}, whoami = {}, config = {}, bridgeLogin = null }) {
+function buildSignalStatusProfile({
+  matrixProfile = {},
+  whoami = {},
+  config = {},
+  bridgeLogin = null,
+  selfProfileHint = null,
+}) {
   const bridgeProfile = buildSignalProfileFromBridgeLogin(bridgeLogin);
   if (bridgeProfile) return bridgeProfile;
+
+  const matrixName = String(matrixProfile.displayname || "").trim();
+  const matrixAvatar = buildSignalMediaUrl(matrixProfile.avatar_url || "");
+
+  // The appservice homeserver account carries only a generic display name
+  // ("OrionAI Signal") and no avatar — that's why "my profile" looked empty.
+  // When it's generic, fall back to the user's own Signal identity recovered
+  // from the Note to Self chat (its single ghost member is *you*).
+  const looksGeneric = !matrixName || /orion ?ai/i.test(matrixName);
+  const hintName = String(selfProfileHint?.displayName || "").trim();
+  const hintAvatar = String(selfProfileHint?.avatarUrl || "").trim();
+
   return {
     displayName:
-      matrixProfile.displayname || localpartFromMxid(whoami.user_id || config.mxid),
-    avatarUrl: buildSignalMediaUrl(matrixProfile.avatar_url || ""),
+      looksGeneric && hintName
+        ? hintName
+        : matrixName || localpartFromMxid(whoami.user_id || config.mxid),
+    avatarUrl: matrixAvatar || hintAvatar || null,
   };
 }
 
 async function getSignalStatus(userId, { forceRefresh = false } = {}) {
-  const integration = await getSignalIntegration(userId);
+  // Fast-path: rapid polls (1.5s window) return cached. Keeps the UI snappy
+  // under 1.5–8s polling cadences.
+  if (!forceRefresh && userId) {
+    const cached = SIGNAL_STATUS_CACHE.get(userId);
+    if (cached && cached.expiresAt > nowTs()) {
+      return cached.value;
+    }
+  }
+
+  let integration = await getSignalIntegration(userId);
+  if (!integration) {
+    integration = await adoptConnectedSignalIntegration(userId);
+  }
   if (!integration) {
     return disconnectedSignalStatus();
   }
 
-  const fallbackConfig = buildConfigFromIntegration(integration);
+  let fallbackConfig = buildConfigFromIntegration(integration);
+
+  // ---- Real-time Provisioning-API login short-circuit (Beeper parity) ----
+  // While a provisioning login runner is active for this user we expose ITS
+  // live QR directly. signalmeow rotates the provisioning QR every ~46s with a
+  // brand-new keypair; the runner long-polls the bridge so the QR we serve is
+  // always the current, scannable one (sub-second lag) instead of a stale
+  // Matrix-room copy. When there is no active runner we fall through to the
+  // existing Matrix status path untouched.
+  if (fallbackConfig.mxid) {
+    const runner = resumeSignalProvisioningLogin(fallbackConfig);
+    if (runner) {
+      if (runner.phase === "qr" || runner.phase === "starting") {
+        const qrImageUrl =
+          runner.phase === "qr" && runner.qrData
+            ? await buildSignalQrDataUrl(runner.qrData).catch(() => null)
+            : null;
+        return {
+          connected: false,
+          loginState: qrImageUrl ? "pending_qr" : "logging_in",
+          lastError: "",
+          error: "",
+          qrImageUrl,
+          roomCount: 0,
+          unreadCount: 0,
+          profile: buildSignalStatusProfile({
+            matrixProfile: {},
+            whoami: {},
+            config: fallbackConfig,
+            bridgeLogin: null,
+          }),
+          connectedAt: null,
+        };
+      }
+      if (runner.phase === "error" || runner.phase === "timeout") {
+        provisioningLogin.stopLogin("signal", fallbackConfig.mxid);
+        const expiredMsg =
+          runner.error || "QR code expired. Please click Connect again.";
+        return {
+          connected: false,
+          loginState: "error",
+          lastError: expiredMsg,
+          error: expiredMsg,
+          qrImageUrl: null,
+          roomCount: 0,
+          unreadCount: 0,
+          profile: buildSignalStatusProfile({
+            matrixProfile: {},
+            whoami: {},
+            config: fallbackConfig,
+            bridgeLogin: null,
+          }),
+          connectedAt: null,
+        };
+      }
+      if (runner.phase === "connected") {
+        // Scan succeeded. Persist connected state, stop the runner, then fall
+        // through to the normal path which reads the bridge's user_login row.
+        provisioningLogin.stopLogin("signal", fallbackConfig.mxid);
+        SIGNAL_LOGIN_REQUESTED_AT.delete(userId);
+        SIGNAL_LOGIN_RESEND_AT.delete(userId);
+        await saveSignalIntegration(userId, {
+          loginState: "connected",
+          lastError: "",
+          connectedAt: fallbackConfig.connectedAt || new Date(),
+        }).catch(() => {});
+        fallbackConfig = buildConfigFromIntegration(
+          await getSignalIntegration(userId)
+        );
+      }
+    }
+  }
 
   try {
     const { config } = await ensureSignalAccess(userId, { forceLogin: false });
-    const whoami = await getWhoAmI(userId);
-    const profile = await getProfile(userId, whoami.user_id || config.mxid).catch(() => ({}));
+    // whoami + profile only needed for connected display — defer fetching
+    // them until we know we're connected so pending/QR responses are fast.
     const bridgeLogin = getSignalBridgeLogin(config);
     let managementRoomId = config.managementRoomId || "";
 
@@ -2461,13 +3281,67 @@ async function getSignalStatus(userId, { forceRefresh = false } = {}) {
     let connectedAt = fallbackConfig.connectedAt || null;
     let rooms = [];
     let connected = false;
-    const bridgeConnected = isSignalBridgeLoginActive(bridgeLogin);
+    // Source of truth: the bridge's own Provisioning whoami. The local SQLite
+    // copy is stale (the Signal bridge runs on Postgres now), so trust the
+    // bridge's live login state first and fall back to the legacy DB check.
+    const acctState = await provisioningLogin
+      .getBridgeAccountState("signal", config.mxid)
+      .catch(() => null);
+    const whoamiConnected = Boolean(acctState && acctState.connected);
+    const whoamiDead = hasDeadSignalProvisioningLogin(acctState);
+    const bridgeConnected =
+      whoamiConnected ||
+      (!whoamiDead && isSignalBridgeLoginActive(bridgeLogin));
+    if (whoamiDead && !whoamiConnected) {
+      loginState = "error";
+      lastError =
+        acctState?.login?.state?.message ||
+        acctState?.logins?.find((login) =>
+          ["BAD_CREDENTIALS", "LOGGED_OUT"].includes(
+            signalProvisioningLoginState(login)
+          )
+        )?.state?.message ||
+        "Signal is logged out. Reconnect Signal to generate a fresh QR.";
+    }
+
+    // Is the user mid-connect and still watching the QR screen?
+    const loginRequestedAt = Number(
+      SIGNAL_LOGIN_REQUESTED_AT.get(userId) || 0
+    );
+    const activeLoginWindow =
+      loginRequestedAt > 0 &&
+      nowTs() - loginRequestedAt < SIGNAL_LOGIN_ACTIVE_WINDOW_MS;
+    // The bridge reported a soft QR failure ("too many QR code refreshes" /
+    // timeout) rather than a real error. During an active connect we treat it
+    // as retryable: hold the UI in "logging_in" and silently re-issue `login`.
+    const retryableTimeout =
+      loginState === "error" &&
+      !bridgeConnected &&
+      activeLoginWindow &&
+      SIGNAL_RETRYABLE_LOGIN_RE.test(String(bridgeState.lastErrorText || ""));
+
+    if (retryableTimeout) {
+      loginState = "logging_in";
+      lastError = "";
+      const lastResend = Number(SIGNAL_LOGIN_RESEND_AT.get(userId) || 0);
+      if (nowTs() - lastResend > SIGNAL_LOGIN_RESEND_THROTTLE_MS) {
+        SIGNAL_LOGIN_RESEND_AT.set(userId, nowTs());
+        sendBridgeTextCommand(userId, "login").catch((err) => {
+          console.info(
+            "[Signal] auto QR refresh deferred:",
+            String(err?.message || err || "")
+          );
+        });
+      }
+    }
 
     if (
       bridgeConnected ||
       loginState === "connected" ||
       (fallbackConfig.connectedAt &&
-        !["pending_qr", "error"].includes(String(loginState || "")))
+        !["pending_qr", "logging_in", "error"].includes(
+          String(loginState || "")
+        ))
     ) {
       connected = true;
       loginState = "connected";
@@ -2476,8 +3350,17 @@ async function getSignalStatus(userId, { forceRefresh = false } = {}) {
       lastError = "";
     }
 
+    // Drop active-login bookkeeping once connected so we stop re-issuing QR.
+    if (connected) {
+      SIGNAL_LOGIN_REQUESTED_AT.delete(userId);
+      SIGNAL_LOGIN_RESEND_AT.delete(userId);
+    }
+
     const patch = {};
-    if (managementRoomId && managementRoomId !== fallbackConfig.managementRoomId) {
+    if (
+      managementRoomId &&
+      managementRoomId !== fallbackConfig.managementRoomId
+    ) {
       patch.managementRoomId = managementRoomId;
     }
     if (loginState !== fallbackConfig.loginState) {
@@ -2504,7 +3387,18 @@ async function getSignalStatus(userId, { forceRefresh = false } = {}) {
         ? await resolveQrImageUrl(userId, bridgeState)
         : null;
 
-    return {
+    // Only fetch profile info when actually connected (saves 2 API calls
+    // per status poll while pending/QR).
+    let whoami = {};
+    let profile = {};
+    if (connected) {
+      whoami = await getWhoAmI(userId).catch(() => ({}));
+      profile = await getProfile(userId, whoami.user_id || config.mxid).catch(
+        () => ({})
+      );
+    }
+
+    const result = {
       connected,
       loginState,
       lastError,
@@ -2520,20 +3414,37 @@ async function getSignalStatus(userId, { forceRefresh = false } = {}) {
         whoami,
         config,
         bridgeLogin,
+        selfProfileHint: (() => {
+          const selfRoom = rooms.find((room) => room && room.isSelf);
+          if (!selfRoom) return null;
+          return {
+            displayName: selfRoom.selfProfileName || "",
+            avatarUrl: selfRoom.avatarUrl || "",
+          };
+        })(),
       }),
       connectedAt: connectedAt ? new Date(connectedAt).toISOString() : null,
     };
+
+    if (userId) {
+      SIGNAL_STATUS_CACHE.set(userId, {
+        expiresAt: nowTs() + SIGNAL_STATUS_CACHE_TTL_MS,
+        value: result,
+      });
+    }
+    return result;
   } catch (err) {
-    const rateLimited = Boolean(err?.signalRateLimited) || isMatrixRateLimitedError(err);
+    const rateLimited =
+      Boolean(err?.signalRateLimited) || isMatrixRateLimitedError(err);
     const errorText = rateLimited
       ? formatSignalRateLimitMessage(err)
       : err.response?.data?.error || err.message || "Signal connection failed.";
     const nextLoginState = rateLimited
       ? "error"
       : fallbackConfig.loginState &&
-          !["connected", "disconnected"].includes(fallbackConfig.loginState)
-        ? fallbackConfig.loginState
-        : "error";
+        !["connected", "disconnected"].includes(fallbackConfig.loginState)
+      ? fallbackConfig.loginState
+      : "error";
 
     if (
       nextLoginState !== fallbackConfig.loginState ||
@@ -2555,12 +3466,113 @@ async function getSignalStatus(userId, { forceRefresh = false } = {}) {
   }
 }
 
+// A stable per-contact identity for a direct Signal room. The bridge can leave
+// behind a stale/abandoned portal room for the same contact (e.g. after a
+// re-link), so the same person can appear twice — one live room and one dead
+// room rendering "Attachment no longer available". We collapse those by phone /
+// signal id, falling back to the normalized display name for matrix-only rooms
+// that carry no explicit identifier. Group rooms are never collapsed (distinct
+// roomId), since different groups can legitimately share a name.
+function signalRoomIdentityKey(room = {}) {
+  if (!room) return "";
+  // The self-chat has exactly one logical identity no matter how many duplicate
+  // portal rooms the bridge left behind.
+  if (room.isSelf) return "self:note-to-self";
+
+  const phone = normalizePhoneNumber(
+    room.phoneNumber || room.signalIdentifier || ""
+  );
+  if (phone) return `phone:${phone}`;
+
+  const name = normalizeSearchValue(room.name || "");
+  // Genuine 1:1 chats collapse by display name.
+  if (room.isDirect && name) return `name:${name}`;
+
+  // For groups / ambiguous rooms, only collapse rooms that are byte-identical
+  // duplicates (same name + same last activity). This removes orphaned portal
+  // rooms from a re-link without ever merging two *distinct* group chats (e.g.
+  // "aaru verma" vs "aaru verma, Vikas Verma", which differ in last message).
+  if (name) {
+    return `dup:${name}|${room.lastMessageTs || 0}|${normalizeSearchValue(
+      room.lastMessage || ""
+    )}`;
+  }
+  return `room:${String(room.roomId || "")}`;
+}
+
+// "Note to Self" — Signal's own self-chat. The bridge names that portal exactly
+// "Note to Self"; flag it so the UI can render it distinctly (and so it is never
+// mistaken for a duplicate contact chat).
+function isSignalNoteToSelfRoom(room = {}) {
+  if (room?.isSelf) return true;
+  const name = String(room?.name || "")
+    .trim()
+    .toLowerCase();
+  return name === "note to self" || name.includes("note to self");
+}
+
+// Pick the "better" of two rooms that resolve to the same contact identity.
+// Prefer the one with the most recent real activity; break ties toward a room
+// that actually has message content / unread badges and isn't a placeholder.
+function pickBetterSignalRoom(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  const tsA = Number(a.lastMessageTs || 0);
+  const tsB = Number(b.lastMessageTs || 0);
+  if (tsA !== tsB) return tsA > tsB ? a : b;
+
+  const contentA = a.lastMessage ? 1 : 0;
+  const contentB = b.lastMessage ? 1 : 0;
+  if (contentA !== contentB) return contentA > contentB ? a : b;
+
+  const placeholderA = a.isPlaceholder ? 1 : 0;
+  const placeholderB = b.isPlaceholder ? 1 : 0;
+  if (placeholderA !== placeholderB) return placeholderA < placeholderB ? a : b;
+
+  const unreadA = Number(a.unreadCount || 0);
+  const unreadB = Number(b.unreadCount || 0);
+  if (unreadA !== unreadB) return unreadA > unreadB ? a : b;
+
+  return a;
+}
+
+function dedupeSignalRooms(rooms = []) {
+  const byIdentity = new Map();
+  for (const room of rooms) {
+    if (!room) continue;
+    const key = signalRoomIdentityKey(room);
+    const existing = byIdentity.get(key);
+    byIdentity.set(key, existing ? pickBetterSignalRoom(existing, room) : room);
+  }
+  return [...byIdentity.values()];
+}
+
 async function listSignalRooms(userId, { search = "", limit = 80 } = {}) {
   const { config } = await ensureSignalAccess(userId, { forceLogin: false });
+
+  // Beeper-parity: the Signal bridge (on Postgres) creates a portal room per
+  // chat and *invites* our user puppet. Until we accept those invites, the
+  // rooms sit in /sync `rooms.invite` and never appear in the chat list
+  // (this was the "Syncing your Signal chats…" hang). Auto-accept them, but
+  // only when the bridge reports a healthy login so we don't join orphan
+  // invites from a stale/old session.
+  try {
+    const acctState = await provisioningLogin
+      .getBridgeAccountState("signal", config.mxid)
+      .catch(() => null);
+    if (acctState && acctState.connected) {
+      await ensureSignalPortalRoomsJoined(userId, { config });
+    }
+  } catch {
+    // best-effort: never let auto-join failures break the chat list
+  }
+
   const bridgeLogin = getSignalBridgeLogin(config);
   const bridgePortals = getSignalBridgePortals(config);
   const knownPortalRoomIds = new Set(
-    bridgePortals.map((portal) => String(portal.roomId || "").trim()).filter(Boolean)
+    bridgePortals
+      .map((portal) => String(portal.roomId || "").trim())
+      .filter(Boolean)
   );
 
   const matrixRooms = await listMatrixSignalRooms(userId, {
@@ -2597,7 +3609,11 @@ async function listSignalRooms(userId, { search = "", limit = 80 } = {}) {
         );
       }
 
-      return applySignalPortalReadState(userId, buildSignalPortalRoom(portal), portal);
+      return applySignalPortalReadState(
+        userId,
+        buildSignalPortalRoom(portal),
+        portal
+      );
     })
   );
 
@@ -2608,7 +3624,9 @@ async function listSignalRooms(userId, { search = "", limit = 80 } = {}) {
   const portalIdentifiers = new Set(
     bridgePortals
       .map((portal) =>
-        normalizePhoneNumber(portal.e164Number || portal.otherUserId || portal.name || "")
+        normalizePhoneNumber(
+          portal.e164Number || portal.otherUserId || portal.name || ""
+        )
       )
       .filter(Boolean)
   );
@@ -2630,7 +3648,14 @@ async function listSignalRooms(userId, { search = "", limit = 80 } = {}) {
   });
 
   const query = normalizeSearchValue(search);
-  return [...roomsById.values()]
+  // Tag the self-chat before de-duping so identity collapse never folds it into
+  // a contact chat, and the UI can style it.
+  const taggedRooms = [...roomsById.values()].map((room) =>
+    room && isSignalNoteToSelfRoom(room) && !room.isSelf
+      ? { ...room, isSelf: true }
+      : room
+  );
+  return dedupeSignalRooms(taggedRooms)
     .filter((room) => {
       if (!query) return true;
       return normalizeSearchValue(
@@ -2662,7 +3687,8 @@ function findSignalRoomByContact(matrixRooms = [], contact = {}) {
       const roomLastSender = normalizeSearchValue(room.lastSender || "");
       const roomNamePhone = normalizePhoneNumber(room.name || "");
       return (
-        (targetName && (roomName === targetName || roomLastSender === targetName)) ||
+        (targetName &&
+          (roomName === targetName || roomLastSender === targetName)) ||
         (targetPhone && roomNamePhone === targetPhone)
       );
     }) || null
@@ -2700,9 +3726,13 @@ async function waitForSignalContactRoom(
       managementMatch?.text || managementMatch?.previewText || ""
     );
     if (managementRoomId) {
-      const descriptor = await fetchRoomDescriptorById(userId, managementRoomId, {
-        timelineLimit: 40,
-      }).catch(() => null);
+      const descriptor = await fetchRoomDescriptorById(
+        userId,
+        managementRoomId,
+        {
+          timelineLimit: 40,
+        }
+      ).catch(() => null);
       if (descriptor?.room?.roomId) {
         return applySignalContactFallbackToRoom(descriptor.room, source);
       }
@@ -2751,7 +3781,10 @@ async function resolveSignalRoomReference(
   const contactRef = parseSignalContactRoomId(normalizedRoomId);
   const { config } = await ensureSignalAccess(userId, { forceLogin: false });
   const bridgeLogin = getSignalBridgeLogin(config);
-  const contact = findSignalContactByIdentifier(bridgeLogin, contactRef?.identifier || "");
+  const contact = findSignalContactByIdentifier(
+    bridgeLogin,
+    contactRef?.identifier || ""
+  );
 
   if (!contact) {
     return {
@@ -2790,8 +3823,12 @@ async function resolveSignalRoomReference(
     };
   }
 
-  await sendBridgeTextCommand(userId, `start-chat ${contact.identifier}`).catch(() => null);
-  const createdRoom = await waitForSignalContactRoom(userId, contact).catch(() => null);
+  await sendBridgeTextCommand(userId, `start-chat ${contact.identifier}`).catch(
+    () => null
+  );
+  const createdRoom = await waitForSignalContactRoom(userId, contact).catch(
+    () => null
+  );
   if (createdRoom?.roomId) {
     return {
       roomId: createdRoom.roomId,
@@ -2877,7 +3914,11 @@ async function getSignalRoomTimeline(userId, roomId, { limit = 50 } = {}) {
   };
 }
 
-async function getSignalRoomHistory(userId, roomId, { from = "", limit = 50 } = {}) {
+async function getSignalRoomHistory(
+  userId,
+  roomId,
+  { from = "", limit = 50 } = {}
+) {
   const resolved = await resolveSignalRoomReference(userId, roomId, {
     createIfMissing: false,
   });
@@ -2947,7 +3988,12 @@ async function getSignalRoomHistory(userId, roomId, { from = "", limit = 50 } = 
   };
 }
 
-async function sendSignalMessage(userId, roomId, text, { replyToEventId = null } = {}) {
+async function sendSignalMessage(
+  userId,
+  roomId,
+  text,
+  { replyToEventId = null } = {}
+) {
   const resolved = await resolveSignalRoomReference(userId, roomId, {
     createIfMissing: true,
   });
@@ -2975,11 +4021,17 @@ async function sendSignalMessage(userId, roomId, text, { replyToEventId = null }
   const response = await matrixRequestWithRefresh(
     userId,
     "PUT",
-    `/_matrix/client/v3/rooms/${encodeURIComponent(resolved.roomId)}/send/m.room.message/${buildTxnId(
-      "signal-text"
-    )}`,
+    `/_matrix/client/v3/rooms/${encodeURIComponent(
+      resolved.roomId
+    )}/send/m.room.message/${buildTxnId("signal-text")}`,
     { data: content }
   );
+
+  // Sending a message implies you've read the conversation. Advance the local
+  // read marker so the synthetic unread fallback in applySignalPortalReadState
+  // doesn't resurrect the prior inbound message as "unread" right after you
+  // send (before the bridge echoes your own message back into the timeline).
+  setSignalPortalReadMarker(userId, resolved.roomId, nowTs());
 
   invalidateSignalCache(userId);
   return {
@@ -3008,7 +4060,8 @@ async function uploadSignalMedia(
   if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) {
     throw new Error("File content is required.");
   }
-  const normalizedName = String(fileName || "attachment").trim() || "attachment";
+  const normalizedName =
+    String(fileName || "attachment").trim() || "attachment";
   const normalizedMime = String(mimeType || "application/octet-stream").trim();
 
   const uploadResponse = await matrixRequestWithRefresh(
@@ -3053,9 +4106,9 @@ async function uploadSignalMedia(
   const sendResponse = await matrixRequestWithRefresh(
     userId,
     "PUT",
-    `/_matrix/client/v3/rooms/${encodeURIComponent(resolved.roomId)}/send/m.room.message/${buildTxnId(
-      "signal-media"
-    )}`,
+    `/_matrix/client/v3/rooms/${encodeURIComponent(
+      resolved.roomId
+    )}/send/m.room.message/${buildTxnId("signal-media")}`,
     { data: content, timeout: 60_000 }
   );
 
@@ -3071,6 +4124,10 @@ async function uploadSignalMedia(
     );
     captionEventId = captionResult.eventId || null;
   }
+
+  // Sending implies reading — advance the read marker so our own upload doesn't
+  // surface as a synthetic unread on the next room fetch.
+  setSignalPortalReadMarker(userId, resolved.roomId, nowTs());
 
   invalidateSignalCache(userId);
   return {
@@ -3108,9 +4165,9 @@ async function editSignalMessage(userId, roomId, targetEventId, text) {
   const response = await matrixRequestWithRefresh(
     userId,
     "PUT",
-    `/_matrix/client/v3/rooms/${encodeURIComponent(resolved.roomId)}/send/m.room.message/${buildTxnId(
-      "signal-edit"
-    )}`,
+    `/_matrix/client/v3/rooms/${encodeURIComponent(
+      resolved.roomId
+    )}/send/m.room.message/${buildTxnId("signal-edit")}`,
     { data: content }
   );
 
@@ -3133,9 +4190,11 @@ async function deleteSignalMessage(userId, roomId, targetEventId) {
   const response = await matrixRequestWithRefresh(
     userId,
     "PUT",
-    `/_matrix/client/v3/rooms/${encodeURIComponent(resolved.roomId)}/redact/${encodeURIComponent(
-      targetEventId
-    )}/${buildTxnId("signal-redact")}`,
+    `/_matrix/client/v3/rooms/${encodeURIComponent(
+      resolved.roomId
+    )}/redact/${encodeURIComponent(targetEventId)}/${buildTxnId(
+      "signal-redact"
+    )}`,
     { data: { reason: "Deleted from OrionAI Signal" } }
   );
 
@@ -3147,8 +4206,12 @@ async function deleteSignalMessage(userId, roomId, targetEventId) {
 }
 
 async function findOwnReactionEvent(userId, roomId, targetEventId, key) {
-  const { messages } = await getSignalRoomTimeline(userId, roomId, { limit: 120 });
-  const target = messages.find((message) => message.id === String(targetEventId));
+  const { messages } = await getSignalRoomTimeline(userId, roomId, {
+    limit: 120,
+  });
+  const target = messages.find(
+    (message) => message.id === String(targetEventId)
+  );
   const match = target?.reactions?.find(
     (reaction) => reaction.key === String(key || "").trim() && reaction.byMe
   );
@@ -3179,9 +4242,9 @@ async function toggleSignalReaction(userId, roomId, targetEventId, key) {
   const response = await matrixRequestWithRefresh(
     userId,
     "PUT",
-    `/_matrix/client/v3/rooms/${encodeURIComponent(resolved.roomId)}/send/m.reaction/${buildTxnId(
-      "signal-reaction"
-    )}`,
+    `/_matrix/client/v3/rooms/${encodeURIComponent(
+      resolved.roomId
+    )}/send/m.reaction/${buildTxnId("signal-reaction")}`,
     {
       data: {
         "m.relates_to": {
@@ -3209,9 +4272,12 @@ async function markSignalRoomAsRead(userId, roomId, eventId = "") {
   let targetEventId = String(eventId || "").trim();
   let targetTimestamp = 0;
   if (!targetEventId) {
-    const timeline = await getSignalRoomTimeline(userId, resolved.roomId, { limit: 30 });
+    const timeline = await getSignalRoomTimeline(userId, resolved.roomId, {
+      limit: 30,
+    });
     const latestMessage =
-      [...(timeline.messages || [])].reverse().find((message) => message?.id) || null;
+      [...(timeline.messages || [])].reverse().find((message) => message?.id) ||
+      null;
     targetEventId = latestMessage?.id || "";
     targetTimestamp = normalizeTimestampMs(latestMessage?.timestamp || 0);
   }
@@ -3220,9 +4286,9 @@ async function markSignalRoomAsRead(userId, roomId, eventId = "") {
   await matrixRequestWithRefresh(
     userId,
     "POST",
-    `/_matrix/client/v3/rooms/${encodeURIComponent(resolved.roomId)}/receipt/m.read/${encodeURIComponent(
-      targetEventId
-    )}`,
+    `/_matrix/client/v3/rooms/${encodeURIComponent(
+      resolved.roomId
+    )}/receipt/m.read/${encodeURIComponent(targetEventId)}`,
     { data: {} }
   );
 
@@ -3282,8 +4348,7 @@ async function fetchSignalMedia(userId, mxc, { thumbnail = false } = {}) {
 
   return {
     body: Buffer.from(response.data),
-    contentType:
-      response.headers["content-type"] || "application/octet-stream",
+    contentType: response.headers["content-type"] || "application/octet-stream",
     contentDisposition: response.headers["content-disposition"] || "",
   };
 }
@@ -3321,7 +4386,9 @@ async function getSignalUnreadSignal(userId) {
     rooms: unreadRooms,
     summary:
       count > 0
-        ? `${unreadRooms.length} Signal chat${unreadRooms.length === 1 ? "" : "s"} waiting`
+        ? `${unreadRooms.length} Signal chat${
+            unreadRooms.length === 1 ? "" : "s"
+          } waiting`
         : null,
   };
 }
@@ -3350,6 +4417,9 @@ module.exports = {
   toggleSignalReaction,
   markSignalRoomAsRead,
   sendBridgeCommand,
+  getSignalBridgeLogin,
+  purgeSignalBridgeLogin,
+  findSignalLoginIdFromBridgeBotMessages,
   fetchSignalMedia,
   getSignalUnreadSignal,
   getWhoAmI,
@@ -3357,7 +4427,9 @@ module.exports = {
   findManagementRoom,
   ensureManagementRoom,
   fetchSyncSnapshot,
+  waitForSignalActivity,
   invalidateSignalCache,
+  invalidateSignalCacheForReconnect,
   __test: {
     stripReplyFallback,
     resolveMessageText,
@@ -3375,5 +4447,8 @@ module.exports = {
     isBridgeBotMessage,
     extractBridgeRoomState,
     buildSignalQrDataUrl,
+    hasDeadSignalProvisioningLogin,
+    shouldResumeSignalProvisioningLogin,
+    resumeSignalProvisioningLogin,
   },
 };

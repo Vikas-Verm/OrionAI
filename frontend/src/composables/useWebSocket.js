@@ -223,6 +223,7 @@ let pingInterval = null;
 let unreadSyncTimer = null;
 let isStarted = false;
 let activeUserKey = null;
+let activeToken = null;
 let refreshListenerAttached = false;
 const pendingCbs = new Map();
 
@@ -757,14 +758,18 @@ export function useWebSocket() {
       return;
     }
 
-    if (activeUserKey && activeUserKey !== currentUser) {
+    if (
+      activeUserKey &&
+      (activeUserKey !== currentUser || (activeToken && activeToken !== token))
+    ) {
       stop();
     }
 
-    if (isStarted && activeUserKey === currentUser) return;
+    if (isStarted && activeUserKey === currentUser && activeToken === token) return;
 
     isStarted = true;
     activeUserKey = currentUser;
+    activeToken = token;
     resetState();
 
     const restored = restorePersistedState(currentUser);
@@ -818,6 +823,7 @@ export function useWebSocket() {
   function stop() {
     isStarted = false;
     activeUserKey = null;
+    activeToken = null;
     clearInterval(pingInterval);
     clearInterval(unreadSyncTimer);
     clearTimeout(reconnectTimer);

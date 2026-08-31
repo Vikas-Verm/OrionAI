@@ -35,6 +35,18 @@ temp/
 
 backend/data/gmail_cache/*.db
 *.db
+
+# Matrix and bridge runtime state
+infra/synapse/*.db-shm
+infra/synapse/*.db-wal
+infra/mautrix-signal/*.db-shm
+infra/mautrix-signal/*.db-wal
+infra/mautrix-whatsapp/*.db-shm
+infra/mautrix-whatsapp/*.db-wal
+infra/synapse/media_store/
+backend/.wwebjs_auth/**/*db-shm
+backend/.wwebjs_auth/**/*db-wal
+
 # Added by code-review-graph
 .code-review-graph/
 .claude/
