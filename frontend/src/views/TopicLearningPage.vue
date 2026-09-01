@@ -354,6 +354,14 @@
               </div>
 
               <div v-if="q._uiRevealed" class="tl-q-reveal">
+                <div
+                  v-if="practiceFeedbackFor(q)"
+                  class="tl-q-feedback"
+                  :data-verdict="practiceVerdictFor(q)"
+                >
+                  <strong>{{ practiceFeedbackTitle(q) }}</strong>
+                  <p>{{ practiceFeedbackFor(q) }}</p>
+                </div>
                 <p v-if="q.correctAnswer">
                   <strong>Correct answer:</strong> {{ q.correctAnswer }}
                 </p>
@@ -756,7 +764,33 @@ function decorateQuestion(q) {
     ...q,
     _uiAnswer: q.userAnswer || '',
     _uiRevealed: false,
+    _uiFeedback: null,
   }
+}
+function practiceVerdictFor(q) {
+  return q?._uiFeedback?.grading?.verdict || q?.grading?.verdict || ''
+}
+function practiceFeedbackTitle(q) {
+  const verdict = practiceVerdictFor(q)
+  if (verdict === 'correct') return 'Correct'
+  if (verdict === 'partially_correct') return 'Almost there'
+  if (verdict === 'incorrect') return 'Needs improvement'
+  if (verdict === 'needs_review') return 'Couldn’t confidently grade this answer'
+  if (q?.answeredCorrectly === true) return 'Correct'
+  if (q?.answeredCorrectly === false) return 'Needs improvement'
+  return 'Couldn’t confidently grade this answer'
+}
+function practiceFeedbackFor(q) {
+  const direct = q?._uiFeedback?.grading?.feedback || q?._uiFeedback?.message
+  const saved = q?.grading?.feedback
+  if (direct) return direct
+  if (saved) return saved
+  const verdict = practiceVerdictFor(q)
+  if (verdict === 'correct') return 'You captured the main idea.'
+  if (verdict === 'partially_correct') return 'You have part of it. Review the missing point and try again.'
+  if (verdict === 'incorrect') return 'Review the explanation and try once more.'
+  if (verdict === 'needs_review') return 'This answer needs a human or AI review before it is scored.'
+  return ''
 }
 function decorateFlashcard(card) {
   return { ...card, _uiFlipped: false }
@@ -1029,7 +1063,10 @@ async function revealAnswer(q) {
           answeredCorrectly: isCorrect,
         })
     if (data?.question) {
-      Object.assign(q, decorateQuestion(data.question), { _uiRevealed: true })
+      Object.assign(q, decorateQuestion(data.question), {
+        _uiRevealed: true,
+        _uiFeedback: data.feedback || null,
+      })
     } else {
       q.userAnswer = q._uiAnswer
       q.answeredCorrectly = isCorrect
@@ -1742,6 +1779,31 @@ onMounted(loadTopicLearning)
   color: var(--text-secondary);
 }
 .tl-q-reveal p:last-child { margin-bottom: 0; }
+.tl-q-feedback {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(79, 140, 255, 0.18);
+  background: rgba(79, 140, 255, 0.1);
+}
+.tl-q-feedback[data-verdict="correct"] {
+  border-color: rgba(47, 211, 157, 0.42);
+  background: rgba(47, 211, 157, 0.12);
+}
+.tl-q-feedback[data-verdict="partially_correct"] {
+  border-color: rgba(255, 199, 112, 0.42);
+  background: rgba(255, 199, 112, 0.12);
+}
+.tl-q-feedback[data-verdict="incorrect"] {
+  border-color: rgba(255, 107, 127, 0.42);
+  background: rgba(255, 107, 127, 0.12);
+}
+.tl-q-feedback strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: var(--text-primary);
+}
 
 /* Flashcards */
 .tl-flash-grid {

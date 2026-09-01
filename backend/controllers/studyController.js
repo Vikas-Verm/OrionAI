@@ -39,6 +39,7 @@ const {
   materialPublic,
 } = require("../services/studyMaterialService");
 const preTopicReviewService = require("../services/preTopicReviewService");
+const { gradePracticeAnswer } = require("../services/studyPracticeService");
 
 function getUserId(req) {
   return req.user?.username || req.user?.userId || "";
@@ -1566,11 +1567,24 @@ async function checkPracticeQuestion(req, res) {
     const question = await PracticeQuestion.findOne({ _id: id, userId });
     if (!question) return res.status(404).json({ error: "Question not found" });
 
-    const expected = String(question.correctAnswer || "").trim().toLowerCase();
-    const actual = userAnswer.toLowerCase();
-    const answeredCorrectly = expected ? actual === expected : null;
+    const [topic, goal] = await Promise.all([
+      StudyTopic.findOne({ _id: question.topicId, userId }).select(
+        "title subject category difficulty"
+      ),
+      StudyGoal.findOne({ _id: question.goalId, userId }).select(
+        "title purpose level preferredLearningStyle"
+      ),
+    ]);
+    const grade = await gradePracticeAnswer({
+      question,
+      userAnswer,
+      goal,
+      topic,
+    });
+    const answeredCorrectly = grade.answeredCorrectly;
     question.userAnswer = userAnswer.slice(0, 1000);
     question.answeredCorrectly = answeredCorrectly;
+    question.grading = grade.grading;
     await question.save();
 
     await recordStudyActivity({
@@ -1581,17 +1595,21 @@ async function checkPracticeQuestion(req, res) {
       activityKey: `question-check:${question._id}:${userAnswer.toLowerCase().slice(0, 120)}`,
     });
 
-    if (answeredCorrectly === false) {
+    if (grade.shouldCreateWeakMemory) {
+      const memoryPrefix =
+        grade.grading?.verdict === "partially_correct"
+          ? "Partially correct practice answer"
+          : "Missed practice question";
       await StudyMemory.create({
         userId,
         goalId: question.goalId,
         topicId: question.topicId,
         memoryType: "weak_area",
-        content: `Missed practice question: ${question.question.slice(0, 180)}`,
+        content: `${memoryPrefix}: ${question.question.slice(0, 180)}`,
         sourceType: "practice",
         sourceRef: String(question._id),
         importance: 2,
-        confidence: 0.5,
+        confidence: grade.grading?.confidence ?? 0.5,
         userApproved: false,
       });
     }
@@ -1600,12 +1618,15 @@ async function checkPracticeQuestion(req, res) {
       question,
       feedback: {
         answeredCorrectly,
+        grading: grade.grading,
         explanation: question.explanation || "",
         correctAnswer: question.correctAnswer || "",
         message:
-          answeredCorrectly === null
-            ? "Saved your answer. This answer type needs human or AI review."
-            : answeredCorrectly
+          grade.grading?.verdict === "needs_review"
+            ? "Couldn’t confidently grade this answer."
+            : grade.grading?.verdict === "partially_correct"
+              ? "Almost there."
+              : answeredCorrectly
               ? "Correct."
               : "Not quite. Review the explanation and try again.",
       },

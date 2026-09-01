@@ -173,3 +173,123 @@ flow, test it before final changes, and keep this handoff file updated.
 - A live persisted Signal `logging_in` record progressed to `pending_qr` with
   a QR image; the probe was cancelled without linking an account.
 - Existing WhatsApp bridge session remained connected during the Signal probe.
+
+## Study & Learning Inspection/Fix Prompt: 2026-09-01
+
+User requested that the current Study & Learning implementation be inspected
+and tested before changing anything, without rebuilding working features. The
+requested manual test path covered Add Study Goal, Add Topic manually, Suggest
+Topics, Generate Today’s Plan, Start Studying, Topic Learning Page, lesson
+generation, Practice, Flashcards, Doubt Chat, Notes, Revision, refresh and
+persistence.
+
+Priority order requested:
+
+1. Fix current bugs/regressions.
+2. File uploads + Study Materials.
+3. Material processing and grounded material Q&A.
+4. Study Memory.
+5. Your Consistency graph.
+6. Previous-topic quick review before a new topic.
+7. Revision/weak-area integration.
+8. Progress analytics.
+9. Workspace Briefing integration.
+10. Full tests and regression tests.
+
+Implementation rule: complete each missing/broken feature end-to-end through
+UI, API, database, persistence, validation, error handling, and tests. Final
+response must include what already existed, what was broken, what changed,
+files changed, tests before, tests after, manual test results, and remaining
+limitations.
+
+Files updated for this prompt:
+
+- `backend/controllers/studyController.js`
+- `backend/services/studyPracticeService.js`
+- `backend/tests/studyPracticeService.test.js`
+- `prompt.md`
+
+Fix applied:
+
+- Practice answer checking now distinguishes objective answer types from
+  subjective/free-form learning work. MCQ, true/false, and fill-blank answers
+  still get normalized exact scoring. Concept, short-answer, scenario,
+  practical, problem-solving, coding, and other free-form answers are saved as
+  needing review unless they exactly match the answer key, preventing false
+  weak-area memory and fake low practice accuracy from thoughtful explanations.
+
+## Study & Learning Stabilization Prompt: 2026-09-01
+
+User requested one final stabilization pass for Study & Learning changes, with
+no new large features. Requested scope:
+
+1. Clean accidental test-upload artifacts, verify upload ignore rules, preserve
+   real local user files, and check git status.
+2. Verify whether the 22 backend full-suite failures are pre-existing or
+   related to Study changes, without fixing unrelated modules.
+3. Improve subjective practice grading using the existing OrionAI AI
+   infrastructure, while keeping objective answers deterministic.
+4. Add mocked tests for objective grading, semantic equivalent answers,
+   partial answers, wrong conceptual answers, low confidence fallback, AI
+   failure fallback, spelling tolerance, false weak-memory prevention, and
+   cross-user grading protection.
+5. Add the smallest project-level Node version declaration if missing.
+6. Run Study backend tests, relevant Practice tests, frontend build, full
+   backend suite, git status, git diff, and manually verify subjective grading
+   in the UI.
+
+Files updated for this prompt:
+
+- `.gitignore`
+- `.nvmrc`
+- `backend/models/PracticeQuestion.js`
+- `backend/services/studyAIService.js`
+- `backend/services/studyPracticeService.js`
+- `backend/controllers/studyController.js`
+- `backend/tests/studyPracticeService.test.js`
+- `frontend/src/views/TopicLearningPage.vue`
+- `prompt.md`
+
+Fixes applied:
+
+- Future Study material runtime uploads are ignored by Git.
+- Added root `.nvmrc` with Node `20.19.0`, matching the existing frontend
+  engine and README requirement.
+- Subjective/free-form practice answers are now graded semantically through the
+  existing `chatComplete` OrionAI path, with structured verdict, confidence,
+  feedback, missing points, and strong points persisted on each practice
+  question.
+- Objective answers remain deterministic.
+- Low-confidence or failed AI grading falls back to `needs_review`.
+- Weak-area memory is created only for confident incorrect or confident partial
+  answers, and one missed answer does not mark the topic weak.
+- Practice UI shows simple labels: Correct, Almost there, Needs improvement,
+  or Couldn’t confidently grade this answer.
+
+## Study & Learning Branch Finish Prompt: 2026-09-01
+
+User confirmed the current Study & Learning milestone is complete and asked to
+cleanly finish this branch before starting another feature.
+
+Requested actions:
+
+1. Verify final Study diff with `git status` and `git diff`.
+2. Ensure the Study commit includes only `.gitignore`, `.nvmrc`,
+   `backend/controllers/studyController.js`,
+   `backend/models/PracticeQuestion.js`,
+   `backend/services/studyAIService.js`,
+   `backend/services/studyPracticeService.js`,
+   `backend/tests/studyPracticeService.test.js`,
+   `frontend/src/views/TopicLearningPage.vue`, and `prompt.md`.
+3. Do not include unrelated local changes in
+   `frontend/src/components/landing/LandingBrand.vue` or
+   `frontend/src/components/landing/OrionEcosystemVisual.vue`; leave them
+   unstaged.
+4. Rerun Study tests, Practice tests, and frontend build.
+5. Create one focused commit named
+   `feat(study): complete learning intelligence and subjective practice grading`.
+6. Do not push and do not start another implementation.
+
+Files updated for this prompt:
+
+- `prompt.md`

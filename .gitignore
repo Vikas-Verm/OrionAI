@@ -36,6 +36,10 @@ temp/
 backend/data/gmail_cache/*.db
 *.db
 
+# Study & Learning runtime uploads
+backend/uploads/study-materials/*
+!backend/uploads/study-materials/.gitkeep
+
 # Matrix and bridge runtime state
 infra/synapse/*.db-shm
 infra/synapse/*.db-wal
