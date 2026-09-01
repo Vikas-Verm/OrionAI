@@ -16,6 +16,13 @@ const TYPE_VALUES = [
 ];
 const DIFFICULTY_VALUES = ["easy", "medium", "hard"];
 const SOURCE_VALUES = ["generated", "material"];
+const GRADING_VERDICT_VALUES = [
+  "correct",
+  "partially_correct",
+  "incorrect",
+  "needs_review",
+];
+const GRADING_SOURCE_VALUES = ["deterministic", "orionai", "fallback"];
 
 const practiceQuestionSchema = new mongoose.Schema(
   {
@@ -48,6 +55,24 @@ const practiceQuestionSchema = new mongoose.Schema(
     userAnswer: { type: String, default: "" },
     userMarkedWeak: { type: Boolean, default: false },
     answeredCorrectly: { type: Boolean, default: null },
+    grading: {
+      verdict: {
+        type: String,
+        enum: GRADING_VERDICT_VALUES,
+        default: "needs_review",
+      },
+      confidence: { type: Number, default: null, min: 0, max: 1 },
+      feedback: { type: String, default: "" },
+      missingPoints: [{ type: String }],
+      strongPoints: [{ type: String }],
+      gradedBy: {
+        type: String,
+        enum: GRADING_SOURCE_VALUES,
+        default: "fallback",
+      },
+      gradedAt: { type: Date, default: null },
+      error: { type: String, default: "" },
+    },
   },
   { timestamps: true }
 );
@@ -61,5 +86,7 @@ const PracticeQuestion =
 PracticeQuestion.TYPE_VALUES = TYPE_VALUES;
 PracticeQuestion.DIFFICULTY_VALUES = DIFFICULTY_VALUES;
 PracticeQuestion.SOURCE_VALUES = SOURCE_VALUES;
+PracticeQuestion.GRADING_VERDICT_VALUES = GRADING_VERDICT_VALUES;
+PracticeQuestion.GRADING_SOURCE_VALUES = GRADING_SOURCE_VALUES;
 
 module.exports = PracticeQuestion;

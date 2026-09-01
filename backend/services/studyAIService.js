@@ -59,6 +59,13 @@ function asTermArray(value, max = 10) {
     .slice(0, max);
 }
 
+const PRACTICE_GRADE_VERDICTS = [
+  "correct",
+  "partially_correct",
+  "incorrect",
+  "needs_review",
+];
+
 function describeGoalContext({ goal, topic, level } = {}) {
   const lines = [];
   if (topic?.title) lines.push(`Topic: ${topic.title}`);
@@ -81,6 +88,41 @@ function describeGoalContext({ goal, topic, level } = {}) {
     lines.push(`Preferred learning style: ${goal.preferredLearningStyle}`);
   }
   return lines.join("\n");
+}
+
+function normalizeConfidence(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  if (num > 1 && num <= 100) return Math.max(0, Math.min(1, num / 100));
+  return Math.max(0, Math.min(1, num));
+}
+
+function normalizePracticeGrade(raw) {
+  const parsed =
+    typeof raw === "string" || Buffer.isBuffer(raw) ? extractJson(String(raw)) : raw;
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("Invalid practice grade");
+  }
+
+  const verdictRaw =
+    typeof parsed.verdict === "string"
+      ? parsed.verdict.trim().toLowerCase()
+      : "needs_review";
+  const verdict = PRACTICE_GRADE_VERDICTS.includes(verdictRaw)
+    ? verdictRaw
+    : "needs_review";
+  return {
+    verdict,
+    confidence: normalizeConfidence(parsed.confidence),
+    feedback:
+      typeof parsed.feedback === "string" ? parsed.feedback.trim().slice(0, 900) : "",
+    missingPoints: asStringArray(parsed.missingPoints, { max: 6 }).map((item) =>
+      item.slice(0, 220)
+    ),
+    strongPoints: asStringArray(parsed.strongPoints, { max: 6 }).map((item) =>
+      item.slice(0, 220)
+    ),
+  };
 }
 
 // ── Topic suggestions ────────────────────────────────────────────────────
@@ -438,6 +480,58 @@ function normalizeQuestion(entry) {
   };
 }
 
+async function gradeSubjectivePracticeAnswer({
+  goal,
+  topic,
+  question,
+  userAnswer,
+} = {}) {
+  if (!question?.question) throw new Error("question required");
+  if (!userAnswer) throw new Error("answer required");
+  const context = describeGoalContext({ goal, topic });
+  const userPrompt = [
+    "Grade this learner's free-form practice answer semantically.",
+    "Use the expected answer and explanation as grading guidance, not as exact text.",
+    "Do not require identical wording. Do not punish spelling or grammar when the concept is correct.",
+    "For language-learning goals, grammar should matter only when grammar is actually being tested.",
+    "",
+    context,
+    "",
+    `Question type: ${question.type || "concept"}`,
+    `Question: ${question.question}`,
+    `Expected answer guidance: ${question.correctAnswer || ""}`,
+    `Explanation guidance: ${question.explanation || ""}`,
+    `Learner answer: ${String(userAnswer).slice(0, 1200)}`,
+    "",
+    "Return JSON with this exact shape:",
+    `{
+      "verdict": "correct | partially_correct | incorrect | needs_review",
+      "confidence": 0.0,
+      "feedback": "one or two short learner-facing sentences",
+      "missingPoints": ["short missing concept", "..."],
+      "strongPoints": ["short correct concept", "..."]
+    }`,
+    "",
+    "Rules:",
+    "- correct: captures the essential concept, even with different wording.",
+    "- partially_correct: contains a useful correct idea but misses an important condition, step, or nuance.",
+    "- incorrect: contradicts the concept or answers a different question.",
+    "- needs_review: the answer is ambiguous, too short to judge, or grading would be low confidence.",
+    "- Confidence must be 0.0 to 1.0.",
+    "- Keep feedback plain text; no markdown and no raw JSON inside strings.",
+  ].join("\n");
+
+  const raw = await chatComplete(
+    [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: userPrompt },
+    ],
+    900,
+    0.1
+  );
+  return normalizePracticeGrade(raw);
+}
+
 // ── Flashcards ───────────────────────────────────────────────────────────
 async function generateFlashcards({ goal, topic, lesson, count = 8 }) {
   if (!topic?.title) throw new Error("Topic title required");
@@ -650,6 +744,7 @@ module.exports = {
   suggestTopicsForGoal,
   generateLessonForTopic,
   generatePracticeQuestions,
+  gradeSubjectivePracticeAnswer,
   generateFlashcards,
   answerTopicDoubt,
   normalizeTitleKey,
@@ -658,6 +753,7 @@ module.exports = {
     extractJson,
     normalizeSuggestedTopic,
     normalizeQuestion,
+    normalizePracticeGrade,
     normalizeFlashcard,
     normalizeTitleKey,
     normalizeDoubtReply,
