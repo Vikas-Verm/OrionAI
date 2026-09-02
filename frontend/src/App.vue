@@ -97,6 +97,10 @@
           @open-topic="openStudyTopic"
           @back="closeStudyHub"
         />
+        <CareerInterviewsPage
+          v-else-if="activeModule === 'career'"
+          @close="closeCareerHub"
+        />
 
         <!-- ── Module pages (inside main, sidebar stays visible) ── -->
         <TelegramPage v-else-if="activeModule === 'telegram'" @close="closeModule" />
@@ -208,6 +212,7 @@ import DatabasePage from './views/DatabasePage.vue'
 import RazorpayPage from './views/RazorpayPage.vue'
 import StudyHubPage from './views/StudyHubPage.vue'
 import TopicLearningPage from './views/TopicLearningPage.vue'
+import CareerInterviewsPage from './views/CareerInterviewsPage.vue'
 
 import AgentConfirmModal from './components/agent/AgentConfirmModal.vue'
 //Notifications
@@ -253,6 +258,7 @@ const ONBOARDING_PATH_TO_ROUTE = Object.freeze(
 )
 const WORKSPACE_BRIEFING_PATH = '/workspace-briefing'
 const STUDY_HUB_PATH = '/study-learning'
+const CAREER_HUB_PATH = '/career-interviews'
 const STUDY_TOPIC_PATH_RE = /^\/study-learning\/topics\/([^/]+)$/
 const HOME_PATHS = new Set(['/', '', WORKSPACE_BRIEFING_PATH])
 
@@ -280,6 +286,7 @@ const MODULE_ROUTES = {
   google_sheets: 'google-sheets',
   database: 'database',
   razorpay: 'razorpay',
+  career: 'career-interviews',
 }
 const ROUTE_TO_MODULE = Object.fromEntries(
   Object.entries(MODULE_ROUTES).map(([id, slug]) => [slug, id])
@@ -366,6 +373,18 @@ function readInitialRouteFromLocation() {
       onboardingRoute: null,
       isWorkspaceBriefingHome: false,
       studyHub: true,
+      studyTopicId: null,
+    }
+  }
+  if (pathname === CAREER_HUB_PATH) {
+    return {
+      module: 'career',
+      integrations: false,
+      sessionId: null,
+      isNewChat: false,
+      onboardingRoute: null,
+      isWorkspaceBriefingHome: false,
+      studyHub: false,
       studyTopicId: null,
     }
   }
@@ -881,6 +900,14 @@ function onOpenIntegration(id) {
   showingIntegrations.value = false
   setModuleContext(null)
   activeModule.value = id
+}
+
+async function closeCareerHub() {
+  activeModule.value = null
+  setModuleContext(null)
+  showingIntegrations.value = false
+  pushRouteIfChanged(WORKSPACE_BRIEFING_PATH)
+  await startNewChat().catch(() => {})
 }
 
 function onOpenModuleFromSettings(id) {

@@ -24,6 +24,7 @@ const APP_ICON_URL = {
   google_sheets: '/google-sheets-logo.svg',
   database:
     'https://e7.pngegg.com/pngimages/931/769/png-clipart-database-icon-database-free-blue-background-blue-angle.png',
+  career: '',
 }
 
 const FALLBACK_EMOJI = {
@@ -37,6 +38,7 @@ const FALLBACK_EMOJI = {
   google_docs: '📄',
   google_sheets: '📊',
   database: '🗄️',
+  career: '💼',
 }
 
 function normalizeAppKey(value = '') {
@@ -72,5 +74,6 @@ export function getAppLabel(appKey = '') {
   if (normalized === 'google_docs') return 'Google Docs'
   if (normalized === 'google_sheets') return 'Google Sheets'
   if (normalized === 'database') return 'Database'
+  if (normalized === 'career') return 'Career & Interviews'
   return appKey
 }

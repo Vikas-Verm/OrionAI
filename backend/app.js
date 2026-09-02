@@ -50,6 +50,7 @@ const googleDocsRoutes = require("./routes/googleDocsRoutes");
 const googleSheetsRoutes = require("./routes/googleSheetsRoutes");
 const onboardingRoutes = require("./routes/onboardingRoutes");
 const studyRoutes = require("./routes/studyRoutes");
+const careerRoutes = require("./routes/careerRoutes");
 const internalMessagingRoutes = require("./routes/internalMessagingRoutes");
 const {
   initErrorMonitoring,
@@ -123,6 +124,7 @@ app.use("/api/whatsapp", whatsappRoutes);
 app.use("/api/automations", automationRoutes);
 app.use("/api/onboarding", authenticate, onboardingRoutes);
 app.use("/api/study", authenticate, studyRoutes);
+app.use("/api/career", authenticate, careerRoutes);
 app.use("/auth/google", googleAuthRoutes);
 app.use("/api/health", authenticate, healthRoutes);
 app.get("/debug/gmail", async (req, res) => {
