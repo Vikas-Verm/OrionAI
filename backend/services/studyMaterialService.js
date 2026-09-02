@@ -221,10 +221,54 @@ async function retryMaterialProcessing({ userId, materialId } = {}) {
   return material;
 }
 
+function resolveStoragePath(storageKey = "") {
+  const resolved = path.resolve(STORAGE_DIR, String(storageKey || ""));
+  const storageRoot = path.resolve(STORAGE_DIR);
+  if (resolved !== storageRoot && resolved.startsWith(`${storageRoot}${path.sep}`)) {
+    return resolved;
+  }
+  const err = new Error("Invalid material storage path");
+  err.status = 400;
+  throw err;
+}
+
+async function getUploadedMaterialFile({ userId, materialId } = {}) {
+  const material = await StudyMaterial.findOne({
+    _id: materialId,
+    userId,
+    status: { $ne: "archived" },
+  }).select("+storageKey");
+  if (!material) return null;
+  if (material.storageProvider !== "local" || !material.storageKey) {
+    const err = new Error("No local file is available for this material.");
+    err.status = 404;
+    throw err;
+  }
+
+  const filePath = resolveStoragePath(material.storageKey);
+  try {
+    await fs.access(filePath);
+  } catch {
+    const err = new Error("Stored material file was not found.");
+    err.status = 404;
+    throw err;
+  }
+
+  return {
+    material,
+    filePath,
+    fileName:
+      sanitizeFileName(material.originalFileName || material.title || "study-material") ||
+      "study-material",
+    mimeType: material.mimeType || "application/octet-stream",
+  };
+}
+
 function materialPublic(material) {
   if (!material) return null;
   const obj = typeof material.toObject === "function" ? material.toObject() : { ...material };
   delete obj.storageKey;
+  obj.canOpenFile = obj.storageProvider === "local" && obj.sourceApp === "upload";
   return obj;
 }
 
@@ -235,5 +279,7 @@ module.exports = {
   validateUpload,
   createUploadedMaterial,
   retryMaterialProcessing,
+  getUploadedMaterialFile,
   materialPublic,
+  resolveStoragePath,
 };

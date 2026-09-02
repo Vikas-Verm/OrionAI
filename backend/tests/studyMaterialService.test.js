@@ -6,6 +6,8 @@ const assert = require("node:assert/strict");
 const {
   MAX_FILE_SIZE,
   inferType,
+  materialPublic,
+  resolveStoragePath,
   sanitizeFileName,
   validateUpload,
 } = require("../services/studyMaterialService");
@@ -49,4 +51,24 @@ test("study material file names are sanitized before local storage", () => {
   assert.equal(sanitizeFileName("../DSA<script>.pdf"), "DSA_script_.pdf");
   assert.equal(inferType({ originalname: "revision.md", size: 10 }), "markdown");
   assert.equal(inferType({ originalname: "sheet.csv", size: 10 }), "csv");
+});
+
+test("study material public shape exposes uploaded files as openable without leaking storage keys", () => {
+  const material = materialPublic({
+    storageProvider: "local",
+    storageKey: "learner/file.pdf",
+    sourceApp: "upload",
+    title: "Local file",
+  });
+
+  assert.equal(material.canOpenFile, true);
+  assert.equal("storageKey" in material, false);
+});
+
+test("study material storage path resolution rejects traversal outside upload storage", () => {
+  assert.match(resolveStoragePath("learner/notes.txt"), /study-materials/);
+  assert.throws(
+    () => resolveStoragePath("../secrets.txt"),
+    /Invalid material storage path/
+  );
 });

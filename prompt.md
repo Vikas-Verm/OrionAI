@@ -293,3 +293,26 @@ Requested actions:
 Files updated for this prompt:
 
 - `prompt.md`
+## Study Material Upload Opening Fix Prompt
+
+User request:
+
+> There is a bug when I am uploading a material in through uploading file then it uploaded but when I click on that those are not clickable and not opening. Pls fix this don't touch else module
+
+Implementation scope:
+
+- Fix uploaded Study & Learning materials so local uploaded files are clickable/openable.
+- Keep the change scoped to the Study module and avoid touching unrelated modules.
+- Report files updated after completion.
+
+## Study Learning Materials Tab Clickability Prompt
+
+User request:
+
+> can you make clickable on /study-learning page under Material tab also make links also clickable on every where
+
+Implementation scope:
+
+- Make uploaded Study materials openable from the `/study-learning` Materials card.
+- Make material URL links clickable anywhere they are shown in the Study & Learning material UI.
+- Keep the fix scoped to Study & Learning.

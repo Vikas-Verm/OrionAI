@@ -35,6 +35,7 @@ const {
 } = require("../services/studyActivityService");
 const {
   createUploadedMaterial,
+  getUploadedMaterialFile,
   retryMaterialProcessing,
   materialPublic,
 } = require("../services/studyMaterialService");
@@ -1403,6 +1404,29 @@ async function getMaterial(req, res) {
   }
 }
 
+async function openMaterialFile(req, res) {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const id = asObjectId(req.params.materialId || req.params.id);
+    if (!id) return res.status(400).json({ error: "Invalid material id" });
+    const file = await getUploadedMaterialFile({ userId, materialId: id });
+    if (!file) return res.status(404).json({ error: "Material not found" });
+
+    res.setHeader("Content-Type", file.mimeType);
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="${file.fileName.replace(/"/g, "")}"`
+    );
+    res.sendFile(file.filePath);
+  } catch (err) {
+    console.error("Open material file error:", err.message);
+    res.status(err.status || 500).json({
+      error: err.status ? err.message : "Could not open material file",
+    });
+  }
+}
+
 async function updateMaterial(req, res) {
   try {
     const userId = getUserId(req);
@@ -2199,6 +2223,7 @@ module.exports = {
   createMaterialForTopic,
   listMaterials,
   getMaterial,
+  openMaterialFile,
   updateMaterial,
   deleteMaterial,
   retryMaterial,

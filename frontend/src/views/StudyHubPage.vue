@@ -377,8 +377,32 @@
             <li v-for="m in recentMaterials" :key="m._id" class="sh-material-row">
               <span class="sh-status-tag" :data-status="m.processingStatus">{{ m.type }}</span>
               <div>
-                <strong>{{ m.title }}</strong>
-                <p>{{ m.processingStatus || m.status }}<span v-if="m.processingError"> · {{ m.processingError }}</span></p>
+                <strong>
+                  <button
+                    v-if="canOpenMaterial(m)"
+                    class="sh-material-title-button"
+                    type="button"
+                    @click="openMaterial(m)"
+                  >
+                    {{ m.title }}
+                  </button>
+                  <template v-else>{{ m.title }}</template>
+                </strong>
+                <p>
+                  {{ m.processingStatus || m.status }}<span v-if="m.processingError"> · {{ m.processingError }}</span>
+                </p>
+                <p v-if="m.url">
+                  <a :href="m.url" target="_blank" rel="noopener noreferrer">{{ m.url }}</a>
+                </p>
+                <button
+                  v-else-if="canOpenMaterial(m)"
+                  class="sh-link sh-link--sm"
+                  type="button"
+                  :disabled="openingMaterialId === m._id"
+                  @click="openMaterial(m)"
+                >
+                  {{ openingMaterialId === m._id ? 'Opening...' : 'Open' }}
+                </button>
               </div>
             </li>
           </ul>
@@ -671,6 +695,7 @@ const editingTopic = ref(null)
 const showSuggestModal = ref(false)
 const actionPendingTopicId = ref('')
 const actionPendingRevisionId = ref('')
+const openingMaterialId = ref('')
 
 const topicFilterModal = ref({
   open: false,
@@ -995,6 +1020,35 @@ async function loadMaterialsForActiveGoal() {
   } catch (err) {
     console.error('Load materials failed', err)
     recentMaterials.value = []
+  }
+}
+
+function canOpenMaterial(material) {
+  return Boolean(material?.url || material?.canOpenFile || material?.sourceApp === 'upload')
+}
+
+async function openMaterial(material) {
+  if (!material) return
+  if (material.url) {
+    window.open(material.url, '_blank', 'noopener,noreferrer')
+    return
+  }
+  if (!canOpenMaterial(material) || openingMaterialId.value) return
+  const opened = window.open('about:blank', '_blank')
+  if (opened) opened.opener = null
+  openingMaterialId.value = material._id
+  try {
+    const { data } = await studyAPI.openMaterialFile(material._id)
+    const blobUrl = window.URL.createObjectURL(data)
+    if (opened) opened.location.href = blobUrl
+    else window.open(blobUrl, '_blank', 'noopener,noreferrer')
+    setTimeout(() => window.URL.revokeObjectURL(blobUrl), 60_000)
+  } catch (err) {
+    if (opened) opened.close()
+    console.error('Open material failed', err)
+    showNotice(err?.response?.data?.error || 'Could not open this material file.', 'error')
+  } finally {
+    openingMaterialId.value = ''
   }
 }
 
@@ -1784,6 +1838,21 @@ onMounted(async () => {
 }
 .sh-material-row strong { display: block; font-size: 13px; }
 .sh-material-row p { margin: 3px 0 0; font-size: 12px; color: var(--text-muted); }
+.sh-material-row a {
+  color: var(--accent);
+  word-break: break-word;
+}
+.sh-material-title-button {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.sh-material-title-button:hover { color: var(--accent); }
 
 .sh-consistency-stats {
   display: flex;

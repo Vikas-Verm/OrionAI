@@ -253,7 +253,17 @@
             <li v-for="m in materials" :key="m._id" class="tl-list-row">
               <div class="tl-list-row-main">
                 <span class="tl-type-tag" :data-type="m.type">{{ m.type }}</span>
-                <h4>{{ m.title }}</h4>
+                <h4>
+                  <button
+                    v-if="canOpenMaterial(m)"
+                    class="tl-material-title-button"
+                    type="button"
+                    @click="openMaterial(m)"
+                  >
+                    {{ m.title }}
+                  </button>
+                  <template v-else>{{ m.title }}</template>
+                </h4>
                 <p v-if="m.url" class="tl-list-row-meta">
                   <a :href="m.url" target="_blank" rel="noopener noreferrer">{{ m.url }}</a>
                 </p>
@@ -268,6 +278,11 @@
               <div class="tl-list-row-actions">
                 <a v-if="m.url" class="tl-link tl-link--sm" :href="m.url"
                   target="_blank" rel="noopener noreferrer">Open</a>
+                <button v-else-if="canOpenMaterial(m)" class="tl-link tl-link--sm" type="button"
+                  :disabled="openingMaterialId === m._id"
+                  @click="openMaterial(m)">
+                  {{ openingMaterialId === m._id ? 'Opening…' : 'Open' }}
+                </button>
                 <button v-if="m.processingStatus === 'failed'" class="tl-link tl-link--sm" type="button"
                   @click="retryMaterial(m)">Retry</button>
                 <button class="tl-link tl-link--sm tl-link--muted" type="button"
@@ -706,6 +721,7 @@ const lessonLoading = ref(false)
 const questionsLoading = ref(false)
 const flashcardsLoading = ref(false)
 const savingNoteFromLesson = ref(false)
+const openingMaterialId = ref('')
 
 const practiceDifficulty = ref('medium')
 
@@ -1023,6 +1039,33 @@ async function deleteMaterial(material) {
     materials.value = materials.value.filter((m) => m._id !== material._id)
   } catch (err) {
     console.error('Delete material failed', err)
+  }
+}
+function canOpenMaterial(material) {
+  return Boolean(material?.url || material?.canOpenFile || material?.sourceApp === 'upload')
+}
+async function openMaterial(material) {
+  if (!material) return
+  if (material.url) {
+    window.open(material.url, '_blank', 'noopener,noreferrer')
+    return
+  }
+  if (!canOpenMaterial(material) || openingMaterialId.value) return
+  const opened = window.open('about:blank', '_blank')
+  if (opened) opened.opener = null
+  openingMaterialId.value = material._id
+  try {
+    const { data } = await studyAPI.openMaterialFile(material._id)
+    const blobUrl = window.URL.createObjectURL(data)
+    if (opened) opened.location.href = blobUrl
+    else window.open(blobUrl, '_blank', 'noopener,noreferrer')
+    setTimeout(() => window.URL.revokeObjectURL(blobUrl), 60_000)
+  } catch (err) {
+    if (opened) opened.close()
+    console.error('Open material failed', err)
+    alert(err?.response?.data?.error || 'Could not open this material file.')
+  } finally {
+    openingMaterialId.value = ''
   }
 }
 
@@ -1676,6 +1719,17 @@ onMounted(loadTopicLearning)
   font-size: 14px;
   font-weight: 600;
 }
+.tl-material-title-button {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.tl-material-title-button:hover { color: var(--accent); }
 .tl-list-row-meta {
   margin: 4px 0 0;
   font-size: 12.5px;

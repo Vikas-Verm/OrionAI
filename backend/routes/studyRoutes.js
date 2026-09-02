@@ -34,6 +34,7 @@ const {
   createMaterialForTopic,
   listMaterials,
   getMaterial,
+  openMaterialFile,
   updateMaterial,
   deleteMaterial,
   retryMaterial,
@@ -111,6 +112,7 @@ router.delete("/topics/:topicId/memory/:memoryId", deleteTopicMemory);
 router.get("/materials", listMaterials);
 router.post("/materials", createMaterial);
 router.post("/materials/upload", upload.single("file"), uploadMaterial);
+router.get("/materials/:materialId/file", openMaterialFile);
 router.get("/materials/:materialId", getMaterial);
 router.patch("/materials/:id", updateMaterial);
 router.delete("/materials/:id", deleteMaterial);

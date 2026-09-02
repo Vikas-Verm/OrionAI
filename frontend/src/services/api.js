@@ -179,6 +179,8 @@ export const studyAPI = {
   listMaterials: (params) =>
     api.get("/api/study/materials", { params }),
   getMaterial: (id) => api.get(`/api/study/materials/${id}`),
+  openMaterialFile: (id) =>
+    api.get(`/api/study/materials/${id}/file`, { responseType: "blob" }),
   updateMaterial: (id, payload) =>
     api.patch(`/api/study/materials/${id}`, payload),
   deleteMaterial: (id) => api.delete(`/api/study/materials/${id}`),
