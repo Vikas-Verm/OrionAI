@@ -38,6 +38,9 @@ const {
   checkSignal,
   checkWhatsApp,
 } = require("./inboxSignalsService");
+const JobApplication = require("../models/JobApplication");
+const InterviewEvent = require("../models/InterviewEvent");
+const CareerOffer = require("../models/CareerOffer");
 
 const APP_META = {
   gmail: { label: "Gmail", icon: "📧", module: "gmail" },
@@ -50,6 +53,7 @@ const APP_META = {
   google_docs: { label: "Google Docs", icon: "📄", module: "google_docs" },
   google_sheets: { label: "Google Sheets", icon: "📊", module: "google_sheets" },
   database: { label: "Database", icon: "🗄️", module: "database" },
+  career: { label: "Career & Interviews", icon: "💼", module: "career" },
 };
 
 const COMMUNICATION_ACTION_SOURCES = new Set([
@@ -902,6 +906,142 @@ async function buildMessagingPriorityItems(userId, options = {}) {
   return sortByLatestActivity(items);
 }
 
+function isSameOrNextDay(date, now = new Date()) {
+  const value = new Date(date).getTime();
+  if (!Number.isFinite(value)) return false;
+  return value >= now.getTime() && value <= now.getTime() + 36 * 60 * 60 * 1000;
+}
+
+async function buildCareerPriorityItems(userId) {
+  const now = new Date();
+  const soon = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+  const [interviews, followUps, assignments, offers] = await Promise.all([
+    InterviewEvent.find({
+      userId,
+      status: "scheduled",
+      scheduledAt: { $gte: now, $lte: soon },
+    })
+      .sort({ scheduledAt: 1 })
+      .limit(5)
+      .lean(),
+    JobApplication.find({
+      userId,
+      status: { $nin: ["archived", "rejected", "withdrawn"] },
+      nextFollowUpAt: { $ne: null, $lte: now },
+      followUpHandledAt: null,
+    })
+      .sort({ nextFollowUpAt: 1 })
+      .limit(5)
+      .lean(),
+    JobApplication.find({
+      userId,
+      status: "assignment",
+      nextFollowUpAt: { $ne: null, $lte: soon },
+    })
+      .sort({ nextFollowUpAt: 1 })
+      .limit(3)
+      .lean(),
+    CareerOffer.find({
+      userId,
+      status: { $nin: ["archived", "declined", "expired"] },
+      deadline: { $ne: null, $lte: soon },
+    })
+      .sort({ deadline: 1 })
+      .limit(3)
+      .lean(),
+  ]);
+
+  const interviewItems = interviews.map((interview) => {
+    const immediate = isSameOrNextDay(interview.scheduledAt, now);
+    return {
+      id: `career:interview:${interview._id}`,
+      title: `Interview ${immediate ? "soon" : "upcoming"} - ${interview.company}`,
+      category: "meetings",
+      priority: immediate ? "High" : "Medium",
+      priorityScore: immediate ? 86 : 58,
+      reason: `${interview.role || "Role"}${interview.roundType ? ` · ${interview.roundType.replace(/_/g, " ")}` : ""}`,
+      whyThisMatters: interview.prepStatus === "ready"
+        ? "This interview is on your calendar and your prep is marked ready."
+        : "This interview is scheduled and still needs preparation.",
+      suggestedNextAction: "Open Career & Interviews and prepare from the saved application, resume, and job description.",
+      action: createModuleAction("Prepare Interview", "career", {
+        focus: "interviews",
+        interviewId: String(interview._id),
+      }),
+      secondaryAction: createModuleAction("Open Career Hub", "career"),
+      canClearQuickly: false,
+      needsAttentionSoon: immediate || interview.prepStatus !== "ready",
+      meta: {
+        startsAt: interview.scheduledAt,
+        applicationId: interview.applicationId || null,
+      },
+      ...buildSourceBadge("career"),
+    };
+  });
+
+  const followUpItems = followUps.map((app) => ({
+    id: `career:followup:${app._id}`,
+    title: `Follow-up due - ${app.company}`,
+    category: "tasks",
+    priority: "Medium",
+    priorityScore: 54,
+    reason: `${app.role} · follow-up date is due`,
+    whyThisMatters: "This is a saved career follow-up date, not an email guess.",
+    suggestedNextAction: "Draft a follow-up and send it yourself when ready.",
+    action: createModuleAction("Draft Follow-up", "career", {
+      focus: "followups",
+      applicationId: String(app._id),
+    }),
+    secondaryAction: createModuleAction("Open Career Hub", "career"),
+    canClearQuickly: true,
+    needsAttentionSoon: true,
+    meta: { dueDate: app.nextFollowUpAt, applicationId: app._id },
+    ...buildSourceBadge("career"),
+  }));
+
+  const assignmentItems = assignments.map((app) => ({
+    id: `career:assignment:${app._id}`,
+    title: `Assignment deadline - ${app.company}`,
+    category: "tasks",
+    priority: "High",
+    priorityScore: 78,
+    reason: `${app.role} · assignment stage`,
+    whyThisMatters: "This application is in assignment stage and has a due/follow-up date approaching.",
+    suggestedNextAction: "Open the application, confirm the deadline, and prepare the submission.",
+    action: createModuleAction("Open Application", "career", {
+      focus: "applications",
+      applicationId: String(app._id),
+    }),
+    secondaryAction: createModuleAction("Open Career Hub", "career"),
+    canClearQuickly: false,
+    needsAttentionSoon: true,
+    meta: { dueDate: app.nextFollowUpAt, applicationId: app._id },
+    ...buildSourceBadge("career"),
+  }));
+
+  const offerItems = offers.map((offer) => ({
+    id: `career:offer:${offer._id}`,
+    title: `Offer deadline - ${offer.company}`,
+    category: "tasks",
+    priority: isSameOrNextDay(offer.deadline, now) ? "High" : "Medium",
+    priorityScore: isSameOrNextDay(offer.deadline, now) ? 82 : 62,
+    reason: `${offer.role} · ${offer.status}`,
+    whyThisMatters: "This is a saved offer deadline.",
+    suggestedNextAction: "Review the offer notes and draft clarification or negotiation email yourself.",
+    action: createModuleAction("Open Offer", "career", {
+      focus: "offers",
+      offerId: String(offer._id),
+    }),
+    secondaryAction: createModuleAction("Open Career Hub", "career"),
+    canClearQuickly: false,
+    needsAttentionSoon: true,
+    meta: { dueDate: offer.deadline, offerId: offer._id },
+    ...buildSourceBadge("career"),
+  }));
+
+  return [...interviewItems, ...followUpItems, ...assignmentItems, ...offerItems];
+}
+
 function mapMessageSourceToItems(sourceApp, previews = []) {
   return previews.slice(0, 2).map((preview, index) => {
     const unread = Number(preview.unread || 0);
@@ -1178,12 +1318,14 @@ async function getHomeDashboard(userId) {
     communicationResult,
     calendarItems,
     jiraSignals,
+    careerItems,
     latestActionsByItem,
     recentActions,
   ] = await Promise.all([
     getCommunicationActionStates(userId, { source: "all" }).catch(() => null),
     buildCalendarPriorityItems(userId).catch(() => []),
     buildJiraWorkspaceSignals(userId).catch(() => ({ personalItems: [], insight: null })),
+    buildCareerPriorityItems(userId).catch(() => []),
     getLatestActionsByItem(userId),
     PriorityFeedAction.find({ userId }).sort({ createdAt: -1 }).limit(8).lean(),
   ]);
@@ -1216,6 +1358,7 @@ async function getHomeDashboard(userId) {
     ...fallbackCommunicationItems,
     ...calendarItems,
     ...jiraSignals.personalItems,
+    ...careerItems,
   ]);
   const activeItems = sortByLatestActivity(
     filterActiveItems(allItems, latestActionsByItem)

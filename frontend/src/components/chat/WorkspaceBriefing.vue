@@ -408,6 +408,7 @@
         </section>
 
         <StudyBriefingCard v-if="showStudyBriefing" />
+        <CareerBriefingCard v-if="showCareerBriefing" />
       </div>
 
       <aside class="today-rail">
@@ -652,6 +653,7 @@ import api, { agentAPI, googleDocsAPI, googleSheetsAPI, onboardingAPI } from '..
 import { store, setUser } from '../../stores/app'
 import PriorityFeedCard from '../home/PriorityFeedCard.vue'
 import StudyBriefingCard from '../study/StudyBriefingCard.vue'
+import CareerBriefingCard from '../career/CareerBriefingCard.vue'
 import { emitCommunicationPriorityRefresh } from '../../composables/useCommunicationActions'
 import { useWebSocket } from '../../composables/useWebSocket'
 import { getAppFallbackEmoji, getAppIconUrl, getAppLabel } from '../../utils/appIcons'
@@ -751,6 +753,9 @@ const savedFocusAreas = computed(() => {
 const showSavedFocusAreas = computed(() => savedFocusAreas.value.length > 0)
 const showStudyBriefing = computed(() =>
   savedFocusAreas.value.some((area) => String(area).toLowerCase() === 'study & learning')
+)
+const showCareerBriefing = computed(() =>
+  savedFocusAreas.value.some((area) => String(area).toLowerCase() === 'career & interviews')
 )
 const messageAppsConnected = computed(() =>
   connectedAppIds.value.some((id) => MESSAGE_SOURCE_APPS.has(id))

@@ -226,6 +226,51 @@ export const studyAPI = {
     api.post(`/api/study/pre-topic-review/${reviewId}/skip`),
 };
 
+// ── Career & Interviews ───────────────────────────────────
+export const careerAPI = {
+  overview: () => api.get("/api/career/overview"),
+  listApplications: (params) => api.get("/api/career/applications", { params }),
+  createApplication: (payload) => api.post("/api/career/applications", payload),
+  getApplication: (id) => api.get(`/api/career/applications/${id}`),
+  updateApplication: (id, payload) => api.patch(`/api/career/applications/${id}`, payload),
+  deleteApplication: (id) => api.delete(`/api/career/applications/${id}`),
+  listInterviews: (params) => api.get("/api/career/interviews", { params }),
+  createInterview: (payload) => api.post("/api/career/interviews", payload),
+  updateInterview: (id, payload) => api.patch(`/api/career/interviews/${id}`, payload),
+  deleteInterview: (id) => api.delete(`/api/career/interviews/${id}`),
+  listFollowUps: () => api.get("/api/career/follow-ups"),
+  draftFollowUp: (id) => api.post(`/api/career/applications/${id}/follow-up-draft`),
+  snoozeFollowUp: (id, days = 3) => api.post(`/api/career/applications/${id}/snooze-follow-up`, { days }),
+  markFollowUpHandled: (id) => api.post(`/api/career/applications/${id}/mark-follow-up-handled`),
+  listMemory: (params) => api.get("/api/career/memory", { params }),
+  listApplicationMemory: (applicationId) => api.get(`/api/career/applications/${applicationId}/memory`),
+  deleteMemory: (id) => api.delete(`/api/career/memory/${id}`),
+  clearApplicationMemory: (applicationId) => api.delete(`/api/career/applications/${applicationId}/memory`),
+  clearMemory: () => api.delete("/api/career/memory"),
+  listDocuments: (params) => api.get("/api/career/documents", { params }),
+  listDriveFiles: (params) => api.get("/api/career/drive/files", { params }),
+  attachDriveDocument: (payload) => api.post("/api/career/documents/drive", payload),
+  uploadDocument: (formData, onUploadProgress) =>
+    api.post("/api/career/documents/upload", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+      onUploadProgress,
+    }),
+  updateDocument: (id, payload) => api.patch(`/api/career/documents/${id}`, payload),
+  openDocumentFile: (id) => api.get(`/api/career/documents/${id}/file`, { responseType: "blob" }),
+  deleteDocument: (id) => api.delete(`/api/career/documents/${id}`),
+  createJobDescription: (payload) => api.post("/api/career/job-descriptions", payload),
+  resumeMatch: (id, payload = {}) => api.post(`/api/career/applications/${id}/resume-match`, payload),
+  prepareInterview: (id) => api.post(`/api/career/interviews/${id}/prepare`),
+  startPractice: (id, payload = {}) => api.post(`/api/career/interviews/${id}/practice`, payload),
+  answerPractice: (sessionId, payload) => api.post(`/api/career/practice/${sessionId}/answer`, payload),
+  emailSignals: () => api.get("/api/career/email-signals"),
+  acceptEmailSignal: (id, payload) => api.post(`/api/career/email-signals/${id}/accept`, payload),
+  ignoreEmailSignal: (id, payload = {}) => api.post(`/api/career/email-signals/${id}/ignore`, payload),
+  listOffers: () => api.get("/api/career/offers"),
+  createOffer: (payload) => api.post("/api/career/offers", payload),
+  draftOfferEmail: (id, type = "clarification") => api.post(`/api/career/offers/${id}/draft-email`, { type }),
+};
+
 export function streamAgentRun(steps, sessionId, userMessage, signal) {
   const token = localStorage.getItem("token");
   return fetch(`${API_BASE}/api/agent/run`, {

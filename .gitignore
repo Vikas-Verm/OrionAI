@@ -40,6 +40,10 @@ backend/data/gmail_cache/*.db
 backend/uploads/study-materials/*
 !backend/uploads/study-materials/.gitkeep
 
+# Career & Interviews runtime uploads
+backend/uploads/career-documents/*
+!backend/uploads/career-documents/.gitkeep
+
 # Matrix and bridge runtime state
 infra/synapse/*.db-shm
 infra/synapse/*.db-wal
