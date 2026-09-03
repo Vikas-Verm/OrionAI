@@ -3,6 +3,8 @@
 const fs = require("fs/promises");
 const path = require("path");
 const crypto = require("crypto");
+const dns = require("dns/promises");
+const net = require("net");
 const mongoose = require("mongoose");
 const pdf = require("pdf-parse-new");
 const mammoth = require("mammoth");
@@ -27,6 +29,9 @@ const {
 } = require("./googleDocsService");
 
 const MAX_FILE_SIZE = 15 * 1024 * 1024;
+const MAX_JOB_PAGE_BYTES = 900 * 1024;
+const JOB_PAGE_TIMEOUT_MS = 8000;
+const JOB_PAGE_REDIRECT_LIMIT = 3;
 const STORAGE_DIR = path.join(__dirname, "..", "uploads", "career-documents");
 const DRIVE_READ_ERROR = "OrionAI could not read this file yet.";
 const DRIVE_PERMISSION_ERROR =
@@ -432,10 +437,42 @@ function documentHasUsableText(doc) {
 }
 
 function unavailableDocumentError(doc, label) {
+  const noun = label.toLowerCase();
+  if (!doc) return `Select a ${noun} before running this action.`;
   if (doc?.sourceUnavailable) {
     return `${label} source is unavailable. Reconnect Google Docs/Drive or reattach the file.`;
   }
-  return `${label} text is not available`;
+  if (doc.processingStatus === "processing" || doc.processingStatus === "uploaded") {
+    return `${label} is still being processed. Try again in a moment.`;
+  }
+  if (doc.processingStatus === "failed") {
+    if (/no extractable|no readable|empty/i.test(doc.processingError || "")) {
+      return `No readable text was found in this ${noun}.`;
+    }
+    return `OrionAI couldn't read this ${noun}. Try another file or upload it again.`;
+  }
+  return `No readable text was found in this ${noun}.`;
+}
+
+async function resolveResumeForApplication(userId, application, resumeId) {
+  const explicitId = objectId(resumeId);
+  if (explicitId) return assertDocumentOwnership(userId, explicitId, ["resume"]);
+  if (application?.resumeId) return assertDocumentOwnership(userId, application.resumeId, ["resume"]);
+  return CareerDocument.findOne({
+    userId,
+    type: "resume",
+    isPrimary: true,
+    processingStatus: { $ne: "archived" },
+  });
+}
+
+async function resolveJobDescriptionForApplication(userId, application, jobDescriptionId) {
+  const explicitId = objectId(jobDescriptionId);
+  if (explicitId) return assertDocumentOwnership(userId, explicitId, ["job_description"]);
+  if (application?.jobDescriptionId) {
+    return assertDocumentOwnership(userId, application.jobDescriptionId, ["job_description"]);
+  }
+  return null;
 }
 
 async function createCareerMemory(userId, body = {}) {
@@ -554,7 +591,9 @@ async function rememberPracticeFeedback(userId, session, feedback) {
 
 async function rememberResumeMatchGaps(userId, applicationId, match) {
   try {
-    const gaps = (match?.missingEvidence || []).map((item) => cleanString(item.jdRequirement, 220)).filter(Boolean);
+    const gaps = (match?.missingEvidence || [])
+      .map((item) => cleanString(item.requirement || item.jdRequirement, 220))
+      .filter(Boolean);
     if (!gaps.length) return;
     await CareerMemory.findOneAndUpdate(
       {
@@ -930,6 +969,444 @@ async function createJobDescription(userId, body = {}) {
   return { document: publicDoc(document) };
 }
 
+function isPrivateAddress(address = "") {
+  const ipVersion = net.isIP(address);
+  if (ipVersion === 4) {
+    const parts = address.split(".").map((part) => Number(part));
+    const [a, b] = parts;
+    return (
+      a === 10 ||
+      a === 127 ||
+      a === 0 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 198 && (b === 18 || b === 19)) ||
+      a >= 224
+    );
+  }
+  if (ipVersion === 6) {
+    const normalized = address.toLowerCase();
+    return (
+      normalized === "::1" ||
+      normalized === "::" ||
+      normalized.startsWith("fc") ||
+      normalized.startsWith("fd") ||
+      normalized.startsWith("fe80:") ||
+      normalized.startsWith("::ffff:127.") ||
+      normalized.startsWith("::ffff:10.") ||
+      normalized.startsWith("::ffff:192.168.") ||
+      normalized.startsWith("::ffff:169.254.")
+    );
+  }
+  return false;
+}
+
+async function validatePublicJobUrl(value, options = {}) {
+  const raw = cleanString(value, 1200);
+  if (!raw) return { error: "Job link is required" };
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    return { error: "Enter a valid job link." };
+  }
+  if (url.protocol !== "https:") return { error: "Only https job links are supported." };
+  const hostname = url.hostname.toLowerCase();
+  if (
+    hostname === "localhost" ||
+    hostname.endsWith(".localhost") ||
+    hostname.endsWith(".local") ||
+    hostname === "metadata.google.internal" ||
+    hostname === "169.254.169.254" ||
+    isPrivateAddress(hostname)
+  ) {
+    return { error: "This job link cannot be imported for security reasons." };
+  }
+  if (!options.skipDnsLookup) {
+    try {
+      const records = await dns.lookup(hostname, { all: true, verbatim: true });
+      if (!records.length || records.some((record) => isPrivateAddress(record.address))) {
+        return { error: "This job link cannot be imported for security reasons." };
+      }
+    } catch {
+      return { error: "OrionAI couldn't access this job page." };
+    }
+  }
+  return { url: url.toString() };
+}
+
+function decodeHtml(value = "") {
+  return String(value || "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'");
+}
+
+function htmlToText(html = "") {
+  return decodeHtml(
+    String(html || "")
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/(p|li|div|section|h[1-6])>/gi, "\n")
+      .replace(/<[^>]+>/g, " ")
+  )
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n\s+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function findJobPosting(value) {
+  if (!value || typeof value !== "object") return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findJobPosting(item);
+      if (found) return found;
+    }
+    return null;
+  }
+  const type = value["@type"];
+  const types = Array.isArray(type) ? type : [type];
+  if (types.some((item) => String(item || "").toLowerCase() === "jobposting")) return value;
+  if (value["@graph"]) return findJobPosting(value["@graph"]);
+  return null;
+}
+
+function extractJsonLdJobPosting(html = "") {
+  const scripts = String(html || "").match(/<script[^>]+type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>/gi) || [];
+  for (const script of scripts) {
+    const body = script.replace(/^<script[^>]*>/i, "").replace(/<\/script>$/i, "").trim();
+    try {
+      const found = findJobPosting(JSON.parse(decodeHtml(body)));
+      if (found) return found;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function textFromStructured(value) {
+  if (!value) return "";
+  if (typeof value === "string") return htmlToText(value);
+  if (Array.isArray(value)) return value.map(textFromStructured).filter(Boolean).join("\n");
+  if (typeof value === "object") {
+    return Object.values(value).map(textFromStructured).filter(Boolean).join("\n");
+  }
+  return "";
+}
+
+function titleFromHtml(html = "") {
+  const match = String(html || "").match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  return cleanString(decodeHtml(match?.[1] || ""), 220);
+}
+
+function looksLikeJobListing({ html = "", text = "" } = {}) {
+  if (extractJsonLdJobPosting(html)) return true;
+  return /\b(job|role|position|apply|responsibilities|requirements|qualifications|employment|salary|benefits)\b/i.test(text);
+}
+
+function splitListFromText(text = "", pattern) {
+  const lines = String(text || "")
+    .split(/\n|•|-/)
+    .map((line) => cleanString(line.replace(/\s+/g, " "), 180))
+    .filter(Boolean);
+  if (!pattern) return lines.slice(0, 12);
+  return lines.filter((line) => pattern.test(line)).slice(0, 12);
+}
+
+function inferWorkMode(text = "") {
+  if (/\bremote\b/i.test(text)) return "remote";
+  if (/\bhybrid\b/i.test(text)) return "hybrid";
+  if (/\bonsite|on-site|office\b/i.test(text)) return "onsite";
+  return "unknown";
+}
+
+function normalizeImportedJob(raw = {}, sourceUrl = "", sourceTitle = "") {
+  const jobDescriptionText = cleanString(
+    raw.jobDescriptionText || raw.description || raw.jobDescription || "",
+    120000
+  );
+  return {
+    company: cleanString(raw.company, 180) || "Not found",
+    role: cleanString(raw.role || raw.title, 180) || "Not found",
+    location: cleanString(raw.location, 180) || "Not found",
+    workMode: ["remote", "hybrid", "onsite", "unknown"].includes(raw.workMode) ? raw.workMode : "unknown",
+    employmentType: cleanString(raw.employmentType, 80) || "Not found",
+    salaryText: cleanString(raw.salaryText, 500) || "Not found",
+    experienceText: cleanString(raw.experienceText, 500) || "Not found",
+    skills: cleanArray(raw.skills, 20, 60),
+    responsibilities: cleanArray(raw.responsibilities, 20, 180),
+    requirements: cleanArray(raw.requirements, 20, 180),
+    preferredQualifications: cleanArray(raw.preferredQualifications, 20, 180),
+    benefits: cleanArray(raw.benefits, 20, 180),
+    jobDescriptionText,
+    sourceUrl,
+    sourceTitle: cleanString(raw.sourceTitle || sourceTitle, 220),
+    confidence: {
+      company: Number(raw.confidence?.company || 0),
+      role: Number(raw.confidence?.role || 0),
+      location: Number(raw.confidence?.location || 0),
+    },
+  };
+}
+
+function buildDeterministicJobImport({ html = "", text = "", sourceUrl = "", sourceTitle = "" } = {}) {
+  const structured = extractJsonLdJobPosting(html) || {};
+  const title = cleanString(structured.title, 180);
+  const company = cleanString(structured.hiringOrganization?.name || structured.organization?.name, 180);
+  const location = cleanString(textFromStructured(structured.jobLocation?.address || structured.jobLocation), 180);
+  const description = htmlToText(structured.description || "") || cleanString(text, 120000);
+  const skills = [...tokenize(description)].filter((token) => /[a-z]/i.test(token)).slice(0, 14);
+  return normalizeImportedJob(
+    {
+      company,
+      role: title,
+      location,
+      workMode: inferWorkMode(`${description}\n${location}`),
+      employmentType: cleanString(structured.employmentType, 80),
+      salaryText: textFromStructured(structured.baseSalary),
+      experienceText: splitListFromText(description, /\b(year|experience)\b/i)[0] || "",
+      skills,
+      responsibilities: splitListFromText(description, /\b(build|design|own|lead|manage|develop|collaborate|responsible)\b/i),
+      requirements: extractRequirements(description),
+      preferredQualifications: splitListFromText(description, /\b(preferred|nice to have|bonus)\b/i),
+      benefits: splitListFromText(description, /\b(benefit|insurance|leave|remote|wellness|equity)\b/i),
+      jobDescriptionText: description,
+      sourceTitle,
+      confidence: { company: company ? 0.95 : 0, role: title ? 0.95 : 0, location: location ? 0.75 : 0 },
+    },
+    sourceUrl,
+    sourceTitle
+  );
+}
+
+function mergeImportedJobEvidence(base = {}, parsed = {}, sourceUrl = "", sourceTitle = "") {
+  const merged = { ...base };
+  for (const key of [
+    "company",
+    "role",
+    "location",
+    "employmentType",
+    "salaryText",
+    "experienceText",
+    "jobDescriptionText",
+    "sourceTitle",
+  ]) {
+    const value = cleanString(parsed[key], key === "jobDescriptionText" ? 120000 : 500);
+    if (value) merged[key] = value;
+  }
+  if (["remote", "hybrid", "onsite"].includes(parsed.workMode)) merged.workMode = parsed.workMode;
+  for (const key of ["skills", "responsibilities", "requirements", "preferredQualifications", "benefits"]) {
+    const value = cleanArray(parsed[key], 20, key === "skills" ? 60 : 180);
+    if (value.length) merged[key] = value;
+  }
+  if (parsed.confidence) merged.confidence = { ...merged.confidence, ...parsed.confidence };
+  return normalizeImportedJob(merged, sourceUrl, sourceTitle);
+}
+
+async function fetchJobPage(url, options = {}) {
+  let nextUrl = url;
+  for (let redirect = 0; redirect <= JOB_PAGE_REDIRECT_LIMIT; redirect += 1) {
+    const checked = await validatePublicJobUrl(nextUrl, options);
+    if (checked.error) {
+      const err = new Error(checked.error);
+      err.status = 400;
+      throw err;
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), options.timeoutMs || JOB_PAGE_TIMEOUT_MS);
+    let response;
+    try {
+      response = await fetch(checked.url, {
+        method: "GET",
+        redirect: "manual",
+        signal: controller.signal,
+        headers: {
+          "User-Agent": "OrionAI-Career-Importer/1.0",
+          Accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.1",
+        },
+      });
+    } catch (error) {
+      const err = new Error(error.name === "AbortError" ? "This job page took too long to respond." : "OrionAI couldn't access this job page.");
+      err.status = 400;
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get("location");
+      if (!location) break;
+      nextUrl = new URL(location, checked.url).toString();
+      continue;
+    }
+    if (response.status === 404 || response.status === 410) {
+      const err = new Error("This job listing may no longer be available.");
+      err.status = 404;
+      throw err;
+    }
+    if (!response.ok) {
+      const err = new Error(response.status === 401 || response.status === 403
+        ? "This job listing requires sign-in. Paste the job description instead."
+        : "OrionAI couldn't access this job page.");
+      err.status = 400;
+      throw err;
+    }
+    const contentType = response.headers.get("content-type") || "";
+    if (!/text\/html|application\/xhtml\+xml|text\/plain/i.test(contentType)) {
+      const err = new Error("OrionAI couldn't read this job page format.");
+      err.status = 400;
+      throw err;
+    }
+    const length = Number(response.headers.get("content-length") || 0);
+    if (length > MAX_JOB_PAGE_BYTES) {
+      const err = new Error("This job page is too large to import safely.");
+      err.status = 400;
+      throw err;
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length > MAX_JOB_PAGE_BYTES) {
+      const err = new Error("This job page is too large to import safely.");
+      err.status = 400;
+      throw err;
+    }
+    const html = buffer.toString("utf8");
+    return { finalUrl: response.url || checked.url, html, text: htmlToText(html), sourceTitle: titleFromHtml(html) };
+  }
+  const err = new Error("OrionAI couldn't access this job page.");
+  err.status = 400;
+  throw err;
+}
+
+async function importJobFromUrl(userId, body = {}, options = {}) {
+  const validation = await validatePublicJobUrl(body.sourceUrl || body.url || body.jobUrl, options);
+  if (validation.error) return { error: validation.error, status: 400 };
+  let page;
+  try {
+    page = options.pageFetcher
+      ? await options.pageFetcher(validation.url)
+      : await fetchJobPage(validation.url, options);
+  } catch (error) {
+    return { error: error.message || "OrionAI couldn't access this job page.", status: error.status || 400 };
+  }
+  const html = cleanString(page.html || "", MAX_JOB_PAGE_BYTES);
+  const text = cleanString(page.text || htmlToText(html), 120000);
+  if (/sign in|required login|login required|create an account to view/i.test(text)) {
+    return { error: "This job listing requires sign-in. Paste the job description instead.", status: 400 };
+  }
+  if (!looksLikeJobListing({ html, text })) {
+    return { error: "OrionAI couldn't confirm this is a job listing. Paste the job description instead.", status: 400 };
+  }
+  const deterministic = buildDeterministicJobImport({
+    html,
+    text,
+    sourceUrl: page.finalUrl || validation.url,
+    sourceTitle: page.sourceTitle || titleFromHtml(html),
+  });
+  try {
+    const raw = await chatComplete(
+      [
+        {
+          role: "system",
+          content: "Return only JSON. Extract job listing facts from supplied page text. Use empty strings or arrays when not found. Do not guess.",
+        },
+        {
+          role: "user",
+          content: [
+            "Schema: {company,role,location,workMode,employmentType,salaryText,experienceText,skills,responsibilities,requirements,preferredQualifications,benefits,jobDescriptionText,confidence:{company,role,location}}.",
+            `URL: ${page.finalUrl || validation.url}`,
+            `Page title: ${page.sourceTitle || ""}`,
+            text.slice(0, 26000),
+          ].join("\n\n"),
+        },
+      ],
+      1800,
+      0.1
+    );
+    const parsed = JSON.parse(String(raw || "").replace(/^```json\s*/i, "").replace(/```$/i, "").trim());
+    return {
+      importedJob: mergeImportedJobEvidence(deterministic, parsed, page.finalUrl || validation.url, page.sourceTitle || ""),
+      reviewRequired: true,
+    };
+  } catch {
+    return { importedJob: deterministic, reviewRequired: true };
+  }
+}
+
+function composeImportedJobDescription(imported = {}) {
+  const blocks = [
+    imported.jobDescriptionText,
+    imported.responsibilities?.length ? `Responsibilities:\n${imported.responsibilities.join("\n")}` : "",
+    imported.requirements?.length ? `Requirements:\n${imported.requirements.join("\n")}` : "",
+    imported.preferredQualifications?.length ? `Preferred qualifications:\n${imported.preferredQualifications.join("\n")}` : "",
+    imported.benefits?.length ? `Benefits:\n${imported.benefits.join("\n")}` : "",
+  ];
+  return cleanString(blocks.filter(Boolean).join("\n\n"), 120000);
+}
+
+async function confirmImportedJob(userId, body = {}) {
+  const imported = body.importedJob || body;
+  const company = cleanString(imported.company, 180);
+  const role = cleanString(imported.role, 180);
+  if (!company || company === "Not found") return { error: "company is required" };
+  if (!role || role === "Not found") return { error: "role is required" };
+  const sourceUrl = safeUrl(imported.sourceUrl || body.sourceUrl);
+  if (!sourceUrl) return { error: "sourceUrl must be a valid http(s) URL" };
+  const parsedSourceUrl = new URL(sourceUrl);
+  if (
+    parsedSourceUrl.protocol !== "https:" ||
+    parsedSourceUrl.hostname === "localhost" ||
+    parsedSourceUrl.hostname.endsWith(".localhost") ||
+    parsedSourceUrl.hostname.endsWith(".local") ||
+    isPrivateAddress(parsedSourceUrl.hostname)
+  ) {
+    return { error: "This job link cannot be imported for security reasons.", status: 400 };
+  }
+  const duplicate = await JobApplication.findOne({ userId, sourceUrl, status: { $ne: "archived" } });
+  if (duplicate) return { application: duplicate, duplicate: true };
+
+  const jdText = composeImportedJobDescription(imported);
+  const document = await CareerDocument.create({
+    userId,
+    type: "job_description",
+    title: cleanString(imported.sourceTitle, 180) || `${role} at ${company}`,
+    sourceApp: "web",
+    sourceUrl,
+    extractedText: jdText,
+    processingStatus: jdText ? "ready" : "failed",
+    processingError: jdText ? "" : "No extractable text found.",
+  });
+  const status = validateEnum(body.status || "interested", JobApplication.STATUS_VALUES, "interested");
+  const applicationBody = {
+    company,
+    role,
+    status,
+    source: "Job link",
+    sourceUrl,
+    location: imported.location === "Not found" ? "" : cleanString(imported.location, 180),
+    workMode: imported.workMode === "unknown" ? "" : imported.workMode,
+    employmentType: validateEnum(imported.employmentType, JobApplication.EMPLOYMENT_TYPE_VALUES, ""),
+    salaryText: imported.salaryText === "Not found" ? "" : imported.salaryText,
+    jobDescriptionId: document._id,
+    resumeId: body.resumeId || null,
+    sourceApp: "web",
+    sourceRef: sourceUrl,
+    appliedAt: status === "applied" ? body.appliedAt : null,
+    nextFollowUpAt: body.nextFollowUpAt || null,
+    notes: body.notes,
+    tags: cleanArray(imported.skills, 12, 40),
+  };
+  const result = await createApplication(userId, applicationBody);
+  if (result.error) return result;
+  return { application: result.application, document: publicDoc(document), duplicate: false };
+}
+
 function tokenize(text = "") {
   const stop = new Set([
     "the", "and", "for", "with", "you", "our", "are", "that", "this", "from", "will", "have",
@@ -980,6 +1457,117 @@ function evidenceForRequirement(requirement, resumeText = "") {
   return { assessment: "missing", evidence: "", keywords: hits };
 }
 
+function parseStructuredAiObject(raw) {
+  const text = String(raw || "")
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  try {
+    return JSON.parse(text.slice(start, end + 1).replace(/,\s*([}\]])/g, "$1"));
+  } catch {
+    return null;
+  }
+}
+
+function normalizeResumeMatch(value = {}, fallback = {}, { resumeText = "", jdText = "" } = {}) {
+  const input = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const fallbackArray = (key) => (Array.isArray(fallback[key]) ? fallback[key] : []);
+  const sourceArray = (key) => (Array.isArray(input[key]) ? input[key] : fallbackArray(key));
+  const normalizeRequirement = (item) => cleanString(
+    typeof item === "string" ? item : item?.requirement || item?.jdRequirement || item?.title,
+    500
+  );
+
+  let strongMatches = sourceArray("strongMatches")
+    .map((item) => ({
+      requirement: normalizeRequirement(item),
+      resumeEvidence: cleanString(item?.resumeEvidence || item?.evidence, 900),
+      explanation: cleanString(item?.explanation || item?.assessment, 600),
+      keywords: cleanArray(item?.keywords, 12, 80),
+    }))
+    .filter((item) => item.requirement && item.resumeEvidence)
+    .slice(0, 12);
+
+  let partialMatches = sourceArray("partialMatches")
+    .map((item) => ({
+      requirement: normalizeRequirement(item),
+      resumeEvidence: cleanString(item?.resumeEvidence || item?.evidence, 900),
+      missingEvidence: cleanString(item?.missingEvidence || item?.assessment, 600),
+      suggestion: cleanString(item?.suggestion, 600),
+      keywords: cleanArray(item?.keywords, 12, 80),
+    }))
+    .filter((item) => item.requirement)
+    .slice(0, 12);
+
+  let missingEvidence = sourceArray("missingEvidence")
+    .map((item) => ({
+      requirement: normalizeRequirement(item),
+      resumeEvidence: cleanString(item?.resumeEvidence || item?.evidence, 700) || "No clear evidence found",
+      evidenceStatus: "not_found",
+      suggestion: cleanString(item?.suggestion || item?.assessment, 600),
+      keywords: cleanArray(item?.keywords, 12, 80),
+    }))
+    .filter((item) => item.requirement)
+    .slice(0, 12);
+
+  let interviewRiskAreas = sourceArray("interviewRiskAreas")
+    .map((item) => ({
+      area: cleanString(typeof item === "string" ? item : item?.area || item?.title, 300),
+      reason: cleanString(item?.reason, 600),
+      preparationSuggestion: cleanString(item?.preparationSuggestion || item?.suggestion, 600),
+    }))
+    .filter((item) => item.area)
+    .slice(0, 10);
+
+  if (resumeText || jdText) {
+    const fallbackMatch = normalizeResumeMatch({}, fallback);
+    strongMatches = strongMatches.filter(
+      (item) => hasSourceOverlap(item.requirement, jdText) && hasSourceOverlap(item.resumeEvidence, resumeText)
+    );
+    partialMatches = partialMatches.filter(
+      (item) => hasSourceOverlap(item.requirement, jdText) && hasSourceOverlap(item.resumeEvidence, resumeText)
+    );
+    missingEvidence = missingEvidence.filter((item) => hasSourceOverlap(item.requirement, jdText));
+    interviewRiskAreas = interviewRiskAreas.filter((item) => hasSourceOverlap(item.area, jdText));
+    if (!strongMatches.length && fallbackMatch.strongMatches.length) strongMatches = fallbackMatch.strongMatches;
+    if (!partialMatches.length && fallbackMatch.partialMatches.length) partialMatches = fallbackMatch.partialMatches;
+    if (!missingEvidence.length && fallbackMatch.missingEvidence.length) missingEvidence = fallbackMatch.missingEvidence;
+    if (!interviewRiskAreas.length && fallbackMatch.interviewRiskAreas.length) {
+      interviewRiskAreas = fallbackMatch.interviewRiskAreas;
+    }
+  }
+
+  let suggestedImprovements = cleanArray(
+    Array.isArray(input.suggestedImprovements)
+      ? input.suggestedImprovements
+      : fallbackArray("suggestedImprovements"),
+    12,
+    700
+  );
+  if ((resumeText || jdText) && Array.isArray(input.suggestedImprovements)) {
+    suggestedImprovements = suggestedImprovements.filter((item) => hasSourceOverlap(item, `${resumeText}\n${jdText}`));
+    if (!suggestedImprovements.length) {
+      suggestedImprovements = cleanArray(fallbackArray("suggestedImprovements"), 12, 700);
+    }
+  }
+
+  return {
+    summary:
+      (!resumeText && !jdText ? cleanString(input.summary, 1200) : "") ||
+      cleanString(fallback.summary, 1200) ||
+      "OrionAI compared the supplied resume and job description using only the available document evidence.",
+    strongMatches,
+    partialMatches,
+    missingEvidence,
+    interviewRiskAreas,
+    suggestedImprovements,
+    grounding: fallback.grounding || input.grounding || {},
+  };
+}
+
 function buildDeterministicResumeMatch({ resumeText = "", jdText = "" } = {}) {
   const requirements = extractRequirements(jdText);
   const strongMatches = [];
@@ -987,29 +1575,44 @@ function buildDeterministicResumeMatch({ resumeText = "", jdText = "" } = {}) {
   const missingEvidence = [];
   for (const requirement of requirements) {
     const result = evidenceForRequirement(requirement, resumeText);
-    const entry = {
-      jdRequirement: requirement,
-      resumeEvidence: result.evidence || "No clear evidence found",
-      assessment:
-        result.assessment === "strong"
-          ? "Strong evidence"
-          : result.assessment === "partial"
-            ? "Partial evidence"
-            : "Not found in current resume",
-      keywords: result.keywords,
-    };
-    if (result.assessment === "strong") strongMatches.push(entry);
-    else if (result.assessment === "partial") partialMatches.push(entry);
-    else missingEvidence.push(entry);
+    if (result.assessment === "strong") {
+      strongMatches.push({
+        requirement,
+        resumeEvidence: result.evidence,
+        explanation: "The resume contains direct evidence that overlaps this JD requirement.",
+        keywords: result.keywords,
+      });
+    } else if (result.assessment === "partial") {
+      partialMatches.push({
+        requirement,
+        resumeEvidence: result.evidence || "Related terms appear in the resume.",
+        missingEvidence: "The resume does not show the full depth or context requested by the JD.",
+        suggestion: "If you genuinely have this experience, add a specific example and outcome.",
+        keywords: result.keywords,
+      });
+    } else {
+      missingEvidence.push({
+        requirement,
+        resumeEvidence: "No clear evidence found",
+        evidenceStatus: "not_found",
+        suggestion: "Prepare to discuss only your real experience; do not add this claim without evidence.",
+        keywords: result.keywords,
+      });
+    }
   }
   return {
+    summary: `The supplied documents show ${strongMatches.length} strong match${strongMatches.length === 1 ? "" : "es"}, ${partialMatches.length} partial match${partialMatches.length === 1 ? "" : "es"}, and ${missingEvidence.length} requirement${missingEvidence.length === 1 ? "" : "s"} without clear resume evidence. Review the evidence below before changing your resume or preparing answers.`,
     strongMatches,
     partialMatches,
     missingEvidence,
     suggestedImprovements: missingEvidence.slice(0, 5).map((item) =>
-      `If you truly have experience with "${item.jdRequirement}", add specific, truthful evidence to the resume.`
+      `If you truly have experience with "${item.requirement}", add a specific, truthful example and outcome.`
     ),
-    interviewRiskAreas: [...missingEvidence, ...partialMatches].slice(0, 5).map((item) => item.jdRequirement),
+    interviewRiskAreas: [...missingEvidence, ...partialMatches].slice(0, 5).map((item) => ({
+      area: item.requirement,
+      reason: item.evidenceStatus === "not_found" ? "No clear resume evidence was found." : item.missingEvidence,
+      preparationSuggestion: "Prepare a truthful explanation of your actual level of experience.",
+    })),
     grounding: {
       resume: Boolean(cleanString(resumeText)),
       jobDescription: Boolean(cleanString(jdText)),
@@ -1020,11 +1623,9 @@ function buildDeterministicResumeMatch({ resumeText = "", jdText = "" } = {}) {
 
 async function resumeMatch(userId, applicationId, body = {}) {
   const application = await assertApplicationOwnership(userId, applicationId);
-  const resumeId = objectId(body.resumeId) || application.resumeId;
-  const jdId = objectId(body.jobDescriptionId) || application.jobDescriptionId;
   const [resume, jd] = await Promise.all([
-    assertDocumentOwnership(userId, resumeId, ["resume"]),
-    assertDocumentOwnership(userId, jdId, ["job_description"]),
+    resolveResumeForApplication(userId, application, body.resumeId),
+    resolveJobDescriptionForApplication(userId, application, body.jobDescriptionId),
   ]);
   if (!documentHasUsableText(resume)) return { error: unavailableDocumentError(resume, "Resume") };
   if (!documentHasUsableText(jd)) return { error: unavailableDocumentError(jd, "Job description") };
@@ -1053,8 +1654,8 @@ async function resumeMatch(userId, applicationId, body = {}) {
         {
           role: "user",
           content: [
-            "Return JSON: {strongMatches:[], partialMatches:[], missingEvidence:[], suggestedImprovements:[], interviewRiskAreas:[]}.",
-            "Each match needs jdRequirement, resumeEvidence, assessment.",
+            "Return JSON: {summary, strongMatches:[{requirement,resumeEvidence,explanation}], partialMatches:[{requirement,resumeEvidence,missingEvidence,suggestion}], missingEvidence:[{requirement,evidenceStatus,suggestion}], interviewRiskAreas:[{area,reason,preparationSuggestion}], suggestedImprovements:[]}.",
+            "All resume evidence must quote or closely preserve supplied resume text. Mark unsupported requirements as not_found.",
             `Resume:\n${resume.extractedText.slice(0, 18000)}`,
             `JD:\n${jd.extractedText.slice(0, 14000)}`,
           ].join("\n\n"),
@@ -1063,50 +1664,136 @@ async function resumeMatch(userId, applicationId, body = {}) {
       1800,
       0.2
     );
-    const parsed = JSON.parse(String(raw || "").replace(/^```json\s*/i, "").replace(/```$/i, "").trim());
-    const match = {
-      ...deterministic,
-      ...parsed,
-      grounding: deterministic.grounding,
-    };
+    const parsed = parseStructuredAiObject(raw);
+    const match = normalizeResumeMatch(parsed, deterministic, {
+      resumeText: resume.extractedText,
+      jdText: jd.extractedText,
+    });
+    if (typeof application.save === "function") {
+      application.resumeMatch = match;
+      application.resumeMatchMeta = buildSourceMeta({ resume, jd });
+      application.resumeMatchGeneratedAt = new Date();
+      application.markModified?.("resumeMatch");
+      application.markModified?.("resumeMatchMeta");
+      await application.save();
+    }
     await rememberResumeMatchGaps(userId, application._id, match);
     return { match };
   } catch {
+    if (typeof application.save === "function") {
+      application.resumeMatch = deterministic;
+      application.resumeMatchMeta = buildSourceMeta({ resume, jd });
+      application.resumeMatchGeneratedAt = new Date();
+      application.markModified?.("resumeMatch");
+      application.markModified?.("resumeMatchMeta");
+      await application.save();
+    }
     await rememberResumeMatchGaps(userId, application._id, deterministic);
     return { match: deterministic };
   }
 }
 
-function buildFallbackPrep({ application, interview, resume, jd, memories = [] }) {
-  const jdRequirements = extractRequirements(jd?.extractedText || "");
-  const resumeTokens = [...tokenize(resume?.extractedText || "")].slice(0, 18);
-  const memoryLines = memoryPrepLines(memories);
+function recordId(record) {
+  return record?._id ? String(record._id) : "";
+}
+
+function isoDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+}
+
+function buildSourceMeta({ resume, jd, interview } = {}) {
   return {
-    roleSummary: jd?.extractedText
-      ? `This role appears to emphasize ${jdRequirements.slice(0, 3).join("; ") || "the responsibilities described in the supplied JD"}.`
-      : "Add the job description for a stronger role-specific summary.",
-    whatToPrepare: [...memoryLines, ...jdRequirements.slice(0, 8)].slice(0, 10),
-    resumeBasedQuestions: resumeTokens.slice(0, 8).map((token) => `Can you explain your practical experience with ${token}?`),
-    jdBasedQuestions: jdRequirements.slice(0, 8).map((req) => `How would you approach: ${req}?`),
-    companyRoleQuestions: [
-      {
-        source: "General OrionAI knowledge",
-        question: `What outcomes would define success for the ${application.role} role in the first 90 days?`,
-      },
+    resumeId: recordId(resume),
+    resumeUpdatedAt: isoDate(resume?.updatedAt),
+    jobDescriptionId: recordId(jd),
+    jobDescriptionUpdatedAt: isoDate(jd?.updatedAt),
+    roundType: cleanString(interview?.roundType, 80),
+  };
+}
+
+function sourceSentences(text = "", limit = 6) {
+  return String(text || "")
+    .split(/(?<=[.!?])\s+|\n/)
+    .map((line) => cleanString(line.replace(/\s+/g, " "), 420))
+    .filter((line) => line.length > 24)
+    .slice(0, limit);
+}
+
+function hasSourceOverlap(value, sourceText) {
+  const valueTokens = tokenize(value);
+  const sourceTokens = tokenize(sourceText);
+  const hits = [...valueTokens].filter((token) => sourceTokens.has(token));
+  return hits.length >= Math.min(2, Math.max(1, valueTokens.size));
+}
+
+function buildFallbackPrep({ application, interview, resume, jd, memories = [] }) {
+  const jdText = jd?.extractedText || "";
+  const resumeText = resume?.extractedText || "";
+  const jdRequirements = extractRequirements(jdText);
+  const resumeEvidence = sourceSentences(resumeText, 6);
+  const weakMemories = memories.filter((memory) =>
+    ["weak_area", "jd_gap", "interview_feedback"].includes(memory.memoryType)
+  );
+  const priorityTopics = [
+    ...weakMemories.slice(0, 3).map((memory) => ({
+      topic: memory.title,
+      reason: memory.content || "Previous Career practice marked this for review.",
+      priority: "high",
+      source: "Career Memory",
+    })),
+    ...jdRequirements.slice(0, 5).map((requirement, index) => ({
+      topic: requirement,
+      reason: "This appears directly in the supplied job description.",
+      priority: index < 3 ? "high" : "medium",
+      source: "JD",
+    })),
+  ].slice(0, 8);
+
+  return {
+    roleSummary: jdText
+      ? `The supplied job description for ${application.role || "this role"} emphasizes ${jdRequirements.slice(0, 3).join("; ") || "the responsibilities and requirements in the saved JD"}.`
+      : `This preparation uses the saved application context for ${application.role || "this role"}. Add a job description for role-specific requirements.`,
+    priorityTopics,
+    resumeQuestions: resumeEvidence.map((evidence) => ({
+      question: `Walk me through the work described here and the decisions you personally made: “${evidence.slice(0, 180)}”`,
+      resumeBasis: evidence,
+    })),
+    jdQuestions: jdRequirements.slice(0, 8).map((requirement) => ({
+      question: `How would you approach this requirement using your actual experience: ${requirement}?`,
+      jdBasis: requirement,
+    })),
+    behavioralQuestions: [
+      "Tell me about a real situation where you took ownership through ambiguity.",
+      "Describe a real disagreement at work and how you handled it.",
+      "Tell me about a setback, what you learned, and what changed afterward.",
     ],
-    behavioralPreparation: [
-      ...memoryLines.filter((line) => /behavioral story/i.test(line)),
-      "Prepare real STAR stories for conflict, ownership, ambiguity, failure, and measurable impact.",
-    ],
-    questionsToAskInterviewer: [
-      `What are the most important problems this ${application.role} hire should solve first?`,
+    likelyDeepDiveAreas: jdRequirements.slice(0, 5).map((area) => ({
+      area,
+      reason: "The supplied JD gives this requirement interview relevance.",
+      source: "JD",
+    })),
+    weakAreasToReview: weakMemories.slice(0, 6).map((memory) => ({
+      area: memory.title,
+      reason: memory.content || "Saved Career Memory marked this for review.",
+      source: "Career Memory",
+    })),
+    questionsForInterviewer: [
+      `What are the most important problems this ${application.role || "role"} hire should solve first?`,
+      "How will success be measured during the first 90 days?",
       "How does the team review technical quality and collaboration?",
     ],
+    preparationPlan: [
+      ...priorityTopics.slice(0, 4).map((item) => `Review ${item.topic} and prepare a truthful example.`),
+      ...(resumeText ? ["Choose two resume projects and rehearse the decisions, tradeoffs, and outcomes."] : []),
+      "Prepare one real STAR story about ownership, conflict, or learning.",
+    ].slice(0, 7),
     grounding: {
       application: true,
       interview: Boolean(interview),
-      resume: Boolean(resume?.extractedText),
-      jobDescription: Boolean(jd?.extractedText),
+      resume: Boolean(resumeText),
+      jobDescription: Boolean(jdText),
       resumeSource: resume?.sourceApp || "",
       jobDescriptionSource: jd?.sourceApp || "",
       careerMemory: memories.length > 0,
@@ -1116,33 +1803,69 @@ function buildFallbackPrep({ application, interview, resume, jd, memories = [] }
   };
 }
 
-async function prepareInterview(userId, interviewId) {
-  const interview = await assertInterviewOwnership(userId, interviewId);
-  const application = interview.applicationId
-    ? await assertApplicationOwnership(userId, interview.applicationId)
-    : await JobApplication.findOne({ userId, company: interview.company, status: { $ne: "archived" } });
-  const [resume, jd] = await Promise.all([
-    application?.resumeId
-      ? CareerDocument.findOne({ _id: application.resumeId, userId, processingStatus: { $ne: "archived" } })
-      : CareerDocument.findOne({ userId, type: "resume", isPrimary: true, processingStatus: { $ne: "archived" } }),
-    application?.jobDescriptionId
-      ? CareerDocument.findOne({ _id: application.jobDescriptionId, userId, processingStatus: { $ne: "archived" } })
-      : null,
-  ]);
-  const usableResume = documentHasUsableText(resume) ? resume : null;
-  const usableJd = documentHasUsableText(jd) ? jd : null;
-  const memories = await loadRelevantCareerMemory(userId, {
-    applicationId: application?._id || interview.applicationId,
-    interviewId: interview._id,
+function normalizePreparation(value = {}, fallback = {}, { resumeText = "", jdText = "" } = {}) {
+  const input = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const normalizeQuestion = (item, basisKey) => ({
+    question: cleanString(typeof item === "string" ? item : item?.question, 700),
+    [basisKey]: cleanString(item?.[basisKey] || item?.basis, 700),
   });
-  const fallback = buildFallbackPrep({
-    application: application || interview,
-    interview,
-    resume: usableResume,
-    jd: usableJd,
-    memories,
-  });
+  const resumeQuestions = (Array.isArray(input.resumeQuestions)
+    ? input.resumeQuestions
+    : Array.isArray(input.resumeBasedQuestions)
+      ? input.resumeBasedQuestions
+      : [])
+    .map((item) => normalizeQuestion(item, "resumeBasis"))
+    .filter((item) => item.question && item.resumeBasis && hasSourceOverlap(item.resumeBasis, resumeText));
+  const jdQuestions = (Array.isArray(input.jdQuestions)
+    ? input.jdQuestions
+    : Array.isArray(input.jdBasedQuestions)
+      ? input.jdBasedQuestions
+      : [])
+    .map((item) => normalizeQuestion(item, "jdBasis"))
+    .filter((item) => item.question && item.jdBasis && hasSourceOverlap(item.jdBasis, jdText));
+  const corpus = `${resumeText}\n${jdText}`;
+  const priorityTopics = (Array.isArray(input.priorityTopics) ? input.priorityTopics : [])
+    .map((item) => ({
+      topic: cleanString(typeof item === "string" ? item : item?.topic || item?.title, 360),
+      reason: cleanString(item?.reason, 700),
+      priority: validateEnum(item?.priority, ["high", "medium", "low"], "medium"),
+      source: cleanString(item?.source, 80) || "OrionAI",
+    }))
+    .filter((item) => item.topic && hasSourceOverlap(`${item.topic} ${item.reason}`, corpus));
+  const deepDiveAreas = (Array.isArray(input.likelyDeepDiveAreas) ? input.likelyDeepDiveAreas : [])
+    .map((item) => ({
+      area: cleanString(typeof item === "string" ? item : item?.area || item?.topic, 360),
+      reason: cleanString(item?.reason, 700),
+      source: cleanString(item?.source, 80) || "OrionAI",
+    }))
+    .filter((item) => item.area && hasSourceOverlap(`${item.area} ${item.reason}`, corpus));
 
+  return {
+    roleSummary: fallback.roleSummary,
+    priorityTopics: priorityTopics.length ? priorityTopics.slice(0, 8) : fallback.priorityTopics,
+    resumeQuestions: resumeQuestions.length ? resumeQuestions.slice(0, 8) : fallback.resumeQuestions,
+    jdQuestions: jdQuestions.length ? jdQuestions.slice(0, 8) : fallback.jdQuestions,
+    behavioralQuestions: cleanArray(
+      input.behavioralQuestions || input.behavioralPreparation || fallback.behavioralQuestions,
+      8,
+      700
+    ),
+    likelyDeepDiveAreas: deepDiveAreas.length ? deepDiveAreas.slice(0, 8) : fallback.likelyDeepDiveAreas,
+    weakAreasToReview: fallback.weakAreasToReview,
+    questionsForInterviewer: cleanArray(
+      (input.questionsForInterviewer || input.questionsToAskInterviewer || fallback.questionsForInterviewer)
+        .map?.((item) => (typeof item === "string" ? item : item?.question)) || [],
+      8,
+      700
+    ),
+    preparationPlan: cleanArray(input.preparationPlan || fallback.preparationPlan, 10, 700),
+    grounding: fallback.grounding,
+    careerMemory: fallback.careerMemory,
+  };
+}
+
+async function generatePreparation({ application, interview, resume, jd, memories }) {
+  const fallback = buildFallbackPrep({ application, interview, resume, jd, memories });
   try {
     const raw = await chatComplete(
       [
@@ -1150,59 +1873,170 @@ async function prepareInterview(userId, interviewId) {
           role: "system",
           content: [
             "You are OrionAI Career & Interviews.",
-            "Return only JSON with the requested sections.",
-            "Separate source-grounded content from general OrionAI knowledge.",
-            "Never fabricate user experience, company requirements, round type, or interview outcome.",
+            "Return only valid JSON matching the requested structure.",
+            "Use supplied resume and JD text as the only evidence for user experience and company requirements.",
+            "Career Memory is supplemental and never overrides source documents.",
+            "Never fabricate user experience, requirements, interview rounds, or outcomes.",
           ].join("\n"),
         },
         {
           role: "user",
           content: [
-            "Return JSON with keys: roleSummary, whatToPrepare, resumeBasedQuestions, jdBasedQuestions, companyRoleQuestions, behavioralPreparation, questionsToAskInterviewer, grounding.",
-            `Application: ${application?.company || interview.company} - ${application?.role || interview.role || ""}`,
-            `Round: ${interview.roundType || "unknown"}`,
-            `Notes: ${[application?.notes, interview.notes].filter(Boolean).join("\n").slice(0, 4000)}`,
+            "Return JSON with: roleSummary, priorityTopics[{topic,reason,priority,source}], resumeQuestions[{question,resumeBasis}], jdQuestions[{question,jdBasis}], behavioralQuestions[], likelyDeepDiveAreas[{area,reason,source}], questionsForInterviewer[], preparationPlan[].",
+            `Application: ${application.company} - ${application.role || ""}`,
+            `Round: ${interview?.roundType || "unknown"}`,
+            `Notes: ${[application.notes, interview?.notes].filter(Boolean).join("\n").slice(0, 4000)}`,
             `Career memory summaries:\n${memories.map((memory) => `${memory.memoryType}: ${memory.title} - ${memory.content} (${memory.sourceType || "other"}:${memory.sourceRef || "none"})`).join("\n").slice(0, 5000)}`,
-            `Resume source: ${usableResume?.sourceApp || "none"}`,
-            `Resume text:\n${(usableResume?.extractedText || "").slice(0, 12000)}`,
-            `JD source: ${usableJd?.sourceApp || "none"}`,
-            `JD text:\n${(usableJd?.extractedText || "").slice(0, 10000)}`,
+            `Resume source: ${resume?.sourceApp || "none"}`,
+            `Resume text:\n${(resume?.extractedText || "").slice(0, 12000)}`,
+            `JD source: ${jd?.sourceApp || "none"}`,
+            `JD text:\n${(jd?.extractedText || "").slice(0, 10000)}`,
           ].join("\n\n"),
         },
       ],
-      1800,
-      0.3
+      2200,
+      0.25
     );
-    const parsed = JSON.parse(String(raw || "").replace(/^```json\s*/i, "").replace(/```$/i, "").trim());
-    interview.prepPlan = { ...fallback, ...parsed, grounding: fallback.grounding, careerMemory: memories };
+    return normalizePreparation(parseStructuredAiObject(raw), fallback, {
+      resumeText: resume?.extractedText || "",
+      jdText: jd?.extractedText || "",
+    });
   } catch {
-    interview.prepPlan = fallback;
+    return fallback;
   }
-  interview.prepStatus = "in_progress";
+}
+
+async function prepareInterview(userId, interviewId) {
+  const interview = await assertInterviewOwnership(userId, interviewId);
+  const application = interview.applicationId
+    ? await assertApplicationOwnership(userId, interview.applicationId)
+    : await JobApplication.findOne({ userId, company: interview.company, status: { $ne: "archived" } });
+  const [resume, jd] = await Promise.all([
+    resolveResumeForApplication(userId, application, null),
+    resolveJobDescriptionForApplication(userId, application, null),
+  ]);
+  const usableResume = documentHasUsableText(resume) ? resume : null;
+  const usableJd = documentHasUsableText(jd) ? jd : null;
+  const memories = await loadRelevantCareerMemory(userId, {
+    applicationId: application?._id || interview.applicationId,
+    interviewId: interview._id,
+  });
+  interview.prepPlan = await generatePreparation({
+    application: application || interview,
+    interview,
+    resume: usableResume,
+    jd: usableJd,
+    memories,
+  });
+  interview.prepMeta = buildSourceMeta({ resume: usableResume, jd: usableJd, interview });
+  interview.prepGeneratedAt = new Date();
+  interview.prepStatus = "ready";
+  interview.markModified?.("prepPlan");
+  interview.markModified?.("prepMeta");
   await interview.save();
   return { preparation: interview.prepPlan, interview };
 }
 
-function nextPracticeQuestion({ application, interview, type }) {
+async function prepareApplication(userId, applicationId) {
+  const application = await assertApplicationOwnership(userId, applicationId);
+  const [resume, jd, interviews] = await Promise.all([
+    resolveResumeForApplication(userId, application, null),
+    resolveJobDescriptionForApplication(userId, application, null),
+    InterviewEvent.find({
+      userId,
+      applicationId: application._id,
+      status: "scheduled",
+      scheduledAt: { $gte: new Date() },
+    }).sort({ scheduledAt: 1 }).limit(3).lean(),
+  ]);
+  const usableResume = documentHasUsableText(resume) ? resume : null;
+  const usableJd = documentHasUsableText(jd) ? jd : null;
+  const memories = await loadRelevantCareerMemory(userId, { applicationId: application._id });
+  const preparation = await generatePreparation({
+    application,
+    interview: null,
+    resume: usableResume,
+    jd: usableJd,
+    memories,
+  });
+  const prepMeta = buildSourceMeta({ resume: usableResume, jd: usableJd });
+  if (typeof application.save === "function") {
+    application.prepPlan = preparation;
+    application.prepMeta = prepMeta;
+    application.prepGeneratedAt = new Date();
+    application.markModified?.("prepPlan");
+    application.markModified?.("prepMeta");
+    await application.save();
+  }
+  return {
+    preparation,
+    application,
+    interview: interviews[0] || null,
+    availableInterviews: interviews,
+  };
+}
+
+function nextPracticeQuestion({ application, interview, type, index = 0 }) {
   const base = application
     ? `${application.role} at ${application.company}`
     : `${interview?.role || "this role"} at ${interview?.company || "the company"}`;
-  if (type === "behavioral") return `Tell me about a real situation where you handled ambiguity while working toward ${base}.`;
-  if (type === "system_design") return `Design a system relevant to ${base}. Start with requirements and constraints.`;
-  if (type === "technical" || type === "coding") return `Pick one technical project from your resume that is relevant to ${base}. What tradeoffs did you make?`;
-  if (type === "hr") return `Why are you interested in ${base}, using only your actual motivations and experience?`;
-  return `What makes your actual background a fit for ${base}?`;
+  const banks = {
+    behavioral: [
+      `Tell me about a real situation where you handled ambiguity while working toward ${base}.`,
+      "Describe a real disagreement and how you reached a useful outcome.",
+      "Tell me about a setback, what you learned, and what you changed afterward.",
+    ],
+    system_design: [
+      `Design a system relevant to ${base}. Start with requirements and constraints.`,
+      "How would you identify bottlenecks and plan for scale in that design?",
+      "Which reliability tradeoffs would you make, and why?",
+    ],
+    technical: [
+      `Pick one technical project from your resume that is relevant to ${base}. What tradeoffs did you make?`,
+      "Describe a difficult production issue you personally investigated and how you isolated the cause.",
+      "Which architecture decision would you revisit today, and what evidence changed your view?",
+    ],
+    coding: [
+      `Pick one implementation relevant to ${base}. How did you reason about correctness and complexity?`,
+      "How do you test edge cases and failure paths before shipping a change?",
+      "Describe a refactor that improved maintainability without changing behavior.",
+    ],
+    hr: [
+      `Why are you interested in ${base}, using only your actual motivations and experience?`,
+      "What kind of role and team environment helps you do your best work?",
+      "Which real accomplishment best represents what you would bring to this role?",
+    ],
+    role_specific: [
+      `What makes your actual background a fit for ${base}?`,
+      "Which requirement for this role would you be most ready to discuss in depth?",
+      "Where would you need the most context or ramp-up time in this role?",
+    ],
+  };
+  const questions = banks[type] || banks.role_specific;
+  return questions[index % questions.length];
 }
 
 async function startPractice(userId, interviewId, body = {}) {
   const interview = await assertInterviewOwnership(userId, interviewId);
   const application = interview.applicationId ? await assertApplicationOwnership(userId, interview.applicationId) : null;
   const type = validateEnum(body.type || interview.roundType || "role_specific", InterviewPracticeSession.TYPE_VALUES, "role_specific");
-  const question = nextPracticeQuestion({ application, interview, type });
+  const existing = await InterviewPracticeSession.findOne({
+    userId,
+    interviewId: interview._id,
+    type,
+    status: "active",
+  });
+  if (existing) {
+    const pending = existing.questions.find((item) => !item.answeredAt);
+    return { session: existing, question: pending?.question || "", resumed: true };
+  }
+  const question = nextPracticeQuestion({ application, interview, type, index: 0 });
   const session = await InterviewPracticeSession.create({
     userId,
     applicationId: application?._id || interview.applicationId || null,
     interviewId: interview._id,
+    company: application?.company || interview.company || "",
+    role: application?.role || interview.role || "",
     type,
     questions: [{ question }],
   });
@@ -1234,27 +2068,38 @@ async function answerPractice(userId, sessionId, body = {}) {
   const session = await InterviewPracticeSession.findOne({ _id: sessionId, userId, status: { $ne: "archived" } });
   if (!session) return null;
   const answer = cleanString(body.answer, 10000);
-  if (!answer) {
+  const skipped = body.skip === true;
+  if (!answer && !skipped) {
     const err = new Error("answer is required");
     err.status = 400;
     throw err;
   }
   const index = Math.max(0, Math.min(Number(body.questionIndex ?? session.questions.length - 1), session.questions.length - 1));
+  if (session.questions[index].answeredAt) return { session, nextQuestion: "" };
   session.questions[index].userAnswer = answer;
-  session.questions[index].feedback = buildAnswerFeedback(answer);
+  session.questions[index].skipped = skipped;
+  session.questions[index].feedback = skipped
+    ? {
+        good: [],
+        missing: ["This question was skipped. Return to it when you have a real example to practice."],
+        betterStructure: "Start with the context, your responsibility, your action, and the result.",
+        suggestedStrongerAnswer: "Use only your real experience when you return to this question.",
+      }
+    : buildAnswerFeedback(answer);
   session.questions[index].answeredAt = new Date();
-  await rememberPracticeFeedback(userId, session, session.questions[index].feedback);
+  if (!skipped) await rememberPracticeFeedback(userId, session, session.questions[index].feedback);
   const nextQuestion = nextPracticeQuestion({
     application: null,
-    interview: { company: "the company", role: "the role", roundType: session.type },
+    interview: { company: session.company || "the company", role: session.role || "the role" },
     type: session.type,
+    index: session.questions.length,
   });
   if (body.complete === true) {
     session.status = "completed";
     session.completedAt = new Date();
     session.summary = "Practice completed. Review missing points and refine answers with real examples.";
     session.weakAreas = session.questions.flatMap((q) => q.feedback?.missing || []).slice(0, 8);
-  } else if (session.questions.length < 10) {
+  } else if (session.questions.length < 10 && !session.questions.slice(index + 1).some((item) => !item.answeredAt)) {
     session.questions.push({ question: nextQuestion });
   }
   await session.save();
@@ -1571,13 +2416,23 @@ async function draftOfferEmail(userId, offerId, type = "clarification") {
 
 module.exports = {
   MAX_FILE_SIZE,
+  MAX_JOB_PAGE_BYTES,
   sanitizeFileName,
   inferDocumentType,
   validateUpload,
+  extractTextFromUpload,
+  isPrivateAddress,
+  validatePublicJobUrl,
+  htmlToText,
+  buildDeterministicJobImport,
   resolveStoragePath,
   normalizeApplicationPayload,
   normalizeInterviewPayload,
   normalizeOfferPayload,
+  parseStructuredAiObject,
+  normalizeResumeMatch,
+  normalizePreparation,
+  buildSourceMeta,
   buildDeterministicResumeMatch,
   buildFallbackPrep,
   classifyCareerEmail,
@@ -1602,8 +2457,11 @@ module.exports = {
   getDocumentFile,
   archiveDocument,
   createJobDescription,
+  importJobFromUrl,
+  confirmImportedJob,
   resumeMatch,
   prepareInterview,
+  prepareApplication,
   createCareerMemory,
   listCareerMemory,
   listApplicationMemory,

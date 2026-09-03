@@ -9,6 +9,9 @@ const answerSchema = new mongoose.Schema(
   {
     question: { type: String, required: true, trim: true },
     userAnswer: { type: String, default: "", trim: true },
+    answerSource: { type: String, enum: ["text", "audio", "video"], default: "text" },
+    answerSourceRef: { type: String, default: "", trim: true },
+    skipped: { type: Boolean, default: false },
     feedback: {
       good: [{ type: String, trim: true }],
       missing: [{ type: String, trim: true }],
@@ -35,6 +38,8 @@ const interviewPracticeSessionSchema = new mongoose.Schema(
       default: null,
       index: true,
     },
+    company: { type: String, default: "", trim: true },
+    role: { type: String, default: "", trim: true },
     type: { type: String, enum: TYPE_VALUES, default: "role_specific" },
     questions: [answerSchema],
     startedAt: { type: Date, default: Date.now },

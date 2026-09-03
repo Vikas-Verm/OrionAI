@@ -43,6 +43,8 @@ const interviewEventSchema = new mongoose.Schema(
     notes: { type: String, default: "", trim: true },
     status: { type: String, enum: STATUS_VALUES, default: "scheduled", index: true },
     prepPlan: { type: mongoose.Schema.Types.Mixed, default: null },
+    prepMeta: { type: mongoose.Schema.Types.Mixed, default: null },
+    prepGeneratedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

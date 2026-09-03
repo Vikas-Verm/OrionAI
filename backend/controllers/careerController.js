@@ -190,6 +190,26 @@ exports.createJobDescription = async (req, res) => {
   }
 };
 
+exports.importJobFromUrl = async (req, res) => {
+  try {
+    const result = await career.importJobFromUrl(userId(req), req.body || {});
+    if (result.error) return res.status(result.status || 400).json({ error: result.error });
+    res.json(result);
+  } catch (err) {
+    handleError(res, err, "Could not import job");
+  }
+};
+
+exports.confirmImportedJob = async (req, res) => {
+  try {
+    const result = await career.confirmImportedJob(userId(req), req.body || {});
+    if (result.error) return res.status(result.status || 400).json({ error: result.error });
+    res.status(result.duplicate ? 200 : 201).json(result);
+  } catch (err) {
+    handleError(res, err, "Could not save imported job");
+  }
+};
+
 exports.resumeMatch = async (req, res) => {
   try {
     const result = await career.resumeMatch(userId(req), req.params.id, req.body || {});
@@ -205,6 +225,14 @@ exports.prepareInterview = async (req, res) => {
     res.json(await career.prepareInterview(userId(req), req.params.id));
   } catch (err) {
     handleError(res, err, "Could not prepare interview");
+  }
+};
+
+exports.prepareApplication = async (req, res) => {
+  try {
+    res.json(await career.prepareApplication(userId(req), req.params.id));
+  } catch (err) {
+    handleError(res, err, "Could not prepare application");
   }
 };
 

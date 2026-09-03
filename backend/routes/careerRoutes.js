@@ -41,9 +41,12 @@ router.post("/documents/drive", controller.attachDriveDocument);
 router.patch("/documents/:id", controller.updateDocument);
 router.get("/documents/:id/file", controller.openDocumentFile);
 router.post("/job-descriptions", controller.createJobDescription);
+router.post("/jobs/import", controller.importJobFromUrl);
+router.post("/jobs/import/confirm", controller.confirmImportedJob);
 router.delete("/documents/:id", controller.deleteDocument);
 
 router.post("/applications/:id/resume-match", controller.resumeMatch);
+router.post("/applications/:id/prepare", controller.prepareApplication);
 
 router.post("/interviews/:id/prepare", controller.prepareInterview);
 router.post("/interviews/:id/practice", controller.startPractice);

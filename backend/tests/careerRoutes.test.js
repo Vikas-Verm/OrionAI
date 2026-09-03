@@ -66,3 +66,55 @@ test("calendar duplicate interview link returns existing record with non-create 
   assert.equal(second.body.interview._id, "interview-1");
   assert.equal(createInterview.mock.callCount(), 2);
 });
+
+test("job import route reviews before save and confirm can return created", async (t) => {
+  const importJob = mock.method(career, "importJobFromUrl", async (userId, body) => {
+    assert.equal(userId, "alice");
+    assert.equal(body.sourceUrl, "https://jobs.example.com/backend");
+    return {
+      reviewRequired: true,
+      importedJob: { company: "Acme", role: "Backend Engineer", sourceUrl: body.sourceUrl },
+    };
+  });
+  const confirmImportedJob = mock.method(career, "confirmImportedJob", async (userId, body) => {
+    assert.equal(userId, "alice");
+    assert.equal(body.importedJob.company, "Acme");
+    return { application: { _id: "app-1", company: "Acme" }, document: { _id: "jd-1" } };
+  });
+  t.after(() => {
+    importJob.mock.restore();
+    confirmImportedJob.mock.restore();
+  });
+
+  const req = { user: { username: "alice" }, body: { sourceUrl: "https://jobs.example.com/backend" } };
+  const review = makeRes();
+  await controller.importJobFromUrl(req, review);
+  assert.equal(review.statusCode, 200);
+  assert.equal(review.body.reviewRequired, true);
+
+  const save = makeRes();
+  await controller.confirmImportedJob({ user: { username: "alice" }, body: { importedJob: review.body.importedJob } }, save);
+  assert.equal(save.statusCode, 201);
+  assert.equal(save.body.application._id, "app-1");
+});
+
+test("Generate Interview Prep route returns the persisted preparation", async (t) => {
+  const prepareInterview = mock.method(career, "prepareInterview", async (userId, interviewId) => {
+    assert.equal(userId, "alice");
+    assert.equal(interviewId, "interview-1");
+    return {
+      interview: { _id: interviewId, prepStatus: "ready", prepPlan: { roleSummary: "Grounded role summary" } },
+      preparation: {
+        roleSummary: "Grounded role summary",
+        priorityTopics: [{ topic: "Node.js", reason: "JD evidence", priority: "high", source: "JD" }],
+      },
+    };
+  });
+  t.after(() => prepareInterview.mock.restore());
+
+  const res = makeRes();
+  await controller.prepareInterview({ user: { username: "alice" }, params: { id: "interview-1" } }, res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.interview.prepStatus, "ready");
+  assert.equal(res.body.preparation.priorityTopics[0].source, "JD");
+});
