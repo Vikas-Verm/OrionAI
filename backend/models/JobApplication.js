@@ -26,7 +26,7 @@ const EMPLOYMENT_TYPE_VALUES = [
   "temporary",
   "other",
 ];
-const SOURCE_APP_VALUES = ["manual", "gmail", "google_calendar", "google_docs", "google_drive", "other"];
+const SOURCE_APP_VALUES = ["manual", "gmail", "google_calendar", "google_docs", "google_drive", "web", "other"];
 
 const jobApplicationSchema = new mongoose.Schema(
   {
@@ -61,6 +61,12 @@ const jobApplicationSchema = new mongoose.Schema(
     archivedAt: { type: Date, default: null },
     followUpHandledAt: { type: Date, default: null },
     followUpSnoozedUntil: { type: Date, default: null },
+    resumeMatch: { type: mongoose.Schema.Types.Mixed, default: null },
+    resumeMatchMeta: { type: mongoose.Schema.Types.Mixed, default: null },
+    resumeMatchGeneratedAt: { type: Date, default: null },
+    prepPlan: { type: mongoose.Schema.Types.Mixed, default: null },
+    prepMeta: { type: mongoose.Schema.Types.Mixed, default: null },
+    prepGeneratedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );
